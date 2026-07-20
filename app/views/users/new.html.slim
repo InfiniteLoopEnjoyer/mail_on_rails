@@ -1,0 +1,11 @@
+- content_for :title, "Rail Mail - New User"
+
+nav.mb-2.text-sm.text-slate-500
+  =<> link_to "Users", users_path, class: "text-accent"
+  | /
+  span<> New user
+
+header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
+  h1.text-2xl.font-bold New User
+
+= render "form", user: @user

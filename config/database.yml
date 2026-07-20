@@ -1,0 +1,74 @@
+# PostgreSQL. Versions 9.3 and up are supported.
+#
+#   Install the pg driver:
+#   gem install pg
+#
+# Development and test connect over the local Unix socket as the current
+# user (peer auth), same as the other apps on this machine.
+default: &default
+  adapter: postgresql
+  encoding: unicode
+  max_connections: <%= ENV.fetch("RAILS_MAX_THREADS") { 99 } %>
+
+# The smtp/imap daemons are database-free (their stores speak HTTP to the
+# app); nothing sets MAIL_ON_RAILS_DB_USER/_PASSWORD in normal operation. The
+# override remains as a test seam - booting a daemon with a bogus role
+# proves nothing touches the database.
+development:
+  primary:
+    <<: *default
+    database: mail_on_rails_development
+    username: <%= ENV.fetch("MAIL_ON_RAILS_DB_USER", "deploy") %>
+    <% if ENV["MAIL_ON_RAILS_DB_USER"] %>
+    # Restricted roles use password auth over TCP (the local socket is
+    # peer-authenticated, which only fits the owning OS user).
+    password: <%= ENV["MAIL_ON_RAILS_DB_PASSWORD"] %>
+    host: 127.0.0.1
+    <% else %>
+    socket: /var/run/postgresql
+    <% end %>
+  queue:
+    <<: *default
+    database: mail_on_rails_development_queue
+    username: deploy
+    socket: /var/run/postgresql
+    migrations_paths: db/queue_migrate
+
+# Warning: The database defined as "test" will be erased and
+# re-generated from your development database when you run "rake".
+# Do not set this db to the same as development or production.
+test:
+  <<: *default
+  database: mail_on_rails_test
+  <% if ENV["DATABASE_HOST"] %>
+  # CI: the workflow's postgres service container, password auth over TCP.
+  host: <%= ENV["DATABASE_HOST"] %>
+  username: <%= ENV.fetch("DATABASE_USER", "postgres") %>
+  password: <%= ENV.fetch("DATABASE_PASSWORD", "postgres") %>
+  <% else %>
+  username: deploy
+  socket: /var/run/postgresql
+  <% end %>
+
+# Production talks to the postgres accessory container (see config/deploy.yml)
+# over its Unix socket, which is shared into the app container via a host
+# directory mounted at /postgres/socket.
+production:
+  primary: &primary_production
+    <<: *default
+    database: <%= ENV.fetch("POSTGRES_DB") { } %>
+    username: <%= ENV.fetch("MAIL_ON_RAILS_DB_USER") { ENV.fetch("POSTGRES_USER") { } } %>
+    password: <%= ENV.fetch("MAIL_ON_RAILS_DB_PASSWORD") { ENV.fetch("POSTGRES_PASSWORD") { } } %>
+    host: /postgres/socket
+  cache:
+    <<: *primary_production
+    database: <%= ENV.fetch("POSTGRES_DB") { } %>_cache
+    migrations_paths: db/cache_migrate
+  queue:
+    <<: *primary_production
+    database: <%= ENV.fetch("POSTGRES_DB") { } %>_queue
+    migrations_paths: db/queue_migrate
+  cable:
+    <<: *primary_production
+    database: <%= ENV.fetch("POSTGRES_DB") { } %>_cable
+    migrations_paths: db/cable_migrate

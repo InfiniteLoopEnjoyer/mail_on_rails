@@ -1,0 +1,24 @@
+- content_for :title, "Rail Mail - #{@email_account.email}"
+
+nav.mb-2.text-sm.text-slate-500
+  =<> link_to "Accounts", root_path, class: "text-accent"
+  | /
+  span<>= @email_account.email
+
+header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
+  h1.text-2xl.font-bold= @email_account.email
+  .flex.items-center.gap-2
+    = link_to "New folder", new_email_account_mailbox_path(@email_account), class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white"
+    = link_to "Edit", edit_email_account_path(@email_account), class: "inline-block cursor-pointer rounded-md border border-slate-200 bg-white px-3.5 py-1 text-sm font-medium text-slate-800"
+    = button_to "Delete", email_account_path(@email_account), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 bg-white px-3.5 py-1 text-sm font-medium text-red-700", form: { data: { turbo_confirm: "Delete #{@email_account.email} and all of its mail?" } }
+
+ul
+  - @mailboxes.each do |mailbox|
+    li.mb-2.rounded-lg.border.border-slate-200.bg-white
+      = link_to email_account_mailbox_path(@email_account, mailbox), class: "flex items-baseline gap-3 px-4 py-3" do
+        span.primary.font-semibold= mailbox.name
+        span.ml-auto.text-xs.whitespace-nowrap.text-slate-500
+          => pluralize(mailbox.email_messages.count, "message")
+          - if (unseen = mailbox.unseen_count).positive?
+            span.rounded-full.bg-accent.px-2.text-xs.text-white
+              = "#{unseen} unread"

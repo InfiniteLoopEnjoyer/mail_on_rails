@@ -1,0 +1,32 @@
+- content_for :title, "Rail Mail - #{@mailbox.name}"
+
+nav.mb-2.text-sm.text-slate-500
+  =<> link_to "Accounts", root_path, class: "text-accent"
+  | /
+  =<> link_to @email_account.email, email_account_path(@email_account), class: "text-accent"
+  | /
+  span<>= @mailbox.name
+
+header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
+  h1.text-2xl.font-bold= @mailbox.name
+  - unless @mailbox.inbox?
+    .flex.items-center.gap-2
+      = link_to "Edit", edit_email_account_mailbox_path(@email_account, @mailbox), class: "inline-block cursor-pointer rounded-md border border-slate-200 bg-white px-3.5 py-1 text-sm font-medium text-slate-800"
+      = button_to "Delete", email_account_mailbox_path(@email_account, @mailbox), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 bg-white px-3.5 py-1 text-sm font-medium text-red-700", form: { data: { turbo_confirm: "Delete the #{@mailbox.name} folder and all messages in it?" } }
+
+- if @email_messages.any?
+  ul
+    - @email_messages.each do |message|
+      li.mb-2.rounded-lg.border.border-slate-200.bg-white
+        = link_to email_account_mailbox_email_message_path(@email_account, @mailbox, message), class: "flex items-baseline gap-3 px-4 py-3" do
+          span.primary.font-semibold
+            - unless message.seen?
+              span.mr-2.inline-block.h-2.w-2.rounded-full.bg-accent.align-middle
+            = message.subject.presence || "(no subject)"
+          span.truncate.text-slate-500
+            => message.from_address
+            - unless message.sender_verified?
+              span.rounded-full.bg-red-100.px-2.text-xs.whitespace-nowrap.text-red-700 title="Unverified sender - may be spoofed#{message.auth_results.present? ? " (#{message.auth_results})" : ""}" ⚠
+          span.ml-auto.text-xs.whitespace-nowrap.text-slate-500= message.internal_date.strftime("%b %-d, %Y %H:%M")
+- else
+  p.text-slate-500 This folder is empty.

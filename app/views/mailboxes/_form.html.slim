@@ -1,0 +1,13 @@
+= form_with model: [ email_account, mailbox ], class: "max-w-md rounded-lg border border-slate-200 bg-white p-5" do |form|
+  - if mailbox.errors.any?
+    .mb-4.rounded-md.bg-red-100.px-3.py-2.text-sm.text-red-700
+      ul.list-disc.pl-4
+        - mailbox.errors.full_messages.each do |message|
+          li= message
+
+  .mb-4
+    = form.label :name, "Folder name", class: "mb-1 block text-sm font-semibold"
+    = form.text_field :name, required: true, autofocus: true, class: "w-full rounded-md border border-slate-200 bg-slate-100 px-2.5 py-1.5"
+
+  .mt-5
+    = form.submit class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white"

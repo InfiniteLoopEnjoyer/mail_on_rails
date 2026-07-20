@@ -1,0 +1,20 @@
+- content_for :title, "Rail Mail - Accounts"
+
+header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
+  h1.text-2xl.font-bold Email Accounts
+  .flex.items-center.gap-2
+    = link_to "New account", new_email_account_path, class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white"
+
+- if @email_accounts.any?
+  ul
+    - @email_accounts.each do |account|
+      li.mb-2.rounded-lg.border.border-slate-200.bg-white
+        = link_to email_account_path(account), class: "flex items-baseline gap-3 px-4 py-3" do
+          span.primary.font-semibold= account.email
+          span.truncate.text-slate-500= account.name
+          span.ml-auto.text-xs.whitespace-nowrap.text-slate-500= pluralize(account.mailboxes.size, "folder")
+- else
+  p.text-slate-500
+    ' No email accounts yet. Create one above, or run
+    code bin/rails db:seed
+    | .

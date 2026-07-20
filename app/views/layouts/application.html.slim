@@ -1,0 +1,38 @@
+doctype html
+html
+  head
+    title= content_for(:title) || "Rail Mail"
+    meta name="viewport" content="width=device-width,initial-scale=1"
+    meta name="apple-mobile-web-app-capable" content="yes"
+    meta name="application-name" content="Rail Mail"
+    meta name="mobile-web-app-capable" content="yes"
+    = csrf_meta_tags
+    = csp_meta_tag
+
+    = yield :head
+
+    / Enable PWA manifest for installable apps (make sure to enable in config/routes.rb too!)
+    / = tag.link rel: "manifest", href: pwa_manifest_path(format: :json)
+
+    link rel="icon" href="/icon.png" type="image/png"
+    link rel="icon" href="/icon.svg" type="image/svg+xml"
+    link rel="apple-touch-icon" href="/icon.png"
+
+    / Includes all stylesheets in app/assets, including the Tailwind build
+    = stylesheet_link_tag :app, "data-turbo-track": "reload"
+    = javascript_importmap_tags
+
+  body.mx-auto.max-w-3xl.bg-slate-100.px-4.pt-6.pb-16.text-slate-800
+    - if authenticated?
+      - users_section = controller_name == "users"
+      nav.mb-5.flex.items-center.justify-between.border-b.border-slate-200.pb-3
+        = link_to "Rail Mail", root_path, class: "font-bold text-accent"
+        .mr-auto.ml-6.flex.gap-4
+          = link_to "Mailboxes", root_path, class: users_section ? "font-medium text-slate-500" : "border-b-2 border-accent font-medium text-slate-800"
+          = link_to "Users", users_path, class: users_section ? "border-b-2 border-accent font-medium text-slate-800" : "font-medium text-slate-500"
+        = button_to "Sign out", session_path, method: :delete, class: "cursor-pointer rounded-md border border-slate-200 px-3 py-1 text-slate-500"
+      - if flash[:notice]
+        .mb-4.rounded-lg.bg-green-100.px-4.py-2.text-sm.text-green-700= flash[:notice]
+      - if flash[:alert]
+        .mb-4.rounded-lg.bg-red-100.px-4.py-2.text-sm.text-red-700= flash[:alert]
+    = yield

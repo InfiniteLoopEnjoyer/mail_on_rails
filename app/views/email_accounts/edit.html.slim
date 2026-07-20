@@ -1,0 +1,13 @@
+- content_for :title, "Rail Mail - Edit #{@email_account.email}"
+
+nav.mb-2.text-sm.text-slate-500
+  =<> link_to "Accounts", root_path, class: "text-accent"
+  | /
+  =<> link_to @email_account.email, email_account_path(@email_account), class: "text-accent"
+  | /
+  span<> Edit
+
+header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
+  h1.text-2xl.font-bold Edit Email Account
+
+= render "form", email_account: @email_account

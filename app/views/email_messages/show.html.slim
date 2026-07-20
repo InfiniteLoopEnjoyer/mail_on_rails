@@ -1,0 +1,32 @@
+- content_for :title, "Rail Mail - #{@email_message.subject.presence || "(no subject)"}"
+
+nav.mb-2.text-sm.text-slate-500
+  =<> link_to "Accounts", root_path, class: "text-accent"
+  | /
+  =<> link_to @email_account.email, email_account_path(@email_account), class: "text-accent"
+  | /
+  =<> link_to @mailbox.name, email_account_mailbox_path(@email_account, @mailbox), class: "text-accent"
+  | /
+  span<>= @email_message.subject.presence || "(no subject)"
+
+article.rounded-lg.border.border-slate-200.bg-white.px-5.py-4
+  header
+    h1.mb-3.text-xl.font-bold= @email_message.subject.presence || "(no subject)"
+    dl class="mb-4 grid grid-cols-[4rem_1fr] gap-x-3 gap-y-0.5 text-sm"
+      dt.text-slate-500 From
+      dd
+        => @email_message.from_address
+        - if @email_message.authenticated?
+          span.rounded-full.bg-green-100.px-2.text-xs.whitespace-nowrap.text-green-700 title="Sender authenticated as #{@email_message.authenticated_as}" ✓ verified
+        - elsif @email_message.sender_verified?
+          span.rounded-full.bg-green-100.px-2.text-xs.whitespace-nowrap.text-green-700 title="Sender domain verified (#{@email_message.auth_results})" ✓ dmarc
+        - else
+          span.rounded-full.bg-red-100.px-2.text-xs.whitespace-nowrap.text-red-700 title="Sender not verified - may be spoofed#{@email_message.auth_results.present? ? " (#{@email_message.auth_results})" : ""}" ⚠ unverified
+      dt.text-slate-500 To
+      dd= @email_message.to_addresses
+      dt.text-slate-500 Date
+      dd= @email_message.internal_date.strftime("%B %-d, %Y at %H:%M")
+      dt.text-slate-500 Flags
+      dd= @email_message.flags.join(" ").presence || "-"
+
+  pre.border-t.border-slate-200.pt-4.font-sans.break-words.whitespace-pre-wrap= @email_message.text_body
