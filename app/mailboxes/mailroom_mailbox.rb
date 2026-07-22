@@ -7,7 +7,7 @@ require "mail_on_rails/clamav_scanner"
 # Virus policy: the SMTP daemon scans at DATA time and stamps the trusted
 # X-MailOnRails-Scan header ("clean" skips re-scanning here). Stampless mail
 # (scanning disabled daemon-side, or a deploy gap) is scanned locally when
-# MAIL_ON_RAILS_CLAMAV_ADDR is set. Anything not clean is filed into the
+# SMTP_CLAMAV_ADDR is set. Anything not clean is filed into the
 # account's Quarantine mailbox for review instead of INBOX - the daemon
 # already refused the sender (550 infected / 451 unscanned), so these copies
 # exist purely for the admin, deduped by Message-ID because a 451 makes the

@@ -19,7 +19,7 @@ Add an environment-variable fallback so CI and daemon-style deploys can provide 
    def require_internal_api_password
      authenticate_or_request_with_http_basic do |_user, password|
 -      expected = Rails.application.credentials.dig(:mail_on_rails, :internal_api_password).to_s
-+      expected = ENV["MAIL_ON_RAILS_INTERNAL_API_PASSWORD"].presence ||
++      expected = ENV["SMTP_INTERNAL_API_PASSWORD"].presence ||
 +                 Rails.application.credentials.dig(:mail_on_rails, :internal_api_password).to_s
        expected.present? && ActiveSupport::SecurityUtils.secure_compare(password, expected)
      end
@@ -29,7 +29,7 @@ Add an environment-variable fallback so CI and daemon-style deploys can provide 
 
 ## CI workflow follow-up
 
-After the code change above, define `MAIL_ON_RAILS_INTERNAL_API_PASSWORD` in test jobs for GitHub Actions so tests are deterministic.
+After the code change above, define `SMTP_INTERNAL_API_PASSWORD` in test jobs for GitHub Actions so tests are deterministic.
 
 Example snippet for `.github/workflows/ci.yml` test jobs:
 
@@ -40,7 +40,7 @@ env:
   DATABASE_PORT: 5432
   DATABASE_USERNAME: postgres
   DATABASE_PASSWORD: postgres
-  MAIL_ON_RAILS_INTERNAL_API_PASSWORD: test-internal-api-password
+  SMTP_INTERNAL_API_PASSWORD: test-internal-api-password
 ```
 
 ## Optional test hardening

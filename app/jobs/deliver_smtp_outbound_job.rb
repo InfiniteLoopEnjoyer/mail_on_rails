@@ -51,7 +51,7 @@ class DeliverSmtpOutboundJob < ApplicationJob
 
     original_headers = message.data.to_s.b.partition(/\r?\n\r?\n/).first.byteslice(0, 8_192)
     notice = Mail.new
-    notice.from    = "Mail Delivery System <mailer-daemon@#{ENV.fetch("MAIL_ON_RAILS_HELO_HOST", "localhost")}>"
+    notice.from    = "Mail Delivery System <mailer-daemon@#{ENV.fetch("SMTP_HELO_HOST", "localhost")}>"
     notice.to      = message.mail_from
     notice.subject = "Undelivered Mail Returned to Sender"
     notice.date    = Time.current

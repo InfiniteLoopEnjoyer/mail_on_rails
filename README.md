@@ -49,7 +49,7 @@ Planned work, tracked here across the app and the daemon repos.
 
 - [ ] **RBL/DNSBL checks** — on the MX listener only (not authenticated
   submission), reverse the peer IP and query a configurable zone list
-  (`MAIL_ON_RAILS_RBLS`, e.g. `zen.spamhaus.org`); reject listed IPs with
+  (`SMTP_RBLS`, e.g. `zen.spamhaus.org`); reject listed IPs with
   `554 5.7.1`. Cache verdicts by IP with a TTL; fail open on DNS timeout.
 - [ ] **Per-IP rate limiting** — extend the `ConnLimiter` pattern with a
   per-IP table: concurrent-connection cap, sliding-window connection
@@ -67,7 +67,7 @@ Planned work, tracked here across the app and the daemon repos.
   one-pass DATA dot-unstuffing. Benchmark first; pair with the fiber
   scheduler refactor, which needs a buffer-oriented reader anyway.
 - [ ] **DMARC enforcement default** — enforcement exists behind
-  `MAIL_ON_RAILS_DMARC_ENFORCE` but is off by default (log-only); flip
+  `SMTP_DMARC_ENFORCE` but is off by default (log-only); flip
   it on once the verifiers have proven themselves against real traffic.
 
 ### mail_on_rails (this app)

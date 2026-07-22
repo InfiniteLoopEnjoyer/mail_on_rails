@@ -37,7 +37,7 @@ servers:
         # To relay through a provider instead of delivering to MXes directly,
         # also set MAIL_ON_RAILS_SMARTHOST (host:port) and
         # MAIL_ON_RAILS_SMARTHOST_USER/_PASSWORD.
-        MAIL_ON_RAILS_HELO_HOST: mail.example.com
+        SMTP_HELO_HOST: mail.example.com
 
         # Web-UI/mailer host (proxy.host below and Action Mailer link
         # generation in config/environments/production.rb).
@@ -51,7 +51,7 @@ servers:
         # clamd accessory (see accessories below), reached by container name
         # over the kamal docker network. Unset to disable app-side virus
         # scanning (mailroom fallback scan + IMAP APPEND).
-        MAIL_ON_RAILS_CLAMAV_ADDR: mail_on_rails-clamav:3310
+        SMTP_CLAMAV_ADDR: mail_on_rails-clamav:3310
 
         # Set number of processes dedicated to Solid Queue (default: 1)
         # JOB_CONCURRENCY: 3

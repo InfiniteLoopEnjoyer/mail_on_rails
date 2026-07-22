@@ -22,7 +22,7 @@ Audit of `DeliverSmtpOutboundJob` → `OutboundDeliverer`:
   for DMARC. Either sign with the header-From domain or enforce
   envelope/header domain match on enqueue.
 - **SPF: DNS-only, nothing enforces it** — code only exposes
-  `MAIL_ON_RAILS_HELO_HOST`; nothing verifies the published SPF record
+  `SMTP_HELO_HOST`; nothing verifies the published SPF record
   includes the sending IP. Covered by the "Domain-setup DNS checker"
   item below. Note: via `MAIL_ON_RAILS_SMARTHOST`, SPF is evaluated
   against the smarthost's IP, so its SPF posture is what matters.

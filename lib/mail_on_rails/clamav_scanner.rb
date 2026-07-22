@@ -13,7 +13,7 @@ module MailOnRails
   #
   # Verdicts: :clean, :infected (with signature name), :unavailable (clamd
   # unreachable/timeout/unparseable answer). Never raises - callers decide
-  # policy. Disabled unless MAIL_ON_RAILS_CLAMAV_ADDR is set (read per call:
+  # policy. Disabled unless SMTP_CLAMAV_ADDR is set (read per call:
   # no Ractors here, and tests can toggle it).
   module ClamavScanner
     Result = Struct.new(:status, :virus) do
@@ -32,11 +32,11 @@ module MailOnRails
     end
 
     def addr
-      ENV["MAIL_ON_RAILS_CLAMAV_ADDR"].to_s.strip
+      ENV["SMTP_CLAMAV_ADDR"].to_s.strip
     end
 
     def timeout
-      Integer(ENV.fetch("MAIL_ON_RAILS_CLAMAV_TIMEOUT", DEFAULT_TIMEOUT))
+      Integer(ENV.fetch("SMTP_CLAMAV_TIMEOUT", DEFAULT_TIMEOUT))
     end
 
     def scan(raw)

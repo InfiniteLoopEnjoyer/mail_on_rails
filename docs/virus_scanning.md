@@ -2,8 +2,8 @@
 
 Inbound mail is scanned by a clamd daemon — the `clamav` Kamal accessory
 in `config/deploy.yml` — reached over TCP 3310 on the shared `kamal`
-docker network. Scanning is enabled wherever `MAIL_ON_RAILS_CLAMAV_ADDR`
-(`host:port`) is set and disabled where it isn't; `MAIL_ON_RAILS_CLAMAV_TIMEOUT`
+docker network. Scanning is enabled wherever `SMTP_CLAMAV_ADDR`
+(`host:port`) is set and disabled where it isn't; `SMTP_CLAMAV_TIMEOUT`
 (seconds, default 10) bounds each scan. The whole raw RFC822 message is
 streamed via clamd's INSTREAM protocol (clamd decodes MIME itself, so
 attachments are covered).
@@ -45,7 +45,7 @@ Run this once before deploying scanner changes (first boot downloads
       -v clamav-db:/var/lib/clamav clamav/clamav:1.4
     # wait until: docker inspect -f '{{.State.Health.Status}}' clamav-smoke → healthy
 
-    MAIL_ON_RAILS_CLAMAV_ADDR=127.0.0.1:3310 bin/dev
+    SMTP_CLAMAV_ADDR=127.0.0.1:3310 bin/dev
 
 Send the EICAR test string (build it at runtime — keep it out of files so
 desktop AV doesn't eat your checkout; the two halves below are inert):

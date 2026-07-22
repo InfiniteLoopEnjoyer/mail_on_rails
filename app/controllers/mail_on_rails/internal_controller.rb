@@ -2,10 +2,10 @@
 # connection (its inbound handoff uses Action Mailbox's relay ingress; the
 # three operations here cover everything else the SMTP store contract
 # needs). Endpoints are POST-only JSON, authenticated with HTTP basic auth
-# against MAIL_ON_RAILS_INTERNAL_API_PASSWORD (env, used by CI where no
+# against SMTP_INTERNAL_API_PASSWORD (env, used by CI where no
 # RAILS_MASTER_KEY exists) falling back to credentials
 # mail_on_rails.internal_api_password - the daemons hold a copy as an env
-# secret (MAIL_ON_RAILS_INTERNAL_API_PASSWORD in their deploy configs), so
+# secret (SMTP_INTERNAL_API_PASSWORD in their deploy configs), so
 # no RAILS_MASTER_KEY leaves this app.
 # lib/mail_on_rails is on the autoload ignore list (see config/application.rb),
 # so the store must be required explicitly. Previously the in-process
@@ -109,7 +109,7 @@ class MailOnRails::InternalController < ActionController::API
 
   def require_internal_api_password
     authenticate_or_request_with_http_basic do |_user, password|
-      expected = ENV["MAIL_ON_RAILS_INTERNAL_API_PASSWORD"].presence ||
+      expected = ENV["SMTP_INTERNAL_API_PASSWORD"].presence ||
                  Rails.application.credentials.dig(:mail_on_rails, :internal_api_password).to_s
       expected.present? && ActiveSupport::SecurityUtils.secure_compare(password, expected)
     end

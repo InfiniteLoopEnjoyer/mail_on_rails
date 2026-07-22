@@ -108,7 +108,7 @@ module MailOnRails
       end
 
       # APPEND is the one write path with no SMTP daemon in front, so it
-      # scans here (when MAIL_ON_RAILS_CLAMAV_ADDR is set). Infected uploads
+      # scans here (when SMTP_CLAMAV_ADDR is set). Infected uploads
       # are refused - the IMAP server renders the envelope as "NO APPEND
       # failed: ...". A scanner outage stores the message in place flagged
       # "unscanned" rather than refusing or quarantining: this is an

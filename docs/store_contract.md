@@ -165,7 +165,7 @@ message's Date header, then now). Returns `{ uid:, uid_validity: }`.
 `code: :notfound` for an unknown mailbox.
 
 The app's adapter additionally virus-scans `raw` when a scanner is
-configured (`MAIL_ON_RAILS_CLAMAV_ADDR`): an infected upload is refused
+configured (`SMTP_CLAMAV_ADDR`): an infected upload is refused
 with `code: :infected` (the IMAP server renders any error envelope as
 `NO APPEND failed: <error>`); a scanner outage stores the message in
 place flagged `unscanned` rather than refusing — the client is an

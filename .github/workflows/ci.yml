@@ -100,7 +100,7 @@ jobs:
           # Internal API auth for controller tests - CI has no RAILS_MASTER_KEY,
           # so the credentials-stored password is unavailable (see the env
           # fallback in MailOnRails::InternalController).
-          MAIL_ON_RAILS_INTERNAL_API_PASSWORD: test-internal-api-password
+          SMTP_INTERNAL_API_PASSWORD: test-internal-api-password
           # RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
         run: bin/rails db:test:prepare test
 

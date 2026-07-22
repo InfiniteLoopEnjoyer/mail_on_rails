@@ -9,12 +9,12 @@ class ClamavScannerTest < ActiveSupport::TestCase
   RAW = "From: a@b.test\r\nSubject: hi\r\n\r\nbody\r\n"
 
   def with_scanner_at(addr, timeout: nil)
-    ENV["MAIL_ON_RAILS_CLAMAV_ADDR"] = addr
-    ENV["MAIL_ON_RAILS_CLAMAV_TIMEOUT"] = timeout.to_s if timeout
+    ENV["SMTP_CLAMAV_ADDR"] = addr
+    ENV["SMTP_CLAMAV_TIMEOUT"] = timeout.to_s if timeout
     yield
   ensure
-    ENV.delete("MAIL_ON_RAILS_CLAMAV_ADDR")
-    ENV.delete("MAIL_ON_RAILS_CLAMAV_TIMEOUT")
+    ENV.delete("SMTP_CLAMAV_ADDR")
+    ENV.delete("SMTP_CLAMAV_TIMEOUT")
   end
 
   test "disabled without an address" do
