@@ -8,7 +8,8 @@ class EmailMessage < ApplicationRecord
   # Stores a raw RFC822 message into a mailbox, extracting the header
   # fields the web UI needs for listing. authenticated_as records the
   # trusted sender (nil = accepted unauthenticated / potentially spoofed).
-  def self.deliver_raw(mailbox, raw, flags: [], internal_date: nil, authenticated_as: nil, auth_results: nil)
+  def self.deliver_raw(mailbox, raw, flags: [], internal_date: nil, authenticated_as: nil, auth_results: nil,
+                       scan_status: nil, virus_name: nil)
     raw = raw.gsub(/(?<!\r)\n/, "\r\n") # normalize bare LF to CRLF
     mail = Mail.read_from_string(raw) rescue nil
 
@@ -23,7 +24,9 @@ class EmailMessage < ApplicationRecord
       from_address: (mail&.from || []).first,
       to_addresses: (mail&.to || []).join(", "),
       authenticated_as: authenticated_as,
-      auth_results: auth_results
+      auth_results: auth_results,
+      scan_status: scan_status,
+      virus_name: virus_name
     )
   end
 

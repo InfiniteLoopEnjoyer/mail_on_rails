@@ -4,6 +4,11 @@ class Mailbox < ApplicationRecord
 
   INBOX = "INBOX"
 
+  # Where infected/unscanned inbound mail is filed for review. Hidden from
+  # IMAP LIST (see ImapBackend#list_mailboxes) but an ordinary mailbox
+  # otherwise, so the web UI shows it like any other folder.
+  QUARANTINE = "Quarantine"
+
   validates :name, presence: true, uniqueness: { scope: :email_account_id }
   validate :inbox_cannot_be_renamed, on: :update
 
@@ -17,6 +22,10 @@ class Mailbox < ApplicationRecord
 
   def inbox?
     name == INBOX
+  end
+
+  def quarantine?
+    name == QUARANTINE
   end
 
   # Reserves and returns the next UID for a new message.

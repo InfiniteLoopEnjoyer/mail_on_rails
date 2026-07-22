@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_07_15_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_07_22_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -70,12 +70,15 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_15_120000) do
     t.integer "mailbox_id", null: false
     t.string "message_id"
     t.binary "raw", null: false
+    t.string "scan_status"
     t.integer "size", default: 0, null: false
     t.string "subject"
     t.text "to_addresses"
     t.integer "uid", null: false
     t.datetime "updated_at", null: false
+    t.string "virus_name"
     t.index ["mailbox_id", "internal_date"], name: "index_email_messages_on_mailbox_id_and_internal_date"
+    t.index ["mailbox_id", "message_id"], name: "index_email_messages_on_mailbox_id_and_message_id"
     t.index ["mailbox_id", "uid"], name: "index_email_messages_on_mailbox_id_and_uid", unique: true
     t.index ["mailbox_id"], name: "index_email_messages_on_mailbox_id"
   end

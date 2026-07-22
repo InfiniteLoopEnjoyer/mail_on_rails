@@ -40,3 +40,8 @@
 
 /app/assets/builds/*
 !/app/assets/builds/.keep
+
+# Project specific
+/lib/tasks/local.rake
+/lvh.key
+/lvh.crt

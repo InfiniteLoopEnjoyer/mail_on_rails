@@ -64,20 +64,22 @@ Given candidate recipient addresses, returns
 local account. Matching is case- and whitespace-insensitive; the returned
 strings are the normalized forms.
 
-### `smtp_store(mail_from, rcpt_to, data, authenticated_as, auth_results: nil)`
+### `smtp_store(mail_from, rcpt_to, data, authenticated_as, auth_results: nil, scan_status: nil)`
 
 Accept a message. `rcpt_to` is split into local recipients (handed to the
 host's inbound delivery pipeline, with the full local recipient list) and
 remote recipients (queued one entry per recipient for outbound delivery,
 sender recorded as `authenticated_as`).
 
-`authenticated_as` (nil or the authenticated account's email) and
-`auth_results` (an Authentication-Results-style string, or nil) **must
-travel with the message bytes, beyond the sender's reach** — this trust
-stamp is how the rest of the system distinguishes verified from
-potentially spoofed mail. (The app's adapter stamps them as
-`X-MailOnRails-*` headers after stripping any forged copies from the
-submitted data; see `MailOnRails::Smtp::IngressClient`.)
+`authenticated_as` (nil or the authenticated account's email),
+`auth_results` (an Authentication-Results-style string, or nil), and
+`scan_status` (`"clean"` when a virus scan ran, nil when scanning is
+disabled) **must travel with the message bytes, beyond the sender's
+reach** — this trust stamp is how the rest of the system distinguishes
+verified from potentially spoofed mail, and scanned from unscanned mail.
+(The app's adapter stamps them as `X-MailOnRails-*` headers after
+stripping any forged copies from the submitted data; see
+`MailOnRails::Smtp::IngressClient`.)
 
 Returns `{ id:, outbound: }` — `id` a non-nil identifier for the accepted
 inbound message (an implementation-chosen placeholder when there were
@@ -93,6 +95,18 @@ Errors:
 - `code: :internal` — the inbound pipeline is unavailable (e.g. the
   ingress endpoint is down). The session answers 451 and the sending
   server retries; SMTP's retry schedule is the durability buffer.
+
+### `quarantine(mail_from, rcpt_to, data, authenticated_as, auth_results:, scan_status:, virus: nil)`
+
+Best-effort delivery of an infected (`scan_status: "infected"`, `virus`
+naming the clamd signature) or unscanned (`"unscanned"`) message copy for
+review, after the SMTP session already refused the sender (550/451 —
+decided by the scan verdict alone, never by this call's outcome). Targets
+the local recipients, falling back to the authenticated sender's own
+account for remote-only submissions. Always returns nil and never raises:
+a lost review copy is logged, not surfaced. The app files these copies
+into the account's Quarantine mailbox, deduped by Message-ID (a 451 makes
+the sender retry the same message repeatedly).
 
 ## IMAP store interface
 
@@ -149,6 +163,13 @@ Store a message. Bare LFs in `raw` are normalized to CRLF before storage;
 server-chosen default (the Active Record store falls back to the
 message's Date header, then now). Returns `{ uid:, uid_validity: }`.
 `code: :notfound` for an unknown mailbox.
+
+The app's adapter additionally virus-scans `raw` when a scanner is
+configured (`MAIL_ON_RAILS_CLAMAV_ADDR`): an infected upload is refused
+with `code: :infected` (the IMAP server renders any error envelope as
+`NO APPEND failed: <error>`); a scanner outage stores the message in
+place flagged `unscanned` rather than refusing — the client is an
+authenticated user writing their own Sent/Drafts copies.
 
 ### `expunge(mailbox_id)`
 

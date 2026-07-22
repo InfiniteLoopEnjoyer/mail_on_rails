@@ -48,6 +48,11 @@ servers:
         # <selector>._domainkey.<domain> TXT records (selector default: rail).
         MAIL_ON_RAILS_DKIM_DIR: /rails/storage/dkim
 
+        # clamd accessory (see accessories below), reached by container name
+        # over the kamal docker network. Unset to disable app-side virus
+        # scanning (mailroom fallback scan + IMAP APPEND).
+        MAIL_ON_RAILS_CLAMAV_ADDR: mail_on_rails-clamav:3310
+
         # Set number of processes dedicated to Solid Queue (default: 1)
         # JOB_CONCURRENCY: 3
 
@@ -125,6 +130,22 @@ accessories:
     directories:
       - data:/var/lib/postgresql/data
       - socket/:/var/run/postgresql
+
+  # ClamAV daemon scanning inbound mail. Both this app (Action Mailbox
+  # fallback scan + IMAP APPEND) and the smtp daemon service reach it on
+  # TCP 3310 over the shared "kamal" docker network by container name
+  # (mail_on_rails-clamav) - no host port is published. First boot
+  # downloads ~300MB of signatures and takes minutes to turn healthy (the
+  # image ships its own HEALTHCHECK and internal freshclam updater); the
+  # volume below persists the database across restarts. clamd holds
+  # signatures in RAM (~1.5GB, briefly doubling during reloads): the host
+  # needs >=4GB total. If memory gets tight, mount a clamd.conf with
+  # "ConcurrentDatabaseReload no".
+  clamav:
+    image: clamav/clamav:1.4
+    host: 192.168.0.1
+    directories:
+      - clamav-db:/var/lib/clamav
 
   certbot:
     image: certbot/dns-cloudflare

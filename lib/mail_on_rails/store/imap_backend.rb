@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "mail_on_rails/clamav_scanner"
+
 module MailOnRails
   module Store
     # The app-side implementation of the IMAP store contract: everything
@@ -8,10 +10,13 @@ module MailOnRails
     # delegates here (see docs/store_contract.md and Store::Imap, the HTTP
     # client the daemon actually uses).
     class ImapBackend < Base
+      # Quarantine is kept out of LIST so mail clients don't sync a folder
+      # of flagged malware; it stays SELECTable by name on purpose (review
+      # happens in the web UI, but a power user can still get at it).
       def list_mailboxes(account_id)
         db do
           account = EmailAccount.find(account_id)
-          { mailboxes: account.mailboxes.order(:name).pluck(:name) }
+          { mailboxes: account.mailboxes.where.not(name: Mailbox::QUARANTINE).order(:name).pluck(:name) }
         end
       end
 
@@ -102,13 +107,32 @@ module MailOnRails
         end
       end
 
+      # APPEND is the one write path with no SMTP daemon in front, so it
+      # scans here (when MAIL_ON_RAILS_CLAMAV_ADDR is set). Infected uploads
+      # are refused - the IMAP server renders the envelope as "NO APPEND
+      # failed: ...". A scanner outage stores the message in place flagged
+      # "unscanned" rather than refusing or quarantining: this is an
+      # authenticated user writing their own Sent/Drafts copies, and hiding
+      # those on clamd downtime would break every mail client.
       def append(account_id, mailbox_name, raw, flags, internal_date_epoch)
         db do
           mailbox = EmailAccount.find(account_id).find_mailbox(mailbox_name)
           next { error: "no such mailbox", code: :notfound } unless mailbox
 
+          scan_status = nil
+          virus_name = nil
+          if MailOnRails::ClamavScanner.enabled?
+            result = MailOnRails::ClamavScanner.scan(raw)
+            if result.infected?
+              log(:warn, "IMAP APPEND refused for account #{account_id}: virus #{result.virus}")
+              next { error: "message rejected: virus detected (#{result.virus})", code: :infected }
+            end
+            scan_status = result.clean? ? "clean" : "unscanned"
+          end
+
           internal_date = internal_date_epoch && Time.zone.at(internal_date_epoch)
-          message = EmailMessage.deliver_raw(mailbox, raw, flags: flags, internal_date: internal_date)
+          message = EmailMessage.deliver_raw(mailbox, raw, flags: flags, internal_date: internal_date,
+                                             scan_status: scan_status)
           { uid: message.uid, uid_validity: mailbox.uid_validity }
         end
       end
@@ -122,7 +146,9 @@ module MailOnRails
           src_uids = []
           dest_uids = []
           EmailMessage.where(mailbox_id: mailbox_id, uid: uids).order(:uid).each do |m|
-            copied = EmailMessage.deliver_raw(dest, m.raw, flags: m.flags, internal_date: m.internal_date)
+            # Same bytes, same verdict - no rescan on copy.
+            copied = EmailMessage.deliver_raw(dest, m.raw, flags: m.flags, internal_date: m.internal_date,
+                                              scan_status: m.scan_status, virus_name: m.virus_name)
             src_uids << m.uid
             dest_uids << copied.uid
           end

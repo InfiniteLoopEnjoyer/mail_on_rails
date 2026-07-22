@@ -9,6 +9,16 @@ nav.mb-2.text-sm.text-slate-500
   | /
   span<>= @email_message.subject.presence || "(no subject)"
 
+- if @email_message.scan_status == "infected"
+  .mb-4.rounded-lg.border.border-red-300.bg-red-50.px-5.py-3.text-sm.text-red-800
+    strong ☣ Virus detected:
+    span<>= @email_message.virus_name
+    | &mdash; this message was refused at SMTP time and is held here for review only. Do not forward its content.
+- elsif @email_message.scan_status == "unscanned"
+  .mb-4.rounded-lg.border.border-amber-300.bg-amber-50.px-5.py-3.text-sm.text-amber-800
+    strong Unscanned:
+    | &nbsp;the virus scanner was unavailable when this message arrived; treat attachments with caution.
+
 article.rounded-lg.border.border-slate-200.bg-white.px-5.py-4
   header
     h1.mb-3.text-xl.font-bold= @email_message.subject.presence || "(no subject)"

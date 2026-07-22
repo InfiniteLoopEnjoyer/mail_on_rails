@@ -25,6 +25,11 @@ header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
             = message.subject.presence || "(no subject)"
           span.truncate.text-slate-500
             => message.from_address
+            - if message.scan_status == "infected"
+              span.rounded-full.bg-red-100.px-2.text-xs.whitespace-nowrap.text-red-700 title="ClamAV: #{message.virus_name}"
+                | ☣ virus: #{message.virus_name}
+            - elsif message.scan_status == "unscanned"
+              span.rounded-full.bg-amber-100.px-2.text-xs.whitespace-nowrap.text-amber-700 title="Accepted while the virus scanner was unavailable" unscanned
             - unless message.sender_verified?
               span.rounded-full.bg-red-100.px-2.text-xs.whitespace-nowrap.text-red-700 title="Unverified sender - may be spoofed#{message.auth_results.present? ? " (#{message.auth_results})" : ""}" ⚠
           span.ml-auto.text-xs.whitespace-nowrap.text-slate-500= message.internal_date.strftime("%b %-d, %Y %H:%M")

@@ -21,6 +21,11 @@ class EmailAccount < ApplicationRecord
     mailboxes.find_by(name: name)
   end
 
+  # Created on demand: most accounts never receive a flagged message.
+  def quarantine_mailbox
+    find_mailbox(Mailbox::QUARANTINE) || mailboxes.create!(name: Mailbox::QUARANTINE)
+  end
+
   private
 
   def create_default_mailboxes
