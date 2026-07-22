@@ -135,7 +135,7 @@ jobs:
           DATABASE_PASSWORD: postgres
           # RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
         run: |
-          if compgen -G "test/system/**/*_test.rb" > /dev/null; then
+          if find test/system -name "*_test.rb" -type f 2>/dev/null | grep -q .; then
             bin/rails db:test:prepare test:system
           else
             echo "No system tests found. Skipping system-test job."
