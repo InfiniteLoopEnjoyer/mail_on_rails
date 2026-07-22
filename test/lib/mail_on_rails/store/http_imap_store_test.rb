@@ -30,7 +30,8 @@ class HttpImapStoreTest < ActionDispatch::IntegrationTest
   class RackApi
     def initialize(test)
       @test = test
-      password = Rails.application.credentials.dig(:mail_on_rails, :internal_api_password)
+      password = ENV["MAIL_ON_RAILS_INTERNAL_API_PASSWORD"].presence ||
+                 Rails.application.credentials.dig(:mail_on_rails, :internal_api_password)
       @headers = { "Authorization" => ActionController::HttpAuthentication::Basic.encode_credentials("mail_on_rails", password) }
     end
 
@@ -67,7 +68,8 @@ class HttpImapStoreTest < ActionDispatch::IntegrationTest
 
     post "/mail_on_rails/internal/imap/drop_table", params: {}, as: :json,
          headers: { "Authorization" => ActionController::HttpAuthentication::Basic.encode_credentials(
-           "mail_on_rails", Rails.application.credentials.dig(:mail_on_rails, :internal_api_password)
+           "mail_on_rails", ENV["MAIL_ON_RAILS_INTERNAL_API_PASSWORD"].presence ||
+                            Rails.application.credentials.dig(:mail_on_rails, :internal_api_password)
          ) }
     assert_response :not_found
   end

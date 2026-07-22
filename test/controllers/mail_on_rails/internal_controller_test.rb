@@ -9,7 +9,8 @@ class MailOnRails::InternalControllerTest < ActionDispatch::IntegrationTest
   end
 
   def api_auth
-    password = Rails.application.credentials.dig(:mail_on_rails, :internal_api_password)
+    password = ENV["MAIL_ON_RAILS_INTERNAL_API_PASSWORD"].presence ||
+               Rails.application.credentials.dig(:mail_on_rails, :internal_api_password)
     { "Authorization" => ActionController::HttpAuthentication::Basic.encode_credentials("mail_on_rails", password) }
   end
 
