@@ -5,6 +5,34 @@ Derived from reviewing [Postal](https://github.com/postalserver/postal)
 Postal source it's based on. Pending review — nothing here is committed
 roadmap yet. Daemon-side items live in the sibling repos' TODO.md files.
 
+## Outbound deliverability (DKIM/SPF/DMARC audit, 2026-07-22)
+
+Audit of `DeliverSmtpOutboundJob` → `OutboundDeliverer`:
+
+- **DKIM: implemented** — `OutboundDeliverer#signed` signs with the
+  `dkim` gem using per-domain keys at `MAIL_ON_RAILS_DKIM_DIR/<domain>.pem`
+  (`/rails/storage/dkim` in deploy.yml), selector
+  `MAIL_ON_RAILS_DKIM_SELECTOR` (default `rail`).
+- [ ] **Warn when sending unsigned** — if the domain's key file is
+  missing, the message goes out silently unsigned (no log, no warning).
+  Add a `Rails.logger.warn` in the fallback path.
+- [ ] **DMARC alignment: sign with the From: header domain** — the
+  signing domain is derived from the envelope `mail_from`, not the
+  `From:` header. If those ever differ, the DKIM signature won't align
+  for DMARC. Either sign with the header-From domain or enforce
+  envelope/header domain match on enqueue.
+- **SPF: DNS-only, nothing enforces it** — code only exposes
+  `MAIL_ON_RAILS_HELO_HOST`; nothing verifies the published SPF record
+  includes the sending IP. Covered by the "Domain-setup DNS checker"
+  item below. Note: via `MAIL_ON_RAILS_SMARTHOST`, SPF is evaluated
+  against the smarthost's IP, so its SPF posture is what matters.
+- **DMARC: passes when the above hold** — needs aligned DKIM *or*
+  aligned SPF; with a key present and envelope-from == header-from,
+  outbound passes. No code needed beyond the alignment fix above.
+- **Not covered by code (operator checklist)** — PTR/FCrDNS for the
+  sending IP; also note outbound STARTTLS uses `tls_verify: false`
+  (fine for deliverability, worth knowing).
+
 ## Outbound delivery
 
 - [ ] **Cross-check DKIM signing against Postal's signer** — Postal's

@@ -50,22 +50,21 @@ class DeliverSmtpOutboundJob < ApplicationJob
     return unless account
 
     original_headers = message.data.to_s.b.partition(/\r?\n\r?\n/).first.byteslice(0, 8_192)
-    notice = Mail.new do
-      from    "Mail Delivery System <mailer-daemon@#{ENV.fetch("MAIL_ON_RAILS_HELO_HOST", "localhost")}>"
-      to      message.mail_from
-      subject "Undelivered Mail Returned to Sender"
-      date    Time.current
-      body    <<~BODY
-        Your message to <#{message.recipient}> could not be delivered
-        after #{message.attempts} attempt(s).
+    notice = Mail.new
+    notice.from    = "Mail Delivery System <mailer-daemon@#{ENV.fetch("MAIL_ON_RAILS_HELO_HOST", "localhost")}>"
+    notice.to      = message.mail_from
+    notice.subject = "Undelivered Mail Returned to Sender"
+    notice.date    = Time.current
+    notice.body    = <<~BODY
+      Your message to <#{message.recipient}> could not be delivered
+      after #{message.attempts} attempt(s).
 
-        Reason:
-          #{error}
+      Reason:
+        #{error}
 
-        ------ Original message headers ------
-        #{original_headers}
-      BODY
-    end
+      ------ Original message headers ------
+      #{original_headers}
+    BODY
     EmailMessage.deliver_raw(account.inbox, notice.to_s)
   rescue StandardError => e
     Rails.logger.error "[mail_on_rails] bounce generation failed for outbound #{message.id}: #{e.class}: #{e.message}"
