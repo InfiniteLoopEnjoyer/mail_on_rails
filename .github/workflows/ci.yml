@@ -126,6 +126,9 @@ jobs:
         env:
           RAILS_ENV: test
           DATABASE_HOST: 127.0.0.1
+          DATABASE_PORT: 5432
+          DATABASE_USERNAME: postgres
+          DATABASE_PASSWORD: postgres
           # RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
         run: bin/rails db:test:prepare test:system
 
