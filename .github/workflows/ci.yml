@@ -134,7 +134,12 @@ jobs:
           DATABASE_USERNAME: postgres
           DATABASE_PASSWORD: postgres
           # RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
-        run: bin/rails db:test:prepare test:system
+        run: |
+          if compgen -G "test/system/**/*_test.rb" > /dev/null; then
+            bin/rails db:test:prepare test:system
+          else
+            echo "No system tests found. Skipping system-test job."
+          fi
 
       - name: Keep screenshots from failed system tests
         uses: actions/upload-artifact@v4
