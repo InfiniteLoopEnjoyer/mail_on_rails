@@ -14,6 +14,25 @@ for host in $(echo "$KAMAL_HOSTS" | tr ',' ' '); do
 set -e
 export DEBIAN_FRONTEND=noninteractive
 
+# --- Swap --------------------------------------------------------------------
+# The droplet has 2 GB of RAM and runs the whole stack (postgres, puma +
+# solid queue, rspamd, exim, imap, and eventually clamd, which alone wants
+# ~1.5 GB resident). A 6 GB swapfile keeps deploy-time and signature-reload
+# spikes from OOM-killing anything. swappiness is kept low so hot pages
+# (clamd's signature database in particular) stay in RAM.
+if ! swapon --show=NAME --noheadings | grep -q '^/swapfile$'; then
+  fallocate -l 6G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=6144
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  echo "Created 6G /swapfile"
+fi
+grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+cat > /etc/sysctl.d/61-swap.conf <<'CONF'
+vm.swappiness = 10
+vm.vfs_cache_pressure = 50
+CONF
+
 # --- Packages: automatic security updates + ssh brute-force protection ----
 apt-get update -q
 apt-get install -qy unattended-upgrades fail2ban ufw
@@ -28,13 +47,33 @@ CONF
 # --- SSH hardening ---------------------------------------------------------
 # Key-only auth; root allowed with keys only (kamal deploys as root).
 mkdir -p /etc/ssh/sshd_config.d
-cat > /etc/ssh/sshd_config.d/50-hardening.conf <<'CONF'
+#
+# MaxStartups/PerSourceMaxStartups: a public droplet gets scanned constantly,
+# and every scanner sitting in the pre-auth handshake holds one of sshd's
+# unauthenticated slots. With the stock 10:30:100 that pool is routinely full,
+# and kamal - which opens several SSH sessions in parallel per command - gets
+# "kex_exchange_identification: Connection reset by peer" mid-deploy. Widen the
+# global pool but cap it per source address, so a single scanning IP can never
+# crowd out a real deploy.
+#
+# PerSourcePenaltyExemptList: OpenSSH 9.8+ also penalises a source address for
+# connections that close without authenticating (noauth:1, refuseconnection:10).
+# Kamal's connection churn trips that and locks the deploy machine out of the
+# box entirely for minutes. Exempt whoever is running this hook - $SSH_CLIENT
+# is the address we are connected from right now, so this configures itself.
+DEPLOY_IP=$(echo "$SSH_CLIENT" | awk '{print $1}')
+
+cat > /etc/ssh/sshd_config.d/50-hardening.conf <<CONF
 PermitRootLogin prohibit-password
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 X11Forwarding no
 MaxAuthTries 3
 LoginGraceTime 20
+MaxStartups 100:30:200
+PerSourceMaxStartups 20
+PerSourceNetBlockSize 32
+${DEPLOY_IP:+PerSourcePenaltyExemptList $DEPLOY_IP}
 CONF
 sshd -t && systemctl reload ssh 2>/dev/null || systemctl reload sshd
 

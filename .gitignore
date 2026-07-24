@@ -45,3 +45,6 @@
 /lib/tasks/local.rake
 /lvh.key
 /lvh.crt
+
+# Deploy run log (may contain host details); never commit.
+/deploy.log

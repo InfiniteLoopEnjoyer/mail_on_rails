@@ -78,10 +78,12 @@ deploy_timeout: 120
 # Where you keep your container images.
 #
 # This is the local registry container (kamal-docker-registry) on the machine
-# you deploy from. The deploy host reaches it through a reverse SSH tunnel
-# opened by .kamal/hooks/pre-deploy (closed again in post-deploy), so
-# "localhost:5555" resolves to it on both ends. Docker allows plain HTTP for
-# 127.0.0.0/8 registries, so no TLS or auth is needed.
+# you deploy from. Kamal recognises a localhost registry and opens a reverse
+# SSH tunnel to it for the push/pull window itself (Kamal::Cli::Build::
+# PortForwarding), so "localhost:5555" resolves to it on both ends - do NOT
+# add a tunnel hook of your own, it will squat on the remote port and make
+# kamal's own forward fail. Docker allows plain HTTP for 127.0.0.0/8
+# registries, so no TLS or auth is needed.
 registry:
   server: localhost:5555
 
