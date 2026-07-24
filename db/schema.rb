@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_07_22_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_07_23_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -72,6 +72,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_22_120000) do
     t.binary "raw", null: false
     t.string "scan_status"
     t.integer "size", default: 0, null: false
+    t.string "spam_action"
+    t.float "spam_score"
+    t.float "spam_threshold"
     t.string "subject"
     t.text "to_addresses"
     t.integer "uid", null: false

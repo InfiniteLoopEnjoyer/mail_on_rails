@@ -9,7 +9,7 @@ class EmailMessage < ApplicationRecord
   # fields the web UI needs for listing. authenticated_as records the
   # trusted sender (nil = accepted unauthenticated / potentially spoofed).
   def self.deliver_raw(mailbox, raw, flags: [], internal_date: nil, authenticated_as: nil, auth_results: nil,
-                       scan_status: nil, virus_name: nil)
+                       scan_status: nil, virus_name: nil, spam_score: nil, spam_threshold: nil, spam_action: nil)
     raw = raw.gsub(/(?<!\r)\n/, "\r\n") # normalize bare LF to CRLF
     mail = Mail.read_from_string(raw) rescue nil
 
@@ -26,7 +26,10 @@ class EmailMessage < ApplicationRecord
       authenticated_as: authenticated_as,
       auth_results: auth_results,
       scan_status: scan_status,
-      virus_name: virus_name
+      virus_name: virus_name,
+      spam_score: spam_score,
+      spam_threshold: spam_threshold,
+      spam_action: spam_action
     )
   end
 
@@ -36,8 +39,8 @@ class EmailMessage < ApplicationRecord
   end
 
   # One of "pass"/"fail"/"none"/... - parsed out of the recorded
-  # Authentication-Results-style string (see MailOnRails::Smtp::SenderAuth
-  # in the mail_on_rails_smtp gem).
+  # Authentication-Results-style string (the app computes these SPF/DKIM/DMARC
+  # verdicts via rspamd; the exim edge only forwards the connection facts).
   def auth_result(mechanism)
     auth_results.to_s[/\b#{mechanism}=(\w+)/, 1]
   end
@@ -50,6 +53,13 @@ class EmailMessage < ApplicationRecord
 
   def seen?
     flags.include?("\\Seen")
+  end
+
+  # True once the inbound pipeline recorded any verdict (sender-auth, virus,
+  # or spam). Received mail has these; outbound Sent copies don't. Gates the
+  # analysis footer in the message view.
+  def analyzed?
+    scan_status.present? || auth_results.present? || spam_score.present?
   end
 
   def parsed

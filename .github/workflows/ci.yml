@@ -5,9 +5,9 @@ on:
   push:
     branches: [ main ]
 
-# The mail_on_rails_smtp / mail_on_rails_imap path gems point at sibling
-# repos that don't exist on CI runners; skipping their group keeps
-# bundle install happy, and the store-contract tests skip themselves.
+# The mail_on_rails_imap path gem points at a sibling repo that doesn't
+# exist on CI runners; skipping its group keeps bundle install happy, and
+# the store-contract tests skip themselves.
 env:
   BUNDLE_WITHOUT: daemons
 

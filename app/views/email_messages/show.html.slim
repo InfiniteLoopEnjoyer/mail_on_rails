@@ -40,3 +40,28 @@ article.rounded-lg.border.border-slate-200.bg-white.px-5.py-4
       dd= @email_message.flags.join(" ").presence || "-"
 
   pre.border-t.border-slate-200.pt-4.font-sans.break-words.whitespace-pre-wrap= @email_message.text_body
+
+  - if @email_message.analyzed?
+    footer.mt-4.flex.flex-wrap.items-center.gap-x-2.gap-y-1.border-t.border-slate-200.pt-3.text-xs.text-slate-500
+      - if @email_message.auth_results.present?
+        span.font-medium.text-slate-400 Auth
+        - %w[spf dkim dmarc].each do |mech|
+          - verdict = @email_message.auth_result(mech)
+          span.rounded-full.px-2.whitespace-nowrap class=auth_badge_classes(verdict) title="#{mech.upcase}=#{verdict || "none"}"
+            = "#{mech} #{verdict || "none"}"
+
+      span.font-medium.text-slate-400 Virus
+      - case @email_message.scan_status
+      - when "infected"
+        span.rounded-full.bg-red-100.px-2.whitespace-nowrap.text-red-700 title="ClamAV: #{@email_message.virus_name}"
+          | ☣ #{@email_message.virus_name}
+      - when "unscanned"
+        span.rounded-full.bg-amber-100.px-2.whitespace-nowrap.text-amber-700 title="The virus scanner was unavailable when this message arrived" unscanned
+      - when "clean"
+        span.rounded-full.bg-green-100.px-2.whitespace-nowrap.text-green-700 ✓ clean
+      - else
+        span.rounded-full.bg-slate-100.px-2.whitespace-nowrap.text-slate-600 not scanned
+
+      - if @email_message.spam_score.present?
+        span.font-medium.text-slate-400 Spam
+        span.rounded-full.bg-slate-100.px-2.whitespace-nowrap.text-slate-600= spam_score_label(@email_message)

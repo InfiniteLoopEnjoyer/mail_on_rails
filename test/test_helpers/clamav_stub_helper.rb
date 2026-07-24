@@ -3,10 +3,9 @@
 require "mail_on_rails/clamav_scanner"
 
 # Swaps MailOnRails::ClamavScanner's module functions for the block's
-# duration (minitest/mock ships as a separate gem under Minitest 6; this is
-# the same restore-the-original pattern the smtp gem's suite uses for
-# SenderAuth.verify). `scan:` takes a Result or a callable; pass a raising
-# callable to assert a path must NOT scan.
+# duration (minitest/mock ships as a separate gem under Minitest 6), then
+# restores the originals. `scan:` takes a Result or a callable; pass a
+# raising callable to assert a path must NOT scan.
 module ClamavStubHelper
   def with_scanner(enabled:, scan: nil)
     singleton = MailOnRails::ClamavScanner.singleton_class

@@ -5,37 +5,40 @@ submission), IMAP, and a web UI, with mail stored in PostgreSQL.
 
 ## Architecture
 
-The protocol daemons live in sibling repos and deploy as their own Kamal
+The mail edges live in sibling repos and deploy as their own Kamal
 services:
 
-- **[mail_on_rails_smtp](https://github.com/InfiniteLoopEnjoyer/mail_on_rails_smtp)**
-  — SMTP listeners (MX, submission, SMTPS) with STARTTLS/AUTH,
-  SPF/DKIM/DMARC verification of inbound mail, and DoS caps.
-  Sender-verification behavior (DMARC enforcement, DNS fail-open caveats)
-  is documented in that repo's README.
+- **[mail_on_rails_exim](https://github.com/InfiniteLoopEnjoyer/mail_on_rails_exim)**
+  — the SMTP edge: an [Exim](https://www.exim.org/) MTA (MX + authenticated
+  submission on 25/587/465) with STARTTLS/AUTH and DoS caps. It terminates
+  SMTP and hands mail to this app over HTTP — it holds no Rails code, no
+  database, and no master key. It does no scanning or SPF/DKIM/DMARC of its
+  own; it forwards the connection facts and this app runs those checks.
 - **[mail_on_rails_imap](https://github.com/InfiniteLoopEnjoyer/mail_on_rails_imap)**
   — the IMAP server.
 
-This app is the persistence and UI side. It exposes the private internal
-API and Action Mailbox ingress the daemons talk to (the store contract is
-specified in `docs/store_contract.md`), stores mail in Postgres, and
-serves the web UI. Inbound messages carry the SMTP daemon's verification
-verdict as verified/unverified badges in the UI.
+This app is the persistence and UI side. It exposes the Action Mailbox
+relay ingress and the private internal API the edges talk to, stores mail
+in Postgres, and serves the web UI. The IMAP daemon speaks to a **store**
+(interface in `docs/store_contract.md`); the exim edge uses no store and
+POSTs straight to the ingress + internal API (its HTTP contract is in the
+same doc, authoritative details in the exim repo). Inbound messages carry
+verified/unverified badges in the UI.
 
-In development the daemons are path dependencies (the `:daemons` Gemfile
-group) and run in-process on background threads via the `:mail_on_rails`
-Puma plugin, so `bin/dev` brings up the full stack — web, SMTP, and IMAP —
-in one process.
+In development the IMAP daemon is a path dependency (the `:daemons` Gemfile
+group) and runs in-process on a background thread via the `:mail_on_rails`
+Puma plugin, so `bin/dev` brings up web + IMAP in one process. The SMTP
+edge is a Docker/Exim service and runs on its own (see the exim repo).
 
 ## Running the test suite
 
     bin/rails test
 
-The suite includes the daemon gems' store-contract tests, run against
-this app's Active Record and HTTP implementations. When the sibling path
-gems aren't installed (e.g. CI sets `BUNDLE_WITHOUT=daemons`), those
-tests skip with a note. Each daemon repo also carries its own Rails-free
-suite (`bin/test`).
+The suite includes the IMAP gem's store-contract tests, run against this
+app's Active Record and HTTP implementations. When the sibling path gem
+isn't installed (e.g. CI sets `BUNDLE_WITHOUT=daemons`), those tests skip
+with a note. Each edge repo also carries its own Rails-free suite
+(`bin/test`).
 
 Virus-scanning tests run against a scripted fake clamd, so no ClamAV
 install is needed; the real-engine EICAR smoke procedure and the scanning
@@ -43,39 +46,29 @@ policy live in [docs/virus_scanning.md](docs/virus_scanning.md).
 
 ## Roadmap
 
-Planned work, tracked here across the app and the daemon repos.
+Planned work, tracked here across the app and the edge repos.
 
-### [mail_on_rails_smtp](https://github.com/InfiniteLoopEnjoyer/mail_on_rails_smtp)
+### [mail_on_rails_exim](https://github.com/InfiniteLoopEnjoyer/mail_on_rails_exim)
 
-- [ ] **RBL/DNSBL checks** — on the MX listener only (not authenticated
-  submission), reverse the peer IP and query a configurable zone list
-  (`SMTP_RBLS`, e.g. `zen.spamhaus.org`); reject listed IPs with
-  `554 5.7.1`. Cache verdicts by IP with a TTL; fail open on DNS timeout.
-- [ ] **Per-IP rate limiting** — extend the `ConnLimiter` pattern with a
-  per-IP table: concurrent-connection cap, sliding-window connection
-  rate, and auth-failure tracking with temporary bans and an escalating
-  tarpit delay. Thresholds via env vars like the existing global caps.
-- [ ] **Async DNS lookups** — sender-auth DNS is blocking `Resolv::DNS`
-  on the session thread. Near-term: a direct-UDP resolver that can
-  distinguish NXDOMAIN/SERVFAIL/timeout (today DNS fails open), running
-  the independent SPF/DKIM/DMARC lookups concurrently, with a short-TTL
-  cache. Long-term: move the server to the Ruby 3 fiber scheduler
-  (`async` gem), which makes `Resolv` and socket IO non-blocking.
-- [ ] **Allocation-light ("zero-copy") command parser** — replace the
-  `gets`/`chomp`/`split`/regex hot path with a reusable binary read
-  buffer, byte-offset line tracking, frozen-constant verb dispatch, and
-  one-pass DATA dot-unstuffing. Benchmark first; pair with the fiber
-  scheduler refactor, which needs a buffer-oriented reader anyway.
-- [ ] **DMARC enforcement default** — enforcement exists behind
-  `SMTP_DMARC_ENFORCE` but is off by default (log-only); flip
-  it on once the verifiers have proven themselves against real traffic.
+Edge-level hardening (connection/volume caps, per-IP recipient and AUTH
+throttles, TLS floor, RBL/DNSBL) lives in the exim service and is tuned in
+its `config/exim4.conf.template` — see that repo's README. Exim replaces
+the retired Ruby SMTP daemon, so its own equivalents supersede the DNS /
+parser / connection-limiter work that used to be tracked here.
 
 ### mail_on_rails (this app)
 
+- [ ] **Spam-action routing** — the mailroom already gets an rspamd spam
+  action/score per message (currently logged only); act on it, e.g. file a
+  spam verdict into a Junk mailbox instead of INBOX.
+- [ ] **DMARC enforcement** — the app computes DMARC via rspamd and badges
+  the result; go further and reject or quarantine on failure (behind a
+  flag, log-only first) rather than only badging.
 - [ ] **Rate limiting beyond auth endpoints** — Rails-native
   `rate_limit` covers login/password-reset only; consider coverage for
-  the internal API endpoints the daemons call.
+  the internal API endpoints the edges call.
 
 Already in place (not TODO): PostgreSQL-backed queuing (Solid Queue plus
-the `smtp_outbound_messages` retry/backoff table), SPF/DKIM/DMARC
-verification of inbound mail, and outbound DKIM signing.
+the `smtp_outbound_messages` retry/backoff table), app-side SPF/DKIM/DMARC
+of inbound mail (rspamd) and virus scanning (ClamAV), and outbound DKIM
+signing.

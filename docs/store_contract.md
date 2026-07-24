@@ -1,22 +1,24 @@
 # The store contract
 
-The SMTP and IMAP servers (the `mail_on_rails_smtp` / `mail_on_rails_imap`
-gems, extracted to sibling repos) never touch the database (or Rails)
-directly. Each server is constructed with a **store** and talks to the
-world only through it. This document is the contract a store must honor;
-the executable version is the shared test suite each gem carries
-(`MailOnRails::Smtp::Store::Contracts` / `MailOnRails::Imap::Store::Contracts`),
-which runs against the gems' production stores (`Store::Http`, HTTP-backed
-- the daemons hold no database credentials), this app's Active Record
-adapter behind the imap endpoints (`MailOnRails::Store::ImapBackend`), and
-each gem's dependency-free reference implementation
-(`MailOnRails::Smtp::Store::Memory` / `MailOnRails::Imap::Store::Memory`).
+The IMAP server (the `mail_on_rails_imap` gem, extracted to a sibling repo)
+never touches the database (or Rails) directly. It is constructed with a
+**store** and talks to the world only through it. This document is the
+contract that store must honor; the executable version is the shared test
+suite the gem carries (`MailOnRails::Imap::Store::Contracts`), which runs
+against the gem's production store (`Store::Http`, HTTP-backed — the daemon
+holds no database credentials), this app's Active Record adapter behind the
+imap endpoints (`MailOnRails::Store::ImapBackend`), and the gem's
+dependency-free reference implementation (`MailOnRails::Imap::Store::Memory`).
 
-Servers depend only on the interface they need: the SMTP server takes any
-object satisfying the **SMTP store** interface, the IMAP server the
-**IMAP store** interface. This split is deliberate — it is the future
-database-privilege boundary (an SMTP daemon whose credentials cannot read
-mailboxes, an IMAP daemon that cannot touch the spool).
+> **The SMTP edge does not use a store.** It is the external
+> [`mail_on_rails_exim`](https://github.com/InfiniteLoopEnjoyer/mail_on_rails_exim)
+> service — an Exim MTA that terminates SMTP and reaches this app over
+> plain HTTP, not through a store object. Its contract with the app is the
+> **[HTTP edge contract](#the-http-edge-contract-exim)** below, and the
+> trust-boundary details (header stamping, forged-header stripping) live in
+> that repo's README. The store abstraction remains only for IMAP, where the
+> daemon runs in-process (dev) or as its own service and genuinely needs a
+> database-free seam.
 
 ## Ground rules
 
@@ -32,7 +34,7 @@ mailboxes, an IMAP daemon that cannot touch the spool).
 - **Blocking is fine.** Calls run inline on the connection thread; there
   is no async contract.
 
-## Shared interface (both protocols)
+## IMAP store interface
 
 ### `log(level, message)`
 
@@ -47,68 +49,6 @@ Returns `{ account_id:, email: }` — both non-nil on success (`email`
 normalized as stored), both nil on failure (unknown account, wrong
 password). Email lookup is case-insensitive and ignores surrounding
 whitespace.
-
-## SMTP store interface
-
-Construction accepts `outbound_limit:` (integer) so capacity behavior is
-testable; the production default comes from `MAIL_ON_RAILS_OUTBOUND_LIMIT`.
-Implementations may bound inbound acceptance however they like (the app's
-adapter hands inbound mail to an HTTP ingress and surfaces its failures
-as the `:internal` envelope; the memory store keeps a `spool_limit:`
-cap).
-
-### `local_rcpts(addresses)`
-
-Given candidate recipient addresses, returns
-`{ local: [<normalized email>, ...] }` — the subset that maps to a real
-local account. Matching is case- and whitespace-insensitive; the returned
-strings are the normalized forms.
-
-### `smtp_store(mail_from, rcpt_to, data, authenticated_as, auth_results: nil, scan_status: nil)`
-
-Accept a message. `rcpt_to` is split into local recipients (handed to the
-host's inbound delivery pipeline, with the full local recipient list) and
-remote recipients (queued one entry per recipient for outbound delivery,
-sender recorded as `authenticated_as`).
-
-`authenticated_as` (nil or the authenticated account's email),
-`auth_results` (an Authentication-Results-style string, or nil), and
-`scan_status` (`"clean"` when a virus scan ran, nil when scanning is
-disabled) **must travel with the message bytes, beyond the sender's
-reach** — this trust stamp is how the rest of the system distinguishes
-verified from potentially spoofed mail, and scanned from unscanned mail.
-(The app's adapter stamps them as `X-MailOnRails-*` headers after
-stripping any forged copies from the submitted data; see
-`MailOnRails::Smtp::IngressClient`.)
-
-Returns `{ id:, outbound: }` — `id` a non-nil identifier for the accepted
-inbound message (an implementation-chosen placeholder when there were
-only remote recipients), `outbound` the number of remote recipients
-queued.
-
-Errors:
-- `code: :relay_denied` — remote recipients present and
-  `authenticated_as` is nil. Nothing is stored.
-- `code: :insufficient_storage` — accepting would exceed `outbound_limit`
-  pending outbound entries (or an implementation-defined inbound cap).
-  Nothing is stored.
-- `code: :internal` — the inbound pipeline is unavailable (e.g. the
-  ingress endpoint is down). The session answers 451 and the sending
-  server retries; SMTP's retry schedule is the durability buffer.
-
-### `quarantine(mail_from, rcpt_to, data, authenticated_as, auth_results:, scan_status:, virus: nil)`
-
-Best-effort delivery of an infected (`scan_status: "infected"`, `virus`
-naming the clamd signature) or unscanned (`"unscanned"`) message copy for
-review, after the SMTP session already refused the sender (550/451 —
-decided by the scan verdict alone, never by this call's outcome). Targets
-the local recipients, falling back to the authenticated sender's own
-account for remote-only submissions. Always returns nil and never raises:
-a lost review copy is logged, not surfaced. The app files these copies
-into the account's Quarantine mailbox, deduped by Message-ID (a 451 makes
-the sender retry the same message repeatedly).
-
-## IMAP store interface
 
 `account_id` below is the id returned by `authenticate`. `mailbox_id`
 comes from `select_mailbox`. Mailbox name matching: `INBOX` is
@@ -187,12 +127,41 @@ order). `code: :notfound` for an unknown destination.
 
 ## Conformance
 
-Include `MailOnRails::Smtp::Store::Contracts::Smtp` or
-`MailOnRails::Imap::Store::Contracts::Imap` (from the respective gem) in a
-Minitest
-class, provide `build_store(**limits)` and
+Include `MailOnRails::Imap::Store::Contracts::Imap` (from the gem) in a
+Minitest class, provide `build_store(**limits)` and
 `create_account(email:, password:)`, and the suite asserts everything
 above that is observable through the interface.
-The trust-stamp persistence requirement is not observable through the
-SMTP interface (it has no read side) and is covered by adapter-specific
-tests instead.
+
+## The HTTP edge contract (exim)
+
+The `mail_on_rails_exim` service does not use a store — it POSTs directly
+to three app endpoints. This is the app's side of that contract; the
+`mail_on_rails_exim` README is authoritative for what exim sends and the
+trust boundary it enforces.
+
+- **Relay ingress** (`config.action_mailbox.ingress = :relay`,
+  authenticated with `action_mailbox.ingress_password`). Every inbound
+  message exim accepts is POSTed here as raw RFC822. Exim has already
+  **stripped any forged `X-Original-To` / `Return-Path` / `X-MailOnRails-*`
+  headers and stamped the authoritative values** the live SMTP connection
+  knows (`Return-Path`, one `X-Original-To` per envelope recipient,
+  `X-MailOnRails-Authenticated`, `X-MailOnRails-Client-Ip`,
+  `X-MailOnRails-Helo`). `MailroomMailbox` trusts exactly those headers to
+  route recipients and to feed the app-side checks — SPF/DKIM/DMARC via the
+  rspamd accessory (`MailOnRails::RspamdAnalyzer`, using the stamped IP /
+  HELO / envelope sender) and virus scanning via ClamAV
+  (`MailOnRails::ClamavScanner`). Exim itself does neither.
+
+- **`POST mail_on_rails/internal/authenticate`** (basic-auth'd with
+  `mail_on_rails.internal_api_password`, or the `SMTP_INTERNAL_API_PASSWORD`
+  env fallback). Exim's AUTH check calls this; a 2xx with a non-null
+  `account_id` grants the login. Backed by the same account base as the
+  IMAP store's `authenticate`.
+
+- **`POST mail_on_rails/internal/outbound_messages`** (same auth). Remote
+  recipients of an authenticated submission are queued here for the app to
+  DKIM-sign and deliver; the sender is forced to the authenticated
+  identity. A `507` tells exim its outbound queue is full so it retries;
+  a `4xx` bounces.
+
+See `MailOnRails::InternalController` for the endpoint implementations.

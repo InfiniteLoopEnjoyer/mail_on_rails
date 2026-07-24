@@ -5,11 +5,9 @@ require "timeout"
 
 module MailOnRails
   # Streams a raw RFC822 message to clamd over its INSTREAM protocol
-  # (clamd decodes MIME itself, so attachments are covered). Twin of the
-  # SMTP daemon gem's MailOnRails::Smtp::ClamavClient - duplicated because
-  # the production app image bundles without the daemon gems
-  # (BUNDLE_WITHOUT=daemons). App-side callers are the mailroom (mail the
-  # daemon didn't stamp) and the IMAP APPEND path.
+  # (clamd decodes MIME itself, so attachments are covered). App-side
+  # callers are the mailroom (all inbound mail - the exim edge does no
+  # scanning of its own) and the IMAP APPEND path.
   #
   # Verdicts: :clean, :infected (with signature name), :unavailable (clamd
   # unreachable/timeout/unparseable answer). Never raises - callers decide

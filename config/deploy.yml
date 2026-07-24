@@ -2,7 +2,8 @@
 
 # Generic template - real infrastructure (hosts, domains) lives in the
 # gitignored destination overlay config/deploy.prod.yml, same as the
-# daemon repos. Deploy with `bin/kamal deploy -d prod`.
+# mail edge repos (mail_on_rails_exim / mail_on_rails_imap). Deploy with
+# `bin/kamal deploy -d prod`.
 
 # Name of your application. Used to uniquely configure containers.
 service: mail_on_rails
@@ -11,14 +12,14 @@ service: mail_on_rails
 image: mail_on_rails
 
 # The Rails app service: web UI + Action Mailbox ingress + Solid Queue.
-# The SMTP/IMAP daemons are their own Kamal services deployed from their
-# own repos (../mail_on_rails_smtp and ../mail_on_rails_imap, each with a
-# config/deploy.yml and `bin/kamal deploy`). All three share this droplet
-# and the local registry; the postgres accessory defined below belongs to
-# this service alone.
+# The SMTP edge (Exim) and the IMAP daemon are their own Kamal services
+# deployed from their own repos (../mail_on_rails_exim and
+# ../mail_on_rails_imap, each with a config/deploy.yml and `bin/kamal
+# deploy`). All three share this droplet and the local registry; the
+# postgres accessory defined below belongs to this service alone.
 #
 # One role: Puma behind kamal-proxy (zero-downtime deploys, HTTPS on
-# 443), serving the web UI, the relay ingress + private API the daemon
+# 443), serving the web UI, the relay ingress + private API the edge
 # services POST to, and the Solid Queue supervisor in-process
 # (SOLID_QUEUE_IN_PUMA - Action Mailbox routing and outbound delivery
 # need owner-level grants, and this is the only owner-privileged
@@ -50,8 +51,14 @@ servers:
 
         # clamd accessory (see accessories below), reached by container name
         # over the kamal docker network. Unset to disable app-side virus
-        # scanning (mailroom fallback scan + IMAP APPEND).
+        # scanning (mailroom inbound scan + IMAP APPEND).
         SMTP_CLAMAV_ADDR: mail_on_rails-clamav:3310
+
+        # rspamd accessory (see accessories below), reached by container name
+        # over the kamal docker network. The mailroom POSTs each inbound
+        # message here to compute SPF/DKIM/DMARC (+ a spam action) from the
+        # exim-stamped connection facts. Unset to disable app-side sender-auth.
+        SMTP_RSPAMD_ADDR: mail_on_rails-rspamd:11333
 
         # Set number of processes dedicated to Solid Queue (default: 1)
         # JOB_CONCURRENCY: 3
@@ -89,9 +96,10 @@ env:
     POSTGRES_USER: mail_on_rails
     POSTGRES_DB: mail_on_rails_production
 
-    # The web role does not run the mail listeners (they're the smtp/imap
-    # services) - MAIL_ON_RAILS_SERVERS=true would turn them back on inside
-    # Puma (see config/puma.rb).
+    # The web role does not run the IMAP listener (it's the mail_on_rails_imap
+    # service) - MAIL_ON_RAILS_SERVERS=true would turn it back on inside Puma
+    # (see config/puma.rb). The SMTP edge is the external mail_on_rails_exim
+    # service and never runs here.
 
     # Set number of cores available to the application on each server (default: 1).
     # WEB_CONCURRENCY: 2
@@ -131,10 +139,11 @@ accessories:
       - data:/var/lib/postgresql/data
       - socket/:/var/run/postgresql
 
-  # ClamAV daemon scanning inbound mail. Both this app (Action Mailbox
-  # fallback scan + IMAP APPEND) and the smtp daemon service reach it on
-  # TCP 3310 over the shared "kamal" docker network by container name
-  # (mail_on_rails-clamav) - no host port is published. First boot
+  # ClamAV daemon scanning inbound mail. This app is the only reader now
+  # (Action Mailbox inbound scan + IMAP APPEND); the exim edge does no
+  # scanning of its own. Reached on TCP 3310 over the shared "kamal" docker
+  # network by container name (mail_on_rails-clamav) - no host port is
+  # published. First boot
   # downloads ~300MB of signatures and takes minutes to turn healthy (the
   # image ships its own HEALTHCHECK and internal freshclam updater); the
   # volume below persists the database across restarts. clamd holds
@@ -146,6 +155,20 @@ accessories:
     host: 192.168.0.1
     directories:
       - clamav-db:/var/lib/clamav
+
+  # rspamd computing SPF/DKIM/DMARC (and a spam score) for inbound mail.
+  # The app POSTs each message to the normal worker on TCP 11333 over the
+  # shared "kamal" docker network by container name (mail_on_rails-rspamd) -
+  # no host port is published. rspamd needs outbound DNS to do the SPF/DKIM/
+  # DMARC lookups the app never could (it never saw the live connection).
+  # SPF/DKIM/DMARC run out of the box with no config; Redis is only needed
+  # for the stateful modules (greylisting, ratelimit, fuzzy). Pin the tag to
+  # a current release. The volume persists learned data across restarts.
+  rspamd:
+    image: rspamd/rspamd:3.9
+    host: 192.168.0.1
+    directories:
+      - rspamd-data:/var/lib/rspamd
 
   certbot:
     image: certbot/dns-cloudflare

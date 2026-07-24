@@ -11,9 +11,10 @@ Rails.application.routes.draw do
   # get "manifest" => "rails/pwa#manifest", as: :pwa_manifest
   # get "service-worker" => "rails/pwa#service_worker", as: :pwa_service_worker
 
-  # Private API for the SMTP daemon (basic-auth'd with credentials
-  # mail_on_rails.internal_api_password) - lets it run with no database
-  # connection at all. See MailOnRails::InternalController.
+  # Private API for the mail edges - the exim service (authenticate +
+  # outbound_messages) and the IMAP daemon (imap/:op) - basic-auth'd with
+  # credentials mail_on_rails.internal_api_password, so those services hold
+  # no database connection at all. See MailOnRails::InternalController.
   scope "mail_on_rails/internal", controller: "mail_on_rails/internal" do
     post :authenticate, action: :authenticate, as: :mail_on_rails_internal_authenticate
     post :rcpt_check, action: :rcpt_check, as: :mail_on_rails_internal_rcpt_check

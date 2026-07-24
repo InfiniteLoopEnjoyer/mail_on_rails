@@ -36,11 +36,12 @@ plugin :tmp_restart
 
 # In development everything runs inside this one Puma process: the Solid
 # Queue supervisor (so DeliverSmtpOutboundJob's recurring schedule works with
-# a plain `bin/rails server`) and the mail_on_rails SMTP/IMAP servers. In the
+# a plain `bin/rails server`) and the mail_on_rails IMAP server. In the
 # Kamal deploy the web container also runs Solid Queue in-process
-# (SOLID_QUEUE_IN_PUMA in config/deploy.yml), while the listeners live in
-# the smtp/imap services (bin/server in the sibling mail_on_rails_smtp / mail_on_rails_imap repos) -
-# MAIL_ON_RAILS_SERVERS=true would pull them back into Puma.
+# (SOLID_QUEUE_IN_PUMA in config/deploy.yml), while the IMAP listener lives in
+# its own service (bin/server in the sibling mail_on_rails_imap repo) -
+# MAIL_ON_RAILS_SERVERS=true would pull it back into Puma. The SMTP edge is
+# the external mail_on_rails_exim service and never runs in Puma.
 rails_env = ENV.fetch("RAILS_ENV") { ENV.fetch("RACK_ENV", "development") }
 
 plugin :solid_queue if rails_env == "development" || ENV["SOLID_QUEUE_IN_PUMA"] == "true"

@@ -1,16 +1,15 @@
-# The private HTTP API the SMTP daemon uses instead of a database
-# connection (its inbound handoff uses Action Mailbox's relay ingress; the
-# three operations here cover everything else the SMTP store contract
-# needs). Endpoints are POST-only JSON, authenticated with HTTP basic auth
-# against SMTP_INTERNAL_API_PASSWORD (env, used by CI where no
-# RAILS_MASTER_KEY exists) falling back to credentials
-# mail_on_rails.internal_api_password - the daemons hold a copy as an env
-# secret (SMTP_INTERNAL_API_PASSWORD in their deploy configs), so
-# no RAILS_MASTER_KEY leaves this app.
+# The private HTTP API the mail edges use instead of a database connection:
+# the exim service (authenticate for SMTP AUTH, rcpt_check for RCPT-time
+# recipient verification, outbound_messages to queue authenticated outbound)
+# and the IMAP daemon (imap/:op, the IMAP store contract over HTTP). Inbound
+# mail itself arrives via Action Mailbox's relay ingress, not here. Endpoints
+# are POST-only JSON, authenticated with HTTP basic auth against
+# SMTP_INTERNAL_API_PASSWORD (env, used by CI where no RAILS_MASTER_KEY
+# exists) falling back to credentials mail_on_rails.internal_api_password -
+# the edges send this password (INTERNAL_API_PASSWORD in their deploy
+# configs), so no RAILS_MASTER_KEY leaves this app.
 # lib/mail_on_rails is on the autoload ignore list (see config/application.rb),
-# so the store must be required explicitly. Previously the in-process
-# daemon boot happened to load it before the first request; now that the
-# daemons live out of process, this controller is the only consumer.
+# so the store must be required explicitly (imap_backend, below).
 require "mail_on_rails/store"
 
 class MailOnRails::InternalController < ActionController::API

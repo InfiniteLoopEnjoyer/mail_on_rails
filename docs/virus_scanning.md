@@ -68,9 +68,11 @@ resend after restarting the container delivers to INBOX and sweeps it.
   signature reloads): the deploy host needs ≥4 GB total. If tight, mount
   a clamd.conf with `ConcurrentDatabaseReload no` and/or set a docker
   `memory:` limit on the accessory.
-- clamd's `StreamMaxLength` default (25 MB) equals the daemon's message
-  cap; a message right at the cap may scan-fail and degrade to the
+- clamd's `StreamMaxLength` default (25 MB) equals the message size cap;
+  a message right at the cap may scan-fail and degrade to the
   451/unscanned path. Raise it via a mounted clamd.conf if that bites.
-- Deploy order when rolling out scanner changes: app before smtp daemon
-  (an old mailroom would file an `infected`-stamped copy into INBOX; the
-  reverse direction is safe).
+- Inbound scanning is entirely app-side: the exim edge does no scanning and
+  stamps no scan verdict, and the mailroom no longer trusts any inbound
+  X-MailOnRails-Scan header, so it always scans locally. There is no
+  cross-service deploy-order race (the old concern about a daemon-stamped
+  `infected` copy landing in INBOX is gone).

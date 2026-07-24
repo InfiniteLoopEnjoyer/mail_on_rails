@@ -2,10 +2,10 @@
 
 require "socket"
 
-# Scripted clamd stand-in for the INSTREAM protocol (twin of the one in the
-# mail_on_rails_smtp gem's suite): reads whatever the client streams, then
-# answers per mode. Real-engine verification is the manual EICAR smoke
-# against a clamav/clamav container - never part of the automated suites.
+# Scripted clamd stand-in for the INSTREAM protocol: reads whatever the
+# client streams, then answers per mode. Real-engine verification is the
+# manual EICAR smoke against a clamav/clamav container - never part of the
+# automated suites.
 #
 # Modes: :clean, :infected, :garbage (unparseable), :hang (never answers).
 class FakeClamd

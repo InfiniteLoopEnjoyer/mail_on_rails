@@ -1,0 +1,86 @@
+#!/usr/bin/env sh
+#
+# Runs locally after `kamal setup` / `kamal server bootstrap` has installed
+# Docker on each fresh host. We use it to apply one-time server hardening.
+# Idempotent: safe to re-run on an already-hardened host.
+#
+# KAMAL_HOSTS is a comma-separated list of the hosts being set up.
+
+set -e
+
+for host in $(echo "$KAMAL_HOSTS" | tr ',' ' '); do
+  echo "Hardening $host..."
+  ssh -o BatchMode=yes "root@$host" 'sh -s' <<'EOF'
+set -e
+export DEBIAN_FRONTEND=noninteractive
+
+# --- Packages: automatic security updates + ssh brute-force protection ----
+apt-get update -q
+apt-get install -qy unattended-upgrades fail2ban ufw
+
+# Unattended security upgrades (Ubuntu/Debian defaults are fine; make sure
+# the periodic timers are on).
+cat > /etc/apt/apt.conf.d/20auto-upgrades <<'CONF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+CONF
+
+# --- SSH hardening ---------------------------------------------------------
+# Key-only auth; root allowed with keys only (kamal deploys as root).
+mkdir -p /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/50-hardening.conf <<'CONF'
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+X11Forwarding no
+MaxAuthTries 3
+LoginGraceTime 20
+CONF
+sshd -t && systemctl reload ssh 2>/dev/null || systemctl reload sshd
+
+# --- fail2ban: jail sshd ----------------------------------------------------
+cat > /etc/fail2ban/jail.local <<'CONF'
+[DEFAULT]
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+
+[sshd]
+enabled = true
+CONF
+systemctl enable --now fail2ban
+systemctl restart fail2ban
+
+# --- Firewall ---------------------------------------------------------------
+# NOTE: Docker publishes container ports via its own iptables chains, which
+# BYPASS ufw - the mail/web ports (25, 80, 443, 143, 993, ...) are exposed by
+# the kamal-managed containers regardless of these rules. ufw still protects
+# any daemons listening directly on the host.
+ufw allow OpenSSH
+ufw --force enable
+
+# --- Kernel/network hardening ------------------------------------------------
+cat > /etc/sysctl.d/60-hardening.conf <<'CONF'
+# SYN-flood protection
+net.ipv4.tcp_syncookies = 1
+# Ignore ICMP redirects / don't send them (we are not a router)
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv4.conf.all.send_redirects = 0
+# No source-routed packets
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv6.conf.all.accept_source_route = 0
+# Reverse-path filtering (spoofing protection)
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+# Log martians
+net.ipv4.conf.all.log_martians = 1
+# Restrict kernel log / pointers from unprivileged users
+kernel.dmesg_restrict = 1
+kernel.kptr_restrict = 2
+CONF
+sysctl --system > /dev/null
+
+echo "Hardening complete on $(hostname)"
+EOF
+done

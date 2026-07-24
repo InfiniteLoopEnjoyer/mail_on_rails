@@ -42,17 +42,20 @@ gem "rainbow", require: false
 # DKIM signing for outbound mail (RFC 6376) [https://github.com/jhawthorn/dkim]
 gem "dkim"
 
-# The mail-server daemons, extracted to sibling repos and deployed as
-# their own Kamal services (see docs/store_contract.md). The app needs
-# them only on a dev machine: the :mail_on_rails Puma plugin runs both
-# servers in-process in development, and the test suite drives the gems'
-# store contracts against the app's HTTP/Active Record adapters (those
-# tests skip when the gems are absent). The production image and CI set
-# BUNDLE_WITHOUT=daemons, so the missing sibling paths never bother them.
-# Callers require the files they need explicitly (lib/mail_on_rails/boot.rb,
-# the contract tests), so no Bundler.require hook is wanted here.
+# The IMAP daemon, extracted to a sibling repo and deployed as its own
+# Kamal service (see docs/store_contract.md). The app needs it only on a
+# dev machine: the :mail_on_rails Puma plugin runs it in-process in
+# development, and the test suite drives its store contract against the
+# app's HTTP/Active Record adapters (those tests skip when the gem is
+# absent). The production image and CI set BUNDLE_WITHOUT=daemons, so the
+# missing sibling path never bothers them. Callers require the files they
+# need explicitly (lib/mail_on_rails/boot.rb, the contract tests), so no
+# Bundler.require hook is wanted here.
+#
+# The SMTP edge is no longer a gem: it lives in the sibling mail_on_rails_exim
+# repo as a standalone Exim MTA that reaches this app over HTTP (the relay
+# ingress + the mail_on_rails/internal API), so it has no path dependency here.
 group :daemons do
-  gem "mail_on_rails_smtp", path: "../mail_on_rails_smtp", require: false
   gem "mail_on_rails_imap", path: "../mail_on_rails_imap", require: false
 end
 

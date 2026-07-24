@@ -2,9 +2,9 @@ require "active_support/core_ext/integer/time"
 
 Rails.application.configure do
   # Prepare the ingress controller used to receive mail
-  # The smtp daemon hands accepted inbound mail to this app over the relay
-  # ingress (MailOnRails::Smtp::IngressClient); authenticated with
-  # credentials action_mailbox.ingress_password.
+  # The exim edge (mail_on_rails_exim) hands accepted inbound mail to this
+  # app over the relay ingress (its bin/rails-ingress helper); authenticated
+  # with credentials action_mailbox.ingress_password.
   config.action_mailbox.ingress = :relay
 
   # Settings specified here will take precedence over those in config/application.rb.
