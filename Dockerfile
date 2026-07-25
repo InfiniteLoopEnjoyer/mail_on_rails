@@ -64,15 +64,15 @@ RUN SECRET_KEY_BASE_DUMMY=1 ./bin/rails assets:precompile
 # Final stage for app image
 FROM base
 
-# Run and own only the runtime files as a non-root user for security
+# Run and own only the runtime files as a non-root user for security.
+# /rails/shared is the mount point for the mailconf volume shared with the
+# exim edge, created as rails:rails so a fresh named volume inherits
+# writable ownership on first mount - see MAIL_ON_RAILS_EXIM_DOMAINS_FILE
+# in config/deploy.yml.
 RUN groupadd --system --gid 1000 rails && \
-    useradd rails --uid 1000 --gid 1000 --create-home --shell /bin/bash
+    useradd rails --uid 1000 --gid 1000 --create-home --shell /bin/bash && \
+    mkdir -p /rails/shared && chown rails:rails /rails/shared
 USER 1000:1000
-
-# Mount point for the mailconf volume shared with the exim edge (created
-# as rails:rails so a fresh named volume inherits writable ownership on
-# first mount - see MAIL_ON_RAILS_EXIM_DOMAINS_FILE in config/deploy.yml).
-RUN mkdir -p /rails/shared
 
 # Copy built artifacts: gems, application
 COPY --chown=rails:rails --from=build "${BUNDLE_PATH}" "${BUNDLE_PATH}"
