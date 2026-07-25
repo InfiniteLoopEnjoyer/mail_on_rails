@@ -12,8 +12,10 @@ namespace :mail_on_rails do
 
       names.sort.each do |name|
         domain = Domain.find_or_create_by!(name: name)
+        domain.ensure_dmarc_account!
         puts "#{domain.name}: #{domain.previously_new_record? ? "created" : "exists"}, " \
-             "DKIM key #{domain.dkim_key.present? ? "present" : "missing"}"
+             "DKIM key #{domain.dkim_key.present? ? "present" : "missing"}, " \
+             "reports account #{domain.dmarc_address}"
       end
       puts "exim sync: #{EximLocalDomains.sync!(force_empty: names.empty?)}"
     end

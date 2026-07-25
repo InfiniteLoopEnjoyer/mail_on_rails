@@ -402,6 +402,7 @@ DEPENDENCIES
   rails
   rainbow
   rubocop-rails-omakase
+  rubyzip
   selenium-webdriver
   slim
   solid_cable

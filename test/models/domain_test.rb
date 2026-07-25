@@ -22,7 +22,7 @@ class DomainTest < ActiveSupport::TestCase
   end
 
   test "rejects names that are not plain FQDNs" do
-    ["", "nodots", "exim:list", "bad domain.com", "*.example.com", "-x.example.com"].each do |name|
+    [ "", "nodots", "exim:list", "bad domain.com", "*.example.com", "-x.example.com" ].each do |name|
       assert_not Domain.new(name: name).valid?, "#{name.inspect} should be invalid"
     end
   end

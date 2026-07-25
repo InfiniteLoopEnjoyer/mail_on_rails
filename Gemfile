@@ -42,6 +42,10 @@ gem "rainbow", require: false
 # DKIM signing for outbound mail (RFC 6376) [https://github.com/jhawthorn/dkim]
 gem "dkim"
 
+# DMARC aggregate reports arrive as .zip attachments (RFC 7489); gzip and
+# plain XML are handled with the stdlib. See DmarcReportParser.
+gem "rubyzip", require: "zip"
+
 # The IMAP daemon, extracted to a sibling repo and deployed as its own
 # Kamal service (see docs/store_contract.md). The app needs it only on a
 # dev machine: the :mail_on_rails Puma plugin runs it in-process in

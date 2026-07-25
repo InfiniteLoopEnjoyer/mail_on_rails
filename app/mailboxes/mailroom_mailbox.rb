@@ -29,11 +29,15 @@ class MailroomMailbox < ApplicationMailbox
       if verdict && verdict[:status] != "clean"
         quarantine(account, verdict)
       else
-        EmailMessage.deliver_raw(account.inbox, inbound_email.source,
-                                 authenticated_as: authenticated_as, auth_results: auth_results,
-                                 scan_status: verdict&.dig(:status), **spam_attributes)
+        message = EmailMessage.deliver_raw(account.inbox, inbound_email.source,
+                                           authenticated_as: authenticated_as, auth_results: auth_results,
+                                           scan_status: verdict&.dig(:status), **spam_attributes)
         sweep_stale_unscanned(account)
         Rails.logger.info "[mail_on_rails] delivered inbound message to #{account.email} INBOX"
+        # Mail to a domain's dmarc@ ingestion account carries aggregate
+        # reports - parse them after (clean) delivery. Quarantined mail is
+        # deliberately never parsed.
+        IngestDmarcReportJob.perform_later(message) if Domain.dmarc_ingestion_address?(account.email)
       end
     end
   end

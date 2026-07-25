@@ -6,6 +6,9 @@ class DomainsController < ApplicationController
   end
 
   def show
+    @dmarc_stats = DmarcReport.stats(@domain)
+    @published_dmarc = @domain.published_dmarc
+    @dmarc_advice = @domain.dmarc_advice(@dmarc_stats, @published_dmarc)
   end
 
   def new

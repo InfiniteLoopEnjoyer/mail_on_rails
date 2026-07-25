@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_07_25_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_07_25_150000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -49,6 +49,24 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_25_120000) do
     t.bigint "blob_id", null: false
     t.string "variation_digest", null: false
     t.index ["blob_id", "variation_digest"], name: "index_active_storage_variant_records_uniqueness", unique: true
+  end
+
+  create_table "dmarc_reports", force: :cascade do |t|
+    t.datetime "begin_at", null: false
+    t.integer "count", default: 1, null: false
+    t.datetime "created_at", null: false
+    t.string "disposition"
+    t.string "dkim"
+    t.bigint "domain_id", null: false
+    t.datetime "end_at", null: false
+    t.string "report_id", null: false
+    t.string "reporter", null: false
+    t.string "source_ip", null: false
+    t.string "spf"
+    t.datetime "updated_at", null: false
+    t.index ["domain_id", "begin_at"], name: "index_dmarc_reports_on_domain_id_and_begin_at"
+    t.index ["domain_id", "reporter", "report_id"], name: "index_dmarc_reports_on_domain_id_and_reporter_and_report_id"
+    t.index ["domain_id"], name: "index_dmarc_reports_on_domain_id"
   end
 
   create_table "domains", force: :cascade do |t|
@@ -137,6 +155,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_25_120000) do
 
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
+  add_foreign_key "dmarc_reports", "domains"
   add_foreign_key "email_messages", "mailboxes"
   add_foreign_key "mailboxes", "email_accounts"
   add_foreign_key "sessions", "users"
