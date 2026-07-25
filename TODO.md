@@ -79,14 +79,6 @@ Audit of `DeliverSmtpOutboundJob` → `OutboundDeliverer`:
   (deliver / quarantine / reject). Pairs with our existing
   verified/unverified badge UI.
 
-## Explicitly NOT adopting from Postal
-
-- **Per-server MySQL message databases** — Postal shards raw mail into
-  per-tenant MySQL DBs with date-partitioned raw tables. Our
-  single-Postgres design is deliberate; nothing to change.
-- **Inbound SPF/DKIM/DMARC via spam engine** — Postal doesn't verify
-  sender auth itself; our in-daemon verifiers are ahead. Keep them.
-
 ## Open question (deferred)
 
 Postal's outbound retry/backoff schedule, bounce processing, suppression
