@@ -148,11 +148,12 @@ accessories:
       - data:/var/lib/postgresql/data
       - socket/:/var/run/postgresql
 
-  # ClamAV daemon scanning inbound mail. This app is the only reader now
-  # (Action Mailbox inbound scan + IMAP APPEND); the exim edge does no
-  # scanning of its own. Reached on TCP 3310 over the shared "kamal" docker
-  # network by container name (mail_on_rails-clamav) - no host port is
-  # published. First boot
+  # ClamAV daemon scanning inbound mail. Two readers: the exim edge scans
+  # at DATA time (rejects infected mail before acceptance, fails closed
+  # with 451 when clamd is down - so keep this accessory healthy) and this
+  # app rescans on ingress + IMAP APPEND (defense in depth). Reached on TCP
+  # 3310 over the shared "kamal" docker network by container name
+  # (mail_on_rails-clamav) - no host port is published. First boot
   # downloads ~300MB of signatures and takes minutes to turn healthy (the
   # image ships its own HEALTHCHECK and internal freshclam updater); the
   # volume below persists the database across restarts. clamd holds
