@@ -1,0 +1,63 @@
+- content_for :title, "Rail Mail - #{@domain.name}"
+- dkim = @domain.dkim_key
+- mail_host = ENV["SMTP_HELO_HOST"].presence || "<your mail host>"
+
+nav.mb-2.text-sm.text-slate-500
+  =<> link_to "Domains", domains_path, class: "text-accent"
+  | /
+  span<>= @domain.name
+
+header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
+  h1.text-2xl.font-bold= @domain.name
+  .flex.items-center.gap-2
+    = button_to "Delete", domain_path(@domain), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 bg-white px-3.5 py-1 text-sm font-medium text-red-700", form: { data: { turbo_confirm: "Remove #{@domain.name}? Exim will immediately refuse inbound mail for it and outbound mail stops being DKIM-signed." } }
+
+.mb-4.flex.flex-wrap.gap-2
+  - if dkim.present?
+    span.rounded-full.bg-green-100.px-2.py-0.5.text-xs.text-green-700 DKIM key present
+  - else
+    span.rounded-full.bg-yellow-100.px-2.py-0.5.text-xs.text-yellow-700 DKIM key missing (outbound goes unsigned)
+  - if @domain.synced_to_exim?
+    span.rounded-full.bg-green-100.px-2.py-0.5.text-xs.text-green-700 listed in exim - accepting mail
+  - else
+    span.rounded-full.bg-red-100.px-2.py-0.5.text-xs.text-red-700 not in exim's domain list (sync pending?)
+
+h2.mb-2.text-lg.font-semibold DNS records to publish
+p.mb-3.text-sm.text-slate-500
+  ' Mail for this domain only flows once these records exist (and
+  =<> link_to "accounts", root_path, class: "text-accent"
+  ' with @#{@domain.name} addresses are created).
+
+.mb-4.overflow-x-auto.rounded-lg.border.border-slate-200.bg-white
+  table.w-full.text-left.text-sm
+    thead
+      tr.border-b.border-slate-200.text-xs.text-slate-500
+        th.px-4.py-2 Type
+        th.px-4.py-2 Name
+        th.px-4.py-2 Value
+    tbody
+      tr.border-b.border-slate-100
+        td.px-4.py-2.font-semibold MX
+        td.px-4.py-2: code= @domain.name
+        td.px-4.py-2: code= "10 #{mail_host}."
+      tr.border-b.border-slate-100
+        td.px-4.py-2.font-semibold TXT (SPF)
+        td.px-4.py-2: code= @domain.name
+        td.px-4.py-2: code= "v=spf1 mx -all"
+      tr.border-b.border-slate-100
+        td.px-4.py-2.font-semibold TXT (DKIM)
+        td.px-4.py-2: code= dkim.txt_name
+        td.px-4.py-2
+          - if dkim.present?
+            code.break-all= dkim.txt_value
+          - else
+            span.text-slate-500 (no key on this server)
+      tr
+        td.px-4.py-2.font-semibold TXT (DMARC)
+        td.px-4.py-2: code= "_dmarc.#{@domain.name}"
+        td.px-4.py-2: code= "v=DMARC1; p=none; rua=mailto:postmaster@#{@domain.name}"
+
+p.text-xs.text-slate-500
+  ' Suggested starting points - tighten SPF/DMARC once delivery is
+  ' verified. DKIM selector:
+  code<>= dkim.selector

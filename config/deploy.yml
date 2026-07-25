@@ -47,7 +47,14 @@ servers:
         # Outbound DKIM signing: <domain>.pem private keys live on the storage
         # volume; the public halves are published as
         # <selector>._domainkey.<domain> TXT records (selector default: rail).
+        # The Domains admin UI generates keys here on domain creation.
         MAIL_ON_RAILS_DKIM_DIR: /rails/storage/dkim
+
+        # The exim edge's hosted-domains list, on the mailconf volume shared
+        # with the mail_on_rails_exim service (mounted there at
+        # /var/lib/exim4/dynamic). The Domain model rewrites it on domain
+        # add/remove; exim re-reads it per connection - no exim redeploy.
+        MAIL_ON_RAILS_EXIM_DOMAINS_FILE: /rails/shared/local_domains
 
         # clamd accessory (see accessories below), reached by container name
         # over the kamal docker network. Unset to disable app-side virus
@@ -191,6 +198,9 @@ accessories:
 volumes:
   - "mail_on_rails_storage:/rails/storage"
   - "/root/mail_on_rails-db/socket:/postgres/socket"
+  # Shared with the mail_on_rails_exim service: holds the local_domains
+  # file (MAIL_ON_RAILS_EXIM_DOMAINS_FILE) exim reads live.
+  - "mail_on_rails_mailconf:/rails/shared"
 
 # Bridge fingerprinted assets, like JS and CSS, between versions to avoid
 # hitting 404 on in-flight requests. Combines all files from new and old

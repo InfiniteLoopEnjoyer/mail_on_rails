@@ -69,6 +69,11 @@ RUN groupadd --system --gid 1000 rails && \
     useradd rails --uid 1000 --gid 1000 --create-home --shell /bin/bash
 USER 1000:1000
 
+# Mount point for the mailconf volume shared with the exim edge (created
+# as rails:rails so a fresh named volume inherits writable ownership on
+# first mount - see MAIL_ON_RAILS_EXIM_DOMAINS_FILE in config/deploy.yml).
+RUN mkdir -p /rails/shared
+
 # Copy built artifacts: gems, application
 COPY --chown=rails:rails --from=build "${BUNDLE_PATH}" "${BUNDLE_PATH}"
 COPY --chown=rails:rails --from=build /rails /rails

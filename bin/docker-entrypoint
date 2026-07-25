@@ -3,6 +3,10 @@
 # If running the rails server then create or migrate existing database
 if [ "${@: -2:1}" == "./bin/rails" ] && [ "${@: -1:1}" == "server" ]; then
   ./bin/rails db:prepare
+  # Reconcile the exim local_domains file with the Domain table (shared
+  # mailconf volume). Best-effort: must not block boot (e.g. the table is
+  # empty before the first domains:bootstrap, which the sync refuses).
+  ./bin/rails mail_on_rails:domains:sync || echo "domain sync skipped"
 fi
 
 exec "${@}"
