@@ -6,9 +6,9 @@ class DomainsController < ApplicationController
   end
 
   def show
+    @dns = DnsCheck.for(@domain)
     @dmarc_stats = DmarcReport.stats(@domain)
-    @published_dmarc = @domain.published_dmarc
-    @dmarc_advice = @domain.dmarc_advice(@dmarc_stats, @published_dmarc)
+    @dmarc_advice = @domain.dmarc_advice(@dmarc_stats, @dns.dmarc_record)
   end
 
   def new

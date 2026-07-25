@@ -13,14 +13,14 @@ Audit of `DeliverSmtpOutboundJob` → `OutboundDeliverer`:
   `dkim` gem using per-domain keys at `MAIL_ON_RAILS_DKIM_DIR/<domain>.pem`
   (`/rails/storage/dkim` in deploy.yml), selector
   `MAIL_ON_RAILS_DKIM_SELECTOR` (default `rail`).
-- [ ] **Warn when sending unsigned** — if the domain's key file is
-  missing, the message goes out silently unsigned (no log, no warning).
-  Add a `Rails.logger.warn` in the fallback path.
-- [ ] **DMARC alignment: sign with the From: header domain** — the
-  signing domain is derived from the envelope `mail_from`, not the
-  `From:` header. If those ever differ, the DKIM signature won't align
-  for DMARC. Either sign with the header-From domain or enforce
-  envelope/header domain match on enqueue.
+- [x] **Warn when sending unsigned** (2026-07-25) — `OutboundDeliverer#signed`
+  logs an UNSIGNED warning naming the keyless domain (and also warns
+  instead of raising when signing itself fails).
+- [x] **DMARC alignment: sign with the From: header domain** (2026-07-25) —
+  the signing domain now comes from the `From:` header (the domain DMARC
+  aligns against), falling back to the envelope `mail_from` when the
+  header is missing/unparseable. Covered in
+  `test/models/outbound_deliverer_test.rb`.
 - **SPF: DNS-only, nothing enforces it** — code only exposes
   `SMTP_HELO_HOST`; nothing verifies the published SPF record
   includes the sending IP. Covered by the "Domain-setup DNS checker"
@@ -35,49 +35,37 @@ Audit of `DeliverSmtpOutboundJob` → `OutboundDeliverer`:
 
 ## Outbound delivery
 
-- [ ] **Cross-check DKIM signing against Postal's signer** — Postal's
-  `app/lib/dkim_header.rb` is a self-contained, hand-rolled RFC 6376
-  implementation (rsa-sha256, relaxed/relaxed): header canonicalization
-  at lines 50-77, body canonicalization at 79-101. Use it as a
-  correctness oracle for our canonicalization (the part of DKIM where
-  interop bugs hide) — feed both signers identical tricky messages and
-  diff the outputs. Note Postal generates 1024-bit keys (`domain.rb:84-86`);
-  ours must stay 2048.
-- [ ] **Port Postal's DKIM test vectors** — `spec/examples/dkim_signing/email1.msg`
-  and `email2.msg` are self-contained signing vectors: YAML frontmatter
-  with domain, timestamp, private key, and the expected `bh=` body hash
-  and `b=` signature, followed by the raw message. `email2.msg` is a
-  real-world quoted-printable HTML email with hard tabs, MSO conditional
-  comments, and long folded `List-*` headers — exactly the
-  relaxed-canonicalization stress case. Directly reusable as fixtures for
-  our signer tests (driver: Postal's `spec/lib/dkim_header_spec.rb`).
-- [ ] **Randomize equal-preference MX records** — when resolving MXes
-  for outbound delivery, sort by preference but shuffle ties so load
-  spreads across a destination's MX pool (Postal:
-  `app/lib/dns_resolver.rb:61-72`). Check `OutboundDeliverer` does this.
-- [ ] **Batch outbound messages by destination domain** — Postal tags
-  queued messages with a `batch_key` (roughly destination domain +
-  route) so a worker can deliver multiple queued messages over one SMTP
-  connection (`lib/postal/message_db/message.rb:353-361`). Worth
-  considering for `smtp_outbound_messages` if we ever send meaningful
-  volume; connection reuse is the single biggest outbound throughput win.
+- [x] **Cross-check DKIM signing against Postal's signer** (2026-07-25) —
+  `test/models/dkim_signing_test.rb` proves our canonicalization
+  reproduces Postal's byte-exact: our bh= matches theirs, and Postal's
+  b= signature verifies over OUR canonicalized headers (plus a round-trip
+  verify of our own signature). Keys stay 2048-bit.
+- [x] **Port Postal's DKIM test vectors** (2026-07-25) — both vectors
+  copied to `test/fixtures/dkim_signing/` (MIT) and driven by the same
+  test, including the quoted-printable stress case.
+- [x] **Randomize equal-preference MX records** (2026-07-25) —
+  `OutboundDeliverer#mx_hosts` shuffles preference ties.
+- [ ] **DEFERRED: Batch outbound messages by destination domain** — Postal
+  tags queued messages with a `batch_key` so a worker can deliver several
+  over one SMTP connection (`lib/postal/message_db/message.rb:353-361`).
+  Deliberately deferred (2026-07-25): connection reuse only pays off at
+  sending volume we don't have; revisit if that changes.
 
 ## Inbound handling / UI
 
-- [ ] **Domain-setup DNS checker** — Postal validates that a sending
-  domain's published DNS is correct (SPF record includes the server,
-  DKIM TXT matches the generated key, MX/return-path point home) and
-  surfaces pass/fail in the UI (`app/models/concerns/has_dns_checks.rb:45-146`).
-  A "is my domain configured correctly?" page would fit our web UI well
-  and reuse the daemons' DNS code.
-- [ ] **Optional spam-engine integration (adapter pattern)** — if we ever
-  add SpamAssassin/rspamd/ClamAV scanning, Postal's
-  `lib/postal/message_inspectors/{spam_assassin,rspamd,clamav}.rb` are
-  clean, small adapter references (raw spamd/clamd socket protocols,
-  rspamd HTTP `/checkv2`, 10-15s fail-open timeouts). Its handling model:
-  stamp `X-*-Spam*`/threat headers, then act on per-route thresholds
-  (deliver / quarantine / reject). Pairs with our existing
-  verified/unverified badge UI.
+- [x] **Domain-setup DNS checker** (2026-07-25) — the domain page now
+  live-checks published DNS against what it prescribes (`DnsCheck`:
+  MX points at SMTP_HELO_HOST, SPF authorizes the server, DKIM TXT
+  matches the key on disk, DMARC record exists) with
+  pass/verify/missing/unknown badges per record, plus the DMARC
+  monitoring section (aggregate-report ingestion + tighten-when-ready
+  advice) built 2026-07-25.
+- [x] **Optional spam-engine integration** — OBSOLETE: rspamd and ClamAV
+  have been integrated for a while (mailroom sender-auth/spam verdicts +
+  virus scanning, and since 2026-07-25 the exim edge also scans at DATA
+  time). The one remaining idea from this item — acting on the spam
+  score/action per message — is tracked in README.md's roadmap as
+  "spam-action routing".
 
 ## Open question (deferred)
 

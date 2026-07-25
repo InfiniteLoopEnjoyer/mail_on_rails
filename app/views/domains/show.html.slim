@@ -26,8 +26,11 @@ h2.mb-2.text-lg.font-semibold DNS records to publish
 p.mb-3.text-sm.text-slate-500
   ' Mail for this domain only flows once these records exist (and
   =<> link_to "accounts", root_path, class: "text-accent"
-  ' with @#{@domain.name} addresses are created).
+  ' with @#{@domain.name} addresses are created). Status is checked live
+  ' against public DNS on each page load.
 
+- dns_status = @dns.checks.index_by(&:record)
+- status_badges = { pass: [ "published", "bg-green-100 text-green-700" ], warn: [ "verify", "bg-yellow-100 text-yellow-700" ], fail: [ "missing/wrong", "bg-red-100 text-red-700" ], unknown: [ "unknown", "bg-slate-200 text-slate-600" ] }
 .mb-4.overflow-x-auto.rounded-lg.border.border-slate-200.bg-white
   table.w-full.text-left.text-sm
     thead
@@ -35,27 +38,30 @@ p.mb-3.text-sm.text-slate-500
         th.px-4.py-2 Type
         th.px-4.py-2 Name
         th.px-4.py-2 Value
+        th.px-4.py-2 Status
     tbody
-      tr.border-b.border-slate-100
-        td.px-4.py-2.font-semibold MX
-        td.px-4.py-2: code= @domain.name
-        td.px-4.py-2: code= "10 #{mail_host}."
-      tr.border-b.border-slate-100
-        td.px-4.py-2.font-semibold TXT (SPF)
-        td.px-4.py-2: code= @domain.name
-        td.px-4.py-2: code= "v=spf1 mx -all"
-      tr.border-b.border-slate-100
-        td.px-4.py-2.font-semibold TXT (DKIM)
-        td.px-4.py-2: code= dkim.txt_name
-        td.px-4.py-2
-          - if dkim.present?
-            code.break-all= dkim.txt_value
-          - else
-            span.text-slate-500 (no key on this server)
-      tr
-        td.px-4.py-2.font-semibold TXT (DMARC)
-        td.px-4.py-2: code= "_dmarc.#{@domain.name}"
-        td.px-4.py-2: code= "v=DMARC1; p=none; rua=mailto:#{@domain.dmarc_address}"
+      - rows = [ [ "MX", "MX", @domain.name, "10 #{mail_host}." ], [ "TXT (SPF)", "SPF", @domain.name, "v=spf1 mx -all" ], [ "TXT (DKIM)", "DKIM", dkim.txt_name, nil ], [ "TXT (DMARC)", "DMARC", "_dmarc.#{@domain.name}", "v=DMARC1; p=none; rua=mailto:#{@domain.dmarc_address}" ] ]
+      - rows.each do |label, key, record_name, value|
+        - c = dns_status[key]
+        tr.border-b.border-slate-100
+          td.px-4.py-2.font-semibold= label
+          td.px-4.py-2: code= record_name
+          td.px-4.py-2
+            - if key == "DKIM"
+              - if dkim.present?
+                code.break-all= dkim.txt_value
+              - else
+                span.text-slate-500 (no key on this server)
+            - else
+              code= value
+          td.px-4.py-2
+            - badge_text, badge_class = status_badges[c.status]
+            span.rounded-full.px-2.py-0.5.text-xs.whitespace-nowrap class=badge_class
+              = badge_text
+            - if c.note
+              p.mt-1.text-xs.text-slate-500= c.note
+            - elsif c.found && c.status == :pass && key != "DMARC"
+              p.mt-1.text-xs.break-all.text-slate-500= c.found
 
 p.mb-6.text-xs.text-slate-500
   ' Start with p=none; the monitoring section below tells you when it is
@@ -74,8 +80,8 @@ h2.mb-2.text-lg.font-semibold DMARC monitoring
   .mb-2.flex.flex-wrap.items-center.gap-2
     span.rounded-full.px-2.py-0.5.text-xs class=advice_colors[advice_key]
       = advice_key.to_s.tr("_", " ")
-    - if @published_dmarc
-      code.text-xs.text-slate-500= @published_dmarc
+    - if @dns.dmarc_record
+      code.text-xs.text-slate-500= @dns.dmarc_record
     - else
       span.text-xs.text-slate-500 no _dmarc record found in DNS
   p.text-sm= advice_text

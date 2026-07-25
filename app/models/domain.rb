@@ -1,5 +1,3 @@
-require "resolv"
-
 # A domain we host mail for. Creating/destroying one takes effect live:
 # the exim edge's local_domains list is a file on a volume shared with this
 # app (see EximLocalDomains), re-read by exim per connection - no restart.
@@ -54,19 +52,6 @@ class Domain < ApplicationRecord
   # mount, so we can just read it.)
   def synced_to_exim?
     EximLocalDomains.current.include?(name)
-  end
-
-  # The domain's currently published DMARC record (the _dmarc TXT), or nil
-  # when absent or DNS is unreachable. Live lookup - only used on the
-  # admin domain page.
-  def published_dmarc
-    records = Resolv::DNS.open do |dns|
-      dns.timeouts = 3
-      dns.getresources("_dmarc.#{name}", Resolv::DNS::Resource::IN::TXT)
-    end
-    records.map { |r| r.strings.join }.find { |s| s.match?(/\Av=DMARC1\b/i) }
-  rescue Resolv::ResolvError, Resolv::ResolvTimeout
-    nil
   end
 
   # Escalation advice for the readiness indicator, from the last 30 days
