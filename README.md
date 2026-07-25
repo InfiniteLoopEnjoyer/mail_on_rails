@@ -12,8 +12,14 @@ services:
   — the SMTP edge: an [Exim](https://www.exim.org/) MTA (MX + authenticated
   submission on 25/587/465) with STARTTLS/AUTH and DoS caps. It terminates
   SMTP and hands mail to this app over HTTP — it holds no Rails code, no
-  database, and no master key. It does no scanning or SPF/DKIM/DMARC of its
-  own; it forwards the connection facts and this app runs those checks.
+  database, and no master key. It virus-scans each message at DATA time
+  against this app's clamav accessory (infected → 550 before acceptance,
+  scanner down → 451, fail closed); this app rescans on ingress as defense
+  in depth. It does no SPF/DKIM/DMARC of its own — it forwards the
+  connection facts and this app runs those checks. The list of domains it
+  accepts mail for is managed live from this app's Domains admin UI (a
+  shared-volume file exim re-reads per connection — no edge redeploy to
+  add or remove a domain).
 - **[mail_on_rails_imap](https://github.com/InfiniteLoopEnjoyer/mail_on_rails_imap)**
   — the IMAP server.
 
@@ -61,14 +67,22 @@ parser / connection-limiter work that used to be tracked here.
 - [ ] **Spam-action routing** — the mailroom already gets an rspamd spam
   action/score per message (currently logged only); act on it, e.g. file a
   spam verdict into a Junk mailbox instead of INBOX.
-- [ ] **DMARC enforcement** — the app computes DMARC via rspamd and badges
-  the result; go further and reject or quarantine on failure (behind a
-  flag, log-only first) rather than only badging.
+- [ ] **DMARC enforcement (inbound)** — the app computes DMARC via rspamd
+  and badges the result; go further and reject or quarantine on failure
+  (behind a flag, log-only first) rather than only badging. (Distinct from
+  the outbound-side DMARC *monitoring* already in place — see below.)
 - [ ] **Rate limiting beyond auth endpoints** — Rails-native
   `rate_limit` covers login/password-reset only; consider coverage for
   the internal API endpoints the edges call.
 
 Already in place (not TODO): PostgreSQL-backed queuing (Solid Queue plus
 the `smtp_outbound_messages` retry/backoff table), app-side SPF/DKIM/DMARC
-of inbound mail (rspamd) and virus scanning (ClamAV), and outbound DKIM
-signing.
+of inbound mail (rspamd) and virus scanning (ClamAV — also consulted by
+the exim edge at DATA time, so infected mail is rejected before
+acceptance), outbound DKIM signing, **dynamic domain management** (the
+Domains admin UI creates/removes hosted domains live: exim picks the list
+up per connection, a DKIM key is generated per domain, and the page shows
+the DNS records to publish), and **DMARC monitoring** (aggregate reports
+mailed to each domain's auto-created `dmarc@` account are virus-scanned,
+sender-verified, parsed, and summarized into per-domain alignment stats
+with advice on when it is safe to tighten the published policy).

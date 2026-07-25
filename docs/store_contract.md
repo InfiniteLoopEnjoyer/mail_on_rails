@@ -150,7 +150,10 @@ trust boundary it enforces.
   route recipients and to feed the app-side checks — SPF/DKIM/DMARC via the
   rspamd accessory (`MailOnRails::RspamdAnalyzer`, using the stamped IP /
   HELO / envelope sender) and virus scanning via ClamAV
-  (`MailOnRails::ClamavScanner`). Exim itself does neither.
+  (`MailOnRails::ClamavScanner`). Exim does no SPF/DKIM/DMARC itself; it
+  does virus-scan at DATA time against the same clamav accessory
+  (rejecting infected mail before acceptance), but stamps no verdict — the
+  app's rescan here is unconditional.
 
 - **`POST mail_on_rails/internal/authenticate`** (basic-auth'd with
   `mail_on_rails.internal_api_password`, or the `SMTP_INTERNAL_API_PASSWORD`
