@@ -1,10 +1,18 @@
 require "test_helper"
+require "mail_on_rails/clamav_scanner"
+require_relative "../test_helpers/clamav_stub_helper"
 
 # Mail delivered to a domain's dmarc@ ingestion account is parsed for
-# aggregate reports after delivery; ordinary accounts never trigger
-# ingestion, and the raw report mail still lands in the INBOX either way.
+# aggregate reports - but only after a clamav scan came back clean.
+# Infected mail is quarantined and never parsed; with scanning disabled
+# the report is delivered but deliberately left unparsed. Ordinary
+# accounts never trigger ingestion.
 class DmarcIngestionTest < ActionMailbox::TestCase
   include ActiveJob::TestHelper
+  include ClamavStubHelper
+
+  CLEAN = MailOnRails::ClamavScanner::Result.new(:clean, nil)
+  INFECTED = MailOnRails::ClamavScanner::Result.new(:infected, "Eicar-Test")
 
   setup do
     @domain = Domain.create!(name: "example.test")
@@ -43,19 +51,41 @@ class DmarcIngestionTest < ActionMailbox::TestCase
     headers + mail.to_s
   end
 
-  test "a report mailed to dmarc@ is delivered and ingested" do
+  test "a scanned-clean report mailed to dmarc@ is delivered and ingested" do
     perform_enqueued_jobs do
-      receive_inbound_email_from_source(report_mail("dmarc@example.test"))
+      with_scanner(enabled: true, scan: CLEAN) do
+        receive_inbound_email_from_source(report_mail("dmarc@example.test"))
+      end
     end
 
     assert_equal 1, @dmarc_account.inbox.email_messages.count
     assert_equal 4, @domain.dmarc_reports.sum(:count)
   end
 
+  test "with scanning disabled the report is delivered but never parsed" do
+    assert_no_enqueued_jobs only: IngestDmarcReportJob do
+      receive_inbound_email_from_source(report_mail("dmarc@example.test"))
+    end
+    assert_equal 1, @dmarc_account.inbox.email_messages.count
+    assert_equal 0, DmarcReport.count
+  end
+
+  test "an infected report is quarantined and never parsed" do
+    assert_no_enqueued_jobs only: IngestDmarcReportJob do
+      with_scanner(enabled: true, scan: INFECTED) do
+        receive_inbound_email_from_source(report_mail("dmarc@example.test"))
+      end
+    end
+    assert_equal 0, @dmarc_account.inbox.email_messages.count
+    assert_equal 0, DmarcReport.count
+  end
+
   test "mail to an ordinary account never triggers ingestion" do
     EmailAccount.create!(email: "user@example.test", password: "pw-123456")
     assert_no_enqueued_jobs only: IngestDmarcReportJob do
-      receive_inbound_email_from_source(report_mail("user@example.test"))
+      with_scanner(enabled: true, scan: CLEAN) do
+        receive_inbound_email_from_source(report_mail("user@example.test"))
+      end
     end
     assert_equal 0, DmarcReport.count
   end
@@ -67,7 +97,9 @@ class DmarcIngestionTest < ActionMailbox::TestCase
              "From: someone@remote.test\r\nTo: dmarc@example.test\r\n" \
              "Subject: hello\r\n\r\njust text\r\n"
     perform_enqueued_jobs do
-      receive_inbound_email_from_source(source)
+      with_scanner(enabled: true, scan: CLEAN) do
+        receive_inbound_email_from_source(source)
+      end
     end
     assert_equal 1, @dmarc_account.inbox.email_messages.count
     assert_equal 0, DmarcReport.count

@@ -35,9 +35,17 @@ class MailroomMailbox < ApplicationMailbox
         sweep_stale_unscanned(account)
         Rails.logger.info "[mail_on_rails] delivered inbound message to #{account.email} INBOX"
         # Mail to a domain's dmarc@ ingestion account carries aggregate
-        # reports - parse them after (clean) delivery. Quarantined mail is
-        # deliberately never parsed.
-        IngestDmarcReportJob.perform_later(message) if Domain.dmarc_ingestion_address?(account.email)
+        # reports - parse them only after a real clamav scan came back
+        # clean (on this branch a present verdict IS clean). Quarantined
+        # mail is never parsed, and neither is anything unscanned: with
+        # scanning disabled the report just stays in the mailbox.
+        if Domain.dmarc_ingestion_address?(account.email)
+          if verdict
+            IngestDmarcReportJob.perform_later(message)
+          else
+            Rails.logger.warn "[mail_on_rails] dmarc report for #{account.email} left unparsed (virus scanning disabled)"
+          end
+        end
       end
     end
   end
