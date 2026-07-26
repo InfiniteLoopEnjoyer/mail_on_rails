@@ -2,18 +2,7 @@ require "test_helper"
 
 class OutboundDelivererTest < ActiveSupport::TestCase
   setup do
-    @dkim_dir = Dir.mktmpdir
-    ENV["MAIL_ON_RAILS_DKIM_DIR"] = @dkim_dir
     @deliverer = OutboundDeliverer.new
-  end
-
-  teardown do
-    ENV.delete("MAIL_ON_RAILS_DKIM_DIR")
-    FileUtils.remove_entry(@dkim_dir)
-  end
-
-  def write_key(domain)
-    File.write(File.join(@dkim_dir, "#{domain}.pem"), OpenSSL::PKey::RSA.new(2048).to_pem)
   end
 
   def outbound(mail_from:, from_header:)
@@ -43,15 +32,15 @@ class OutboundDelivererTest < ActiveSupport::TestCase
     singleton.define_method(:open, original)
   end
 
-  test "signs with the From: header domain, not the envelope domain" do
-    write_key("header.test")
-    write_key("envelope.test")
+  test "signs with the From: header domain's DB key, not the envelope domain" do
+    Domain.create!(name: "header.test")
+    Domain.create!(name: "envelope.test")
     signed = @deliverer.send(:signed, outbound(mail_from: "user@envelope.test", from_header: "Sender <user@header.test>"))
     assert_match(/^DKIM-Signature:.*d=header\.test;/m, signed)
   end
 
   test "falls back to the envelope domain when the From header is missing" do
-    write_key("envelope.test")
+    Domain.create!(name: "envelope.test")
     signed = @deliverer.send(:signed, outbound(mail_from: "user@envelope.test", from_header: nil))
     assert_match(/^DKIM-Signature:.*d=envelope\.test;/m, signed)
   end
@@ -65,8 +54,22 @@ class OutboundDelivererTest < ActiveSupport::TestCase
     assert_includes warnings, "nokey.test"
   end
 
+  # TRANSITIONAL (remove with OutboundDeliverer#legacy_key_file): a domain
+  # not yet backfilled into the DB still signs from its pem file.
+  test "legacy key files still sign while the migration ships" do
+    dir = Dir.mktmpdir
+    ENV["MAIL_ON_RAILS_DKIM_DIR"] = dir
+    File.write(File.join(dir, "legacy.test.pem"), DkimKey.generate_pem)
+
+    signed = @deliverer.send(:signed, outbound(mail_from: "user@legacy.test", from_header: "user@legacy.test"))
+    assert_match(/^DKIM-Signature:.*d=legacy\.test;/m, signed)
+  ensure
+    ENV.delete("MAIL_ON_RAILS_DKIM_DIR")
+    FileUtils.remove_entry(dir)
+  end
+
   test "unsignable data goes out unsigned with a warning rather than raising" do
-    write_key("envelope.test")
+    Domain.create!(name: "envelope.test")
     raw = SmtpOutboundMessage.new(mail_from: "user@envelope.test", recipient: "rcpt@remote.test",
                                   data: "no header/body separator")
     warnings = capture_warnings do

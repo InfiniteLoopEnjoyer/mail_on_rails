@@ -1,13 +1,16 @@
 # A domain we host mail for. Creating/destroying one takes effect live:
 # the exim edge's local_domains list is a file on a volume shared with this
 # app (see EximLocalDomains), re-read by exim per connection - no restart.
-# Creation also ensures a DKIM signing key exists (see DkimKey), closing
-# the gap where a new domain silently sent unsigned mail.
+# Creation also mints the DKIM signing key, stored encrypted on this row
+# (dkim_private_key) - so no domain ever silently sends unsigned. The key
+# dies with the row: re-adding a domain mints a NEW key, so the DKIM TXT
+# must be republished then.
 #
 # A domain here only makes exim treat recipients as local and enables DKIM
 # signing; DNS (MX/SPF/DKIM TXT - shown on the domain page) and
 # EmailAccount rows are still needed before mail flows.
 class Domain < ApplicationRecord
+  encrypts :dkim_private_key
   # Lowercase ASCII/punycode FQDN. Also keeps Exim list metacharacters
   # (':', '!', '*', whitespace) out of the local_domains file.
   HOSTNAME = /\A(?=.{1,253}\z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\z/
@@ -24,6 +27,7 @@ class Domain < ApplicationRecord
 
   normalizes :name, with: ->(name) { name.to_s.strip.downcase.delete_suffix(".") }
 
+  before_create :generate_dkim_key
   after_create_commit :activate
   after_destroy_commit :deactivate
 
@@ -33,7 +37,7 @@ class Domain < ApplicationRecord
   end
 
   def dkim_key
-    DkimKey.new(name)
+    DkimKey.new(name, dkim_private_key)
   end
 
   def dmarc_address
@@ -82,8 +86,12 @@ class Domain < ApplicationRecord
 
   private
 
+  # ||= so an import (e.g. restoring a dumped row) keeps its key.
+  def generate_dkim_key
+    self.dkim_private_key ||= DkimKey.generate_pem
+  end
+
   def activate
-    dkim_key.ensure!
     ensure_dmarc_account!
     EximLocalDomains.sync!
   end
@@ -91,7 +99,6 @@ class Domain < ApplicationRecord
   # force_empty: removing the last domain is explicit admin intent, even
   # though an empty list makes exim 550 all inbound mail.
   def deactivate
-    dkim_key.retire!
     EximLocalDomains.sync!(force_empty: true)
   end
 end

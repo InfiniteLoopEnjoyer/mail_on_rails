@@ -2,17 +2,13 @@ require "test_helper"
 
 class DomainTest < ActiveSupport::TestCase
   setup do
-    @dkim_dir = Dir.mktmpdir
     @exim_dir = Dir.mktmpdir
     @exim_file = File.join(@exim_dir, "local_domains")
-    ENV["MAIL_ON_RAILS_DKIM_DIR"] = @dkim_dir
     ENV["MAIL_ON_RAILS_EXIM_DOMAINS_FILE"] = @exim_file
   end
 
   teardown do
-    ENV.delete("MAIL_ON_RAILS_DKIM_DIR")
     ENV.delete("MAIL_ON_RAILS_EXIM_DOMAINS_FILE")
-    FileUtils.remove_entry(@dkim_dir)
     FileUtils.remove_entry(@exim_dir)
   end
 
@@ -27,39 +23,34 @@ class DomainTest < ActiveSupport::TestCase
     end
   end
 
-  test "create generates a DKIM key and writes the exim file" do
+  test "create mints an encrypted DKIM key and writes the exim file" do
     domain = Domain.create!(name: "example.com")
-    key_path = File.join(@dkim_dir, "example.com.pem")
 
-    assert File.exist?(key_path)
-    assert_instance_of OpenSSL::PKey::RSA, OpenSSL::PKey.read(File.read(key_path))
+    assert_instance_of OpenSSL::PKey::RSA, OpenSSL::PKey.read(domain.dkim_private_key)
     assert_equal "example.com\n", File.read(@exim_file)
     assert domain.synced_to_exim?
     assert_match(/\Av=DKIM1; k=rsa; p=[A-Za-z0-9+\/]+=*\z/, domain.dkim_key.txt_value)
+    # Stored encrypted: the raw column bytes must not contain the PEM.
+    raw = Domain.connection.select_value("SELECT dkim_private_key FROM domains WHERE id = #{domain.id}")
+    assert_not_includes raw.to_s, "PRIVATE KEY"
   end
 
-  test "create never overwrites an existing DKIM key" do
-    key_path = File.join(@dkim_dir, "example.com.pem")
-    existing = OpenSSL::PKey::RSA.new(2048).to_pem
-    File.write(key_path, existing)
-
-    Domain.create!(name: "example.com")
-    assert_equal existing, File.read(key_path)
+  test "create keeps a key supplied up front (imports) instead of minting" do
+    pem = DkimKey.generate_pem
+    domain = Domain.create!(name: "example.com", dkim_private_key: pem)
+    assert_equal pem, domain.dkim_private_key
   end
 
-  test "destroy retires the key, and re-creating restores it" do
+  test "the key dies with the domain; re-creating mints a fresh one" do
     domain = Domain.create!(name: "example.com")
-    key_path = File.join(@dkim_dir, "example.com.pem")
-    original = File.read(key_path)
+    original = domain.dkim_private_key
 
     domain.destroy!
-    assert_not File.exist?(key_path)
-    assert File.exist?("#{key_path}.disabled")
     assert_equal "\n", File.read(@exim_file)
 
-    Domain.create!(name: "example.com")
-    assert_equal original, File.read(key_path)
-    assert_not File.exist?("#{key_path}.disabled")
+    recreated = Domain.create!(name: "example.com")
+    assert recreated.dkim_private_key.present?
+    assert_not_equal original, recreated.dkim_private_key
   end
 
   test "sync refuses an empty list unless forced" do

@@ -9,16 +9,12 @@ class DnsCheckTest < ActiveSupport::TestCase
   end
 
   setup do
-    @dkim_dir = Dir.mktmpdir
-    ENV["MAIL_ON_RAILS_DKIM_DIR"] = @dkim_dir
     ENV["SMTP_HELO_HOST"] = "mail.host.test"
     @domain = Domain.create!(name: "example.com")
   end
 
   teardown do
-    ENV.delete("MAIL_ON_RAILS_DKIM_DIR")
     ENV.delete("SMTP_HELO_HOST")
-    FileUtils.remove_entry(@dkim_dir)
   end
 
   def run_checks(txt: {}, mx: {})
@@ -66,7 +62,7 @@ class DnsCheckTest < ActiveSupport::TestCase
   end
 
   test "DKIM is unknown when this server has no key" do
-    File.delete(File.join(@dkim_dir, "example.com.pem"))
+    @domain.update!(dkim_private_key: nil)
     assert_equal :unknown, run_checks["DKIM"].status
   end
 
