@@ -16,6 +16,7 @@ class UsersControllerTest < ActionDispatch::IntegrationTest
     get users_url
     assert_response :success
     assert_select ".primary", text: @user.email_address
+    assert_select "turbo-cable-stream-source", 1
   end
 
   test "creates a user with a generated password shown once" do

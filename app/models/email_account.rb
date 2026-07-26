@@ -10,6 +10,11 @@ class EmailAccount < ApplicationRecord
 
   normalizes :email, with: ->(email) { email.strip.downcase }
 
+  # Live-refresh the accounts index and this account's own page (Turbo
+  # refresh broadcasts - pages subscribe via turbo_stream_from).
+  after_commit -> { broadcast_refresh_later_to :email_accounts }
+  after_update_commit -> { broadcast_refresh_later }
+
   after_create :create_default_mailboxes
 
   def inbox

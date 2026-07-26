@@ -16,6 +16,10 @@ class Mailbox < ApplicationRecord
     self.uid_validity ||= Time.current.to_i
   end
 
+  # Live-refresh the account page (folder list) and this folder's own page.
+  after_commit -> { broadcast_refresh_later_to email_account }
+  after_update_commit -> { broadcast_refresh_later }
+
   # Inbound delivery files new mail into INBOX (EmailAccount#inbox), so the
   # folder must always exist - except when the whole account is going away.
   before_destroy :prevent_inbox_deletion

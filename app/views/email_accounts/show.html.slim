@@ -1,5 +1,7 @@
 - page_title "#{@email_account.email}"
 
+= turbo_stream_from @email_account
+
 nav.mb-2.text-sm.text-slate-500
   =<> link_to "Accounts", root_path, class: "text-accent"
   | /
@@ -12,8 +14,10 @@ header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
     = link_to "Edit", edit_email_account_path(@email_account), class: "inline-block cursor-pointer rounded-md border border-slate-200 bg-white px-3.5 py-1 text-sm font-medium text-slate-800"
     = button_to "Delete", email_account_path(@email_account), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 bg-white px-3.5 py-1 text-sm font-medium text-red-700", form: { data: { turbo_confirm: "Delete #{@email_account.email} and all of its mail?" } }
 
+/ data-turbo-permanent: a broadcast-triggered morph re-renders without the
+/ flash - keep the once-only password on screen until the user navigates away.
 - if flash[:generated_password].present?
-  .mb-4.rounded-lg.border.border-amber-200.bg-amber-50.p-4
+  .mb-4.rounded-lg.border.border-amber-200.bg-amber-50.p-4 id="generated-password-#{@email_account.id}" data-turbo-permanent=true
     h2.mb-2.text-sm.font-semibold Account password — save it now
     = render "shared/generated_password", password: flash[:generated_password]
 

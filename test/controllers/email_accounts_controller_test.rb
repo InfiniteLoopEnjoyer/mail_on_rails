@@ -16,6 +16,13 @@ class EmailAccountsControllerTest < ActionDispatch::IntegrationTest
     get root_url
     assert_response :success
     assert_select ".primary", text: @account.email
+    assert_select "turbo-cable-stream-source", 1
+  end
+
+  test "account page subscribes to live updates" do
+    get email_account_url(@account)
+    assert_response :success
+    assert_select "turbo-cable-stream-source", 1
   end
 
   test "index shows an unread count when an account has unseen messages" do

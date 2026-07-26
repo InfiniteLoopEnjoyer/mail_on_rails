@@ -5,6 +5,11 @@ class EmailMessage < ApplicationRecord
 
   validates :uid, presence: true, uniqueness: { scope: :mailbox_id }
 
+  # Any message change (delivery, flag change, expunge) live-refreshes the
+  # folder's message list, the account page's per-folder unread counts, and
+  # the accounts index's unread badges.
+  after_commit :broadcast_page_refreshes
+
   # Stores a raw RFC822 message into a mailbox, extracting the header
   # fields the web UI needs for listing. authenticated_as records the
   # trusted sender (nil = accepted unauthenticated / potentially spoofed).
@@ -84,5 +89,13 @@ class EmailMessage < ApplicationRecord
     end
   rescue StandardError
     raw.to_s.split(/\r?\n\r?\n/, 2).last.to_s
+  end
+
+  private
+
+  def broadcast_page_refreshes
+    broadcast_refresh_later_to mailbox
+    broadcast_refresh_later_to mailbox.email_account
+    broadcast_refresh_later_to :email_accounts
   end
 end

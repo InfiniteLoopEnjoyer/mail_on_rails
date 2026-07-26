@@ -8,6 +8,12 @@ class MailboxesControllerTest < ActionDispatch::IntegrationTest
     @sent = @account.find_mailbox("Sent")
   end
 
+  test "folder page subscribes to live updates" do
+    get email_account_mailbox_url(@account, @inbox)
+    assert_response :success
+    assert_select "turbo-cable-stream-source", 1
+  end
+
   test "creates a folder" do
     assert_difference "@account.mailboxes.count", 1 do
       post email_account_mailboxes_url(@account), params: { mailbox: { name: "Archive" } }

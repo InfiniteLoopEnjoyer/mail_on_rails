@@ -22,6 +22,9 @@ html
     = stylesheet_link_tag :app, "data-turbo-track": "reload"
     = javascript_importmap_tags
 
+    / Broadcast-triggered refreshes morph the page in place instead of replacing it
+    = turbo_refreshes_with method: :morph, scroll: :preserve
+
   body.min-h-screen.bg-slate-100.text-slate-800
     - if authenticated?
       div data-controller="drawer" data-action="keydown.esc@window->drawer#close"

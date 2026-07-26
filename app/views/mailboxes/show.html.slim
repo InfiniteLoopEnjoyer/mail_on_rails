@@ -1,5 +1,7 @@
 - page_title "#{@mailbox.name}"
 
+= turbo_stream_from @mailbox
+
 nav.mb-2.text-sm.text-slate-500
   =<> link_to "Accounts", root_path, class: "text-accent"
   | /
