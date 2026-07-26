@@ -55,6 +55,10 @@ class EmailMessage < ApplicationRecord
     flags.include?("\\Seen")
   end
 
+  def mark_seen!
+    update!(flags: flags | [ "\\Seen" ]) unless seen?
+  end
+
   # True once the inbound pipeline recorded any verdict (sender-auth, virus,
   # or spam). Received mail has these; outbound Sent copies don't. Gates the
   # analysis footer in the message view.

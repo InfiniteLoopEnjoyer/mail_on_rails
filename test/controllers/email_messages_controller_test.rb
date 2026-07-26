@@ -36,6 +36,19 @@ class EmailMessagesControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  test "viewing a message marks it as seen" do
+    message = EmailMessage.deliver_raw(@account.inbox, RAW)
+    assert_not message.seen?
+
+    show(message)
+    assert_response :success
+    assert message.reload.seen?
+
+    show(message)
+    assert_response :success
+    assert_equal [ "\\Seen" ], message.reload.flags
+  end
+
   test "omits the footer for a message with no verdicts" do
     sent = @account.find_mailbox("Sent")
     message = EmailMessage.deliver_raw(sent, RAW)
