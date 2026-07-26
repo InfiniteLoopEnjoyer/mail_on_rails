@@ -18,28 +18,50 @@ class EmailAccountsControllerTest < ActionDispatch::IntegrationTest
     assert_select ".primary", text: @account.email
   end
 
-  test "creates an account with the default folders" do
+  test "creates an account with the default folders and a generated password shown once" do
     assert_difference "EmailAccount.count", 1 do
-      post email_accounts_url, params: { email_account: { email: "dave@example.com", name: "Dave", password: "secret123" } }
+      post email_accounts_url, params: { email_account: { email: "dave@example.com", name: "Dave" } }
     end
     account = EmailAccount.find_by(email: "dave@example.com")
     assert_redirected_to email_account_url(account)
     assert_equal EmailAccount::DEFAULT_MAILBOXES.sort, account.mailboxes.pluck(:name).sort
+
+    follow_redirect!
+    plaintext = extract_generated_password
+    assert account.authenticate(plaintext)
+
+    get email_account_url(account)
+    assert_not_includes response.body, plaintext
   end
 
   test "rejects a duplicate email" do
     assert_no_difference "EmailAccount.count" do
-      post email_accounts_url, params: { email_account: { email: @account.email, password: "secret123" } }
+      post email_accounts_url, params: { email_account: { email: @account.email } }
     end
     assert_response :unprocessable_entity
   end
 
-  test "updates an account, keeping the password when left blank" do
-    patch email_account_url(@account), params: { email_account: { email: "carol@example.org", name: "Carol", password: "" } }
+  test "update ignores password params" do
+    patch email_account_url(@account), params: { email_account: { email: "carol@example.org", name: "Carol", password: "sneaky" } }
     assert_redirected_to email_account_url(@account)
     @account.reload
     assert_equal "carol@example.org", @account.email
     assert @account.authenticate("secret123")
+    assert_not @account.authenticate("sneaky")
+  end
+
+  test "generate_password rotates the digest and shows the password once" do
+    post generate_password_email_account_url(@account), headers: { "Accept" => "text/vnd.turbo-stream.html" }
+    assert_response :success
+    assert_select "turbo-stream[action=replace][target=password-generator]"
+
+    plaintext = extract_generated_password
+    @account.reload
+    assert @account.authenticate(plaintext)
+    assert_not @account.authenticate("secret123")
+
+    get edit_email_account_url(@account)
+    assert_not_includes response.body, plaintext
   end
 
   test "destroys an account together with its folders" do

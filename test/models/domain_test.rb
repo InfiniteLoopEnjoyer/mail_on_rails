@@ -29,14 +29,14 @@ class DomainTest < ActiveSupport::TestCase
     assert_instance_of OpenSSL::PKey::RSA, OpenSSL::PKey.read(domain.dkim_private_key)
     assert_equal "example.com\n", File.read(@exim_file)
     assert domain.synced_to_exim?
-    assert_match(/\Av=DKIM1; k=rsa; p=[A-Za-z0-9+\/]+=*\z/, domain.dkim_key.txt_value)
+    assert_match(/\Av=DKIM1; k=rsa; p=[A-Za-z0-9+\/]+=*\z/, domain.dkim_txt_value)
     # Stored encrypted: the raw column bytes must not contain the PEM.
     raw = Domain.connection.select_value("SELECT dkim_private_key FROM domains WHERE id = #{domain.id}")
     assert_not_includes raw.to_s, "PRIVATE KEY"
   end
 
   test "create keeps a key supplied up front (imports) instead of minting" do
-    pem = DkimKey.generate_pem
+    pem = OpenSSL::PKey::RSA.new(Domain::DKIM_KEY_BITS).to_pem
     domain = Domain.create!(name: "example.com", dkim_private_key: pem)
     assert_equal pem, domain.dkim_private_key
   end

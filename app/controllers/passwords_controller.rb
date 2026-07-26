@@ -17,12 +17,21 @@ class PasswordsController < ApplicationController
   def edit
   end
 
+  # Rotating the digest also kills the reset token (it embeds the password
+  # salt), so the generated password really is shown exactly once: the HTML
+  # fallback must render, not redirect back to the now-dead token URL.
   def update
-    if @user.update(params.permit(:password, :password_confirmation))
-      @user.sessions.destroy_all
-      redirect_to new_session_path, notice: "Password has been reset."
-    else
-      redirect_to edit_password_path(params[:token]), alert: "Passwords did not match."
+    @generated_password = @user.regenerate_password!
+    @user.sessions.destroy_all
+    respond_to do |format|
+      format.turbo_stream do
+        render turbo_stream: turbo_stream.replace(
+          "password-generator",
+          partial: "shared/password_generator",
+          locals: { url: password_path(params[:token]), method: :put, password: @generated_password, signin_link: true }
+        )
+      end
+      format.html { render :edit }
     end
   end
 

@@ -1,4 +1,4 @@
-- content_for :title, "Rail Mail - Domains"
+- page_title "Domains"
 
 header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
   h1.text-2xl.font-bold Domains
@@ -12,7 +12,7 @@ header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
         = link_to domain_path(domain), class: "flex items-baseline gap-3 px-4 py-3" do
           span.primary.font-semibold= domain.name
           .ml-auto.flex.gap-2
-            - if domain.dkim_key.present?
+            - if domain.dkim_private_key.present?
               span.rounded-full.bg-green-100.px-2.text-xs.whitespace-nowrap.text-green-700 DKIM key
             - else
               span.rounded-full.bg-yellow-100.px-2.text-xs.whitespace-nowrap.text-yellow-700 no DKIM key

@@ -1,4 +1,4 @@
-- content_for :title, "Rail Mail - Edit #{@user.email_address}"
+- page_title "Edit #{@user.email_address}"
 
 nav.mb-2.text-sm.text-slate-500
   =<> link_to "Users", users_path, class: "text-accent"
@@ -12,3 +12,7 @@ header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
       = button_to "Delete", user_path(@user), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 bg-white px-3.5 py-1 text-sm font-medium text-red-700", form: { data: { turbo_confirm: "Delete #{@user.email_address}?" } }
 
 = render "form", user: @user
+
+.mt-6.max-w-md.rounded-lg.border.border-slate-200.bg-white.p-5
+  h2.mb-3.text-sm.font-semibold Password
+  = render "shared/password_generator", url: generate_password_user_path(@user), password: flash[:generated_password]

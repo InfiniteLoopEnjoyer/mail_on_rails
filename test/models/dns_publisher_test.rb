@@ -42,7 +42,7 @@ class DnsPublisherTest < ActiveSupport::TestCase
     assert_equal 10, by_type["MX"].first[:priority]
     contents = by_type["TXT"].map { |r| r[:content] }
     assert_includes contents, "v=spf1 mx -all"
-    assert_includes contents, @domain.dkim_key.txt_value
+    assert_includes contents, @domain.dkim_txt_value
     assert_includes contents, "v=DMARC1; p=none; rua=mailto:dmarc@example.com"
     assert_equal 4, result.actions.size
     assert_empty client.updated
@@ -52,7 +52,7 @@ class DnsPublisherTest < ActiveSupport::TestCase
     result, client = publish(
       [ "MX", "example.com" ] => [ { "content" => "mail.host.test" } ],
       [ "TXT", "example.com" ] => [ { "content" => "v=spf1 mx -all" } ],
-      [ "TXT", @domain.dkim_key.txt_name ] => [ { "id" => "r1", "content" => @domain.dkim_key.txt_value } ],
+      [ "TXT", @domain.dkim_txt_name ] => [ { "id" => "r1", "content" => @domain.dkim_txt_value } ],
       [ "TXT", "_dmarc.example.com" ] => [ { "content" => "v=DMARC1; p=reject" } ]
     )
 
@@ -83,12 +83,12 @@ class DnsPublisherTest < ActiveSupport::TestCase
 
   test "a mismatched DKIM TXT is updated in place" do
     other = "v=DKIM1; k=rsa; p=#{Base64.strict_encode64(OpenSSL::PKey::RSA.new(2048).public_to_der)}"
-    result, client = publish([ "TXT", @domain.dkim_key.txt_name ] => [ { "id" => "rec-9", "content" => other } ])
+    result, client = publish([ "TXT", @domain.dkim_txt_name ] => [ { "id" => "rec-9", "content" => other } ])
 
     assert_equal 1, client.updated.size
     record_id, attrs = client.updated.first
     assert_equal "rec-9", record_id
-    assert_equal @domain.dkim_key.txt_value, attrs[:content]
+    assert_equal @domain.dkim_txt_value, attrs[:content]
     assert result.actions.any? { |a| a.include?("updated DKIM") }
   end
 

@@ -2,6 +2,7 @@ class EmailAccount < ApplicationRecord
   DEFAULT_MAILBOXES = %w[INBOX Sent Drafts Trash Junk].freeze
 
   has_secure_password
+  include GeneratedPassword
 
   has_many :mailboxes, dependent: :destroy
 

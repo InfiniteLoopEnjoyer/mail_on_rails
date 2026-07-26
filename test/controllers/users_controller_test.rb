@@ -18,27 +18,65 @@ class UsersControllerTest < ActionDispatch::IntegrationTest
     assert_select ".primary", text: @user.email_address
   end
 
-  test "creates a user" do
+  test "creates a user with a generated password shown once" do
     assert_difference "User.count", 1 do
-      post users_url, params: { user: { email_address: "new@example.com", password: "secret123" } }
+      post users_url, params: { user: { email_address: "new@example.com" } }
     end
-    assert_redirected_to users_url
+    user = User.find_by(email_address: "new@example.com")
+    assert_redirected_to edit_user_url(user)
+
+    follow_redirect!
+    plaintext = extract_generated_password
+    assert user.authenticate(plaintext)
+
+    get edit_user_url(user)
+    assert_not_includes response.body, plaintext
   end
 
   test "rejects a duplicate email address" do
     assert_no_difference "User.count" do
-      post users_url, params: { user: { email_address: @user.email_address, password: "secret123" } }
+      post users_url, params: { user: { email_address: @user.email_address } }
     end
     assert_response :unprocessable_entity
   end
 
-  test "updates a user, keeping the password when left blank" do
+  test "update ignores password params" do
     other = users(:two)
-    patch user_url(other), params: { user: { email_address: "renamed@example.com", password: "" } }
+    patch user_url(other), params: { user: { email_address: "renamed@example.com", password: "sneaky" } }
     assert_redirected_to users_url
     other.reload
     assert_equal "renamed@example.com", other.email_address
     assert other.authenticate("password")
+    assert_not other.authenticate("sneaky")
+  end
+
+  test "generate_password for another user rotates their password and destroys their sessions" do
+    other = users(:two)
+    other.sessions.create!
+
+    post generate_password_user_url(other), headers: { "Accept" => "text/vnd.turbo-stream.html" }
+    assert_response :success
+    assert_select "turbo-stream[action=replace][target=password-generator]"
+
+    plaintext = extract_generated_password
+    other.reload
+    assert other.authenticate(plaintext)
+    assert_not other.authenticate("password")
+    assert_empty other.sessions
+
+    get edit_user_url(other)
+    assert_not_includes response.body, plaintext
+  end
+
+  test "generate_password for yourself keeps the current session" do
+    @user.sessions.create!
+
+    post generate_password_user_url(@user), headers: { "Accept" => "text/vnd.turbo-stream.html" }
+    assert_response :success
+    assert_equal 1, @user.sessions.count
+
+    get users_url
+    assert_response :success
   end
 
   test "destroys a user" do

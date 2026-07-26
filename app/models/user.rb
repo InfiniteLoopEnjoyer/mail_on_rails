@@ -1,5 +1,6 @@
 class User < ApplicationRecord
   has_secure_password
+  include GeneratedPassword
   has_many :sessions, dependent: :destroy
 
   validates :email_address, presence: true, uniqueness: { case_sensitive: false }

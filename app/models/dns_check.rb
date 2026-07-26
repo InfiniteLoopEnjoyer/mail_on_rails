@@ -91,15 +91,14 @@ class DnsCheck
   end
 
   def dkim_check
-    key = @domain.dkim_key
-    return check("DKIM", :unknown, nil, "no signing key on this server") unless key.present?
+    return check("DKIM", :unknown, nil, "no signing key on this server") if @domain.dkim_private_key.blank?
 
-    records = @resolver.txt(key.txt_name)
+    records = @resolver.txt(@domain.dkim_txt_name)
     return check("DKIM", :unknown, nil, "DNS lookup failed") if records.nil?
 
-    expected_p = key.txt_value[/p=([A-Za-z0-9+\/=]+)/, 1]
+    expected_p = @domain.dkim_txt_value[/p=([A-Za-z0-9+\/=]+)/, 1]
     published = records.find { |r| r.match?(/\Av=DKIM1\b/i) || r.include?("p=") }
-    return check("DKIM", :fail, nil, "no TXT record at #{key.txt_name}") unless published
+    return check("DKIM", :fail, nil, "no TXT record at #{@domain.dkim_txt_name}") unless published
 
     published_p = published.gsub(/[\s"]/, "")[/p=([A-Za-z0-9+\/=]+)/, 1]
     if published_p == expected_p

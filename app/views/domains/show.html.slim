@@ -1,5 +1,4 @@
-- content_for :title, "Rail Mail - #{@domain.name}"
-- dkim = @domain.dkim_key
+- page_title "#{@domain.name}"
 - mail_host = ENV["SMTP_HELO_HOST"].presence || "<your mail host>"
 
 nav.mb-2.text-sm.text-slate-500
@@ -15,7 +14,7 @@ header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
     = button_to "Delete", domain_path(@domain), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 bg-white px-3.5 py-1 text-sm font-medium text-red-700", form: { data: { turbo_confirm: "Remove #{@domain.name}? Exim will immediately refuse inbound mail for it and outbound mail stops being DKIM-signed." } }
 
 .mb-4.flex.flex-wrap.gap-2
-  - if dkim.present?
+  - if @domain.dkim_private_key.present?
     span.rounded-full.bg-green-100.px-2.py-0.5.text-xs.text-green-700 DKIM key present
   - else
     span.rounded-full.bg-yellow-100.px-2.py-0.5.text-xs.text-yellow-700 DKIM key missing (outbound goes unsigned)
@@ -42,7 +41,7 @@ p.mb-3.text-sm.text-slate-500
         th.px-4.py-2 Value
         th.px-4.py-2 Status
     tbody
-      - rows = [ [ "MX", "MX", @domain.name, "10 #{mail_host}." ], [ "TXT (SPF)", "SPF", @domain.name, "v=spf1 mx -all" ], [ "TXT (DKIM)", "DKIM", dkim.txt_name, nil ], [ "TXT (DMARC)", "DMARC", "_dmarc.#{@domain.name}", "v=DMARC1; p=none; rua=mailto:#{@domain.dmarc_address}" ] ]
+      - rows = [ [ "MX", "MX", @domain.name, "10 #{mail_host}." ], [ "TXT (SPF)", "SPF", @domain.name, "v=spf1 mx -all" ], [ "TXT (DKIM)", "DKIM", @domain.dkim_txt_name, nil ], [ "TXT (DMARC)", "DMARC", "_dmarc.#{@domain.name}", "v=DMARC1; p=none; rua=mailto:#{@domain.dmarc_address}" ] ]
       - rows.each do |label, key, record_name, value|
         - c = dns_status[key]
         tr.border-b.border-slate-100
@@ -50,8 +49,8 @@ p.mb-3.text-sm.text-slate-500
           td.px-4.py-2: code= record_name
           td.px-4.py-2
             - if key == "DKIM"
-              - if dkim.present?
-                code.break-all= dkim.txt_value
+              - if @domain.dkim_private_key.present?
+                code.break-all= @domain.dkim_txt_value
               - else
                 span.text-slate-500 (no key on this server)
             - else
@@ -68,7 +67,7 @@ p.mb-3.text-sm.text-slate-500
 p.mb-6.text-xs.text-slate-500
   ' Start with p=none; the monitoring section below tells you when it is
   ' safe to tighten. DKIM selector:
-  code<>= dkim.selector
+  code<>= @domain.dkim_selector
   ' . Aggregate reports are delivered to
   code<>= @domain.dmarc_address
   '  (auto-created) and parsed automatically.

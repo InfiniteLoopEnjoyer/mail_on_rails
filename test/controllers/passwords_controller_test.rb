@@ -39,25 +39,31 @@ class PasswordsControllerTest < ActionDispatch::IntegrationTest
     assert_notice "reset link is invalid"
   end
 
-  test "update" do
+  test "update generates a password, shows it once and destroys all sessions" do
+    @user.sessions.create!
+
     assert_changes -> { @user.reload.password_digest } do
-      put password_path(@user.password_reset_token), params: { password: "new", password_confirmation: "new" }
-      assert_redirected_to new_session_path
+      put password_path(@user.password_reset_token)
+      assert_response :success
     end
 
-    follow_redirect!
-    assert_notice "Password has been reset"
+    plaintext = extract_generated_password
+    assert @user.reload.authenticate(plaintext)
+    assert_empty @user.sessions
   end
 
-  test "update with non matching passwords" do
+  test "reset token is single-use" do
     token = @user.password_reset_token
+    put password_path(token)
+    assert_response :success
+
     assert_no_changes -> { @user.reload.password_digest } do
-      put password_path(token), params: { password: "no", password_confirmation: "match" }
-      assert_redirected_to edit_password_path(token)
+      put password_path(token)
+      assert_redirected_to new_password_path
     end
 
     follow_redirect!
-    assert_notice "Passwords did not match"
+    assert_notice "reset link is invalid"
   end
 
   private

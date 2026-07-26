@@ -20,6 +20,8 @@ class Domain < ApplicationRecord
   # triggers report ingestion for mail delivered to it.
   DMARC_LOCAL_PART = "dmarc"
 
+  DKIM_KEY_BITS = 2048
+
   has_many :dmarc_reports, dependent: :delete_all
 
   validates :name, presence: true, uniqueness: true,
@@ -36,8 +38,20 @@ class Domain < ApplicationRecord
     local == DMARC_LOCAL_PART && exists?(name: domain_name)
   end
 
-  def dkim_key
-    DkimKey.new(name, dkim_private_key)
+  def dkim_selector
+    ENV.fetch("MAIL_ON_RAILS_DKIM_SELECTOR", "rail")
+  end
+
+  # The DNS TXT record that publishes the DKIM public key.
+  def dkim_txt_name
+    "#{dkim_selector}._domainkey.#{name}"
+  end
+
+  def dkim_txt_value
+    return nil if dkim_private_key.blank?
+
+    # public_to_der = SubjectPublicKeyInfo DER, the format DKIM's p= wants.
+    "v=DKIM1; k=rsa; p=#{Base64.strict_encode64(OpenSSL::PKey.read(dkim_private_key).public_to_der)}"
   end
 
   def dmarc_address
@@ -45,11 +59,11 @@ class Domain < ApplicationRecord
   end
 
   # The reports account. Auto-created on domain creation with a random
-  # password (reset it in the accounts UI for IMAP access to the raw
-  # reports); left in place on domain destroy so history survives.
+  # password (generate a new one in the accounts UI for IMAP access to the
+  # raw reports); left in place on domain destroy so history survives.
   def ensure_dmarc_account!
     EmailAccount.find_by(email: dmarc_address) ||
-      EmailAccount.create!(email: dmarc_address, name: "DMARC reports", password: SecureRandom.base58(24))
+      EmailAccount.create!(email: dmarc_address, name: "DMARC reports", password: EmailAccount.generate_password)
   end
 
   # Is the domain in the exim file right now? (The file lives on our own
@@ -88,7 +102,7 @@ class Domain < ApplicationRecord
 
   # ||= so an import (e.g. restoring a dumped row) keeps its key.
   def generate_dkim_key
-    self.dkim_private_key ||= DkimKey.generate_pem
+    self.dkim_private_key ||= OpenSSL::PKey::RSA.new(DKIM_KEY_BITS).to_pem
   end
 
   def activate

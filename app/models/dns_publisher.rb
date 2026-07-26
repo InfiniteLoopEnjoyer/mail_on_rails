@@ -67,21 +67,20 @@ class DnsPublisher
   end
 
   def publish_dkim
-    key = @domain.dkim_key
-    unless key.present?
+    if @domain.dkim_private_key.blank?
       @skipped << "DKIM: no signing key on this server"
       return
     end
 
-    existing = txt_records(key.txt_name)
-    expected = key.txt_value
+    existing = txt_records(@domain.dkim_txt_name)
+    expected = @domain.dkim_txt_value
     if existing.empty?
-      @client.create_record(@zone, type: "TXT", name: key.txt_name, content: expected, ttl: TTL)
-      @actions << "created DKIM TXT (#{key.txt_name})"
+      @client.create_record(@zone, type: "TXT", name: @domain.dkim_txt_name, content: expected, ttl: TTL)
+      @actions << "created DKIM TXT (#{@domain.dkim_txt_name})"
     elsif existing.any? { |r| dkim_p(content_of(r)) == dkim_p(expected) }
       @skipped << "DKIM TXT already matches the key"
     else
-      @client.update_record(@zone, existing.first["id"], type: "TXT", name: key.txt_name, content: expected, ttl: TTL)
+      @client.update_record(@zone, existing.first["id"], type: "TXT", name: @domain.dkim_txt_name, content: expected, ttl: TTL)
       @actions << "updated DKIM TXT to this server's key"
     end
   end

@@ -13,9 +13,8 @@
     = form.label :name, "Display name", class: "mb-1 block text-sm font-semibold"
     = form.text_field :name, class: "w-full rounded-md border border-slate-200 bg-slate-100 px-2.5 py-1.5"
 
-  .mb-4
-    = form.label :password, class: "mb-1 block text-sm font-semibold"
-    = form.password_field :password, maxlength: 72, autocomplete: "new-password", required: email_account.new_record?, placeholder: ("Leave blank to keep current password" if email_account.persisted?), class: "w-full rounded-md border border-slate-200 bg-slate-100 px-2.5 py-1.5"
+  - if email_account.new_record?
+    p.mb-4.text-xs.text-slate-500 A password will be generated when the account is created.
 
   .mt-5
     = form.submit class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white"

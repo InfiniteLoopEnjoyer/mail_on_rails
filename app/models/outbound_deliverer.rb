@@ -93,8 +93,8 @@ class OutboundDeliverer
     domain = signing_domain(message)
     return message.data if domain.blank?
 
-    pem = Domain.find_by(name: domain)&.dkim_private_key
-    if pem.blank?
+    record = Domain.find_by(name: domain)
+    if record&.dkim_private_key.blank?
       Rails.logger.warn "[mail_on_rails] outbound to <#{message.recipient}> goes out UNSIGNED: " \
                         "no DKIM key for #{domain} - add the domain in the Domains UI to generate one"
       return message.data
@@ -102,8 +102,8 @@ class OutboundDeliverer
 
     Dkim.sign(message.data,
               domain: domain,
-              selector: ENV.fetch("MAIL_ON_RAILS_DKIM_SELECTOR", "rail"),
-              private_key: OpenSSL::PKey.read(pem))
+              selector: record.dkim_selector,
+              private_key: OpenSSL::PKey.read(record.dkim_private_key))
   rescue StandardError => e
     # A signing failure (malformed message, unreadable key) must not block
     # delivery - retrying would not fix it. Send unsigned and say so.

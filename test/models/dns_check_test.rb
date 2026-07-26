@@ -21,8 +21,8 @@ class DnsCheckTest < ActiveSupport::TestCase
     DnsCheck.for(@domain, resolver: FakeResolver.new(txt, mx)).checks.index_by(&:record)
   end
 
-  def dkim_txt_name = @domain.dkim_key.txt_name
-  def dkim_txt_value = @domain.dkim_key.txt_value
+  def dkim_txt_name = @domain.dkim_txt_name
+  def dkim_txt_value = @domain.dkim_txt_value
 
   test "all green when published DNS matches" do
     checks = run_checks(

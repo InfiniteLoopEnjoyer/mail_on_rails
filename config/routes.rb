@@ -25,7 +25,11 @@ Rails.application.routes.draw do
   # Defines the root path route ("/")
   root "email_accounts#index"
 
-  resources :users, except: %i[show]
+  resources :users, except: %i[show] do
+    member do
+      post :generate_password
+    end
+  end
 
   # Domains we host. Create/destroy rewrites the exim edge's local_domains
   # file live (shared volume) - see Domain / EximLocalDomains. publish_dns
@@ -37,6 +41,9 @@ Rails.application.routes.draw do
   end
 
   resources :email_accounts, path: "accounts" do
+    member do
+      post :generate_password
+    end
     resources :mailboxes, except: %i[index] do
       resources :email_messages, only: %i[show], path: "messages"
     end
