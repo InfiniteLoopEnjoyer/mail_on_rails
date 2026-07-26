@@ -17,9 +17,14 @@ network, by **two independent readers**:
    deliberately stamps none, so a copy on the wire could only be forged).
 
 Both stream the whole raw RFC822 message via clamd's INSTREAM protocol
-(clamd decodes MIME itself, so attachments are covered). Scanning is
-enabled wherever the respective env var is set and disabled where it
-isn't.
+(clamd decodes MIME itself, so attachments are covered). The app path is
+**on by default**: the clamav accessory always boots before the app, so
+`SMTP_CLAMAV_ADDR` defaults to `mail_on_rails-clamav:3310` (the
+accessory's container name on the kamal docker network) and only needs
+setting to override — `""` disables scanning (the test suite pins it to
+`""`; in dev outside docker the default hostname doesn't resolve, so
+either run a local clamd or set `""`). The edge path is enabled wherever
+`EXIM_CLAMAV_ADDR` is set and disabled where it isn't.
 
 ## Policy
 

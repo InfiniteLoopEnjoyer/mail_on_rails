@@ -11,8 +11,11 @@ module MailOnRails
   #
   # Verdicts: :clean, :infected (with signature name), :unavailable (clamd
   # unreachable/timeout/unparseable answer). Never raises - callers decide
-  # policy. Disabled unless SMTP_CLAMAV_ADDR is set (read per call:
-  # no Ractors here, and tests can toggle it).
+  # policy. Enabled by default: the clamav Kamal accessory always boots
+  # before the app, so DEFAULT_ADDR is reachable in any deployed container.
+  # SMTP_CLAMAV_ADDR overrides it; set it to "" to disable scanning (e.g.
+  # dev outside docker, where the accessory hostname doesn't resolve).
+  # Read per call: no Ractors here, and tests can toggle it.
   module ClamavScanner
     Result = Struct.new(:status, :virus) do
       def clean? = status == :clean
@@ -20,6 +23,7 @@ module MailOnRails
       def unavailable? = status == :unavailable
     end
 
+    DEFAULT_ADDR = "mail_on_rails-clamav:3310"
     DEFAULT_PORT = 3310
     DEFAULT_TIMEOUT = 10
 
@@ -30,7 +34,7 @@ module MailOnRails
     end
 
     def addr
-      ENV["SMTP_CLAMAV_ADDR"].to_s.strip
+      ENV.fetch("SMTP_CLAMAV_ADDR", DEFAULT_ADDR).strip
     end
 
     def timeout

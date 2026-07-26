@@ -9,16 +9,21 @@ class ClamavScannerTest < ActiveSupport::TestCase
   RAW = "From: a@b.test\r\nSubject: hi\r\n\r\nbody\r\n"
 
   def with_scanner_at(addr, timeout: nil)
+    previous = ENV["SMTP_CLAMAV_ADDR"]
     ENV["SMTP_CLAMAV_ADDR"] = addr
     ENV["SMTP_CLAMAV_TIMEOUT"] = timeout.to_s if timeout
     yield
   ensure
-    ENV.delete("SMTP_CLAMAV_ADDR")
+    ENV["SMTP_CLAMAV_ADDR"] = previous
     ENV.delete("SMTP_CLAMAV_TIMEOUT")
   end
 
-  test "disabled without an address" do
-    assert_not MailOnRails::ClamavScanner.enabled?
+  test "enabled by default at the clamav accessory address, empty string disables" do
+    with_scanner_at(nil) do
+      assert MailOnRails::ClamavScanner.enabled?
+      assert_equal MailOnRails::ClamavScanner::DEFAULT_ADDR, MailOnRails::ClamavScanner.addr
+    end
+    with_scanner_at("") { assert_not MailOnRails::ClamavScanner.enabled? }
     with_scanner_at("127.0.0.1:3310") { assert MailOnRails::ClamavScanner.enabled? }
   end
 

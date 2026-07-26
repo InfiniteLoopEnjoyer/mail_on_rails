@@ -56,10 +56,12 @@ servers:
         # add/remove; exim re-reads it per connection - no exim redeploy.
         MAIL_ON_RAILS_EXIM_DOMAINS_FILE: /rails/shared/local_domains
 
-        # clamd accessory (see accessories below), reached by container name
-        # over the kamal docker network. Unset to disable app-side virus
-        # scanning (mailroom inbound scan + IMAP APPEND).
-        SMTP_CLAMAV_ADDR: mail_on_rails-clamav:3310
+        # App-side virus scanning (mailroom inbound scan + IMAP APPEND)
+        # needs no address here: the clamav accessory (see accessories
+        # below) always boots before the app, so the app defaults
+        # SMTP_CLAMAV_ADDR to mail_on_rails-clamav:3310 (its container name
+        # on the kamal docker network). Set "" to disable scanning.
+        # SMTP_CLAMAV_ADDR: ""
 
         # rspamd accessory (see accessories below), reached by container name
         # over the kamal docker network. The mailroom POSTs each inbound

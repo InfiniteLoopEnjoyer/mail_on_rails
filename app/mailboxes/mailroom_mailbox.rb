@@ -15,7 +15,8 @@ require "mail_on_rails/rspamd_analyzer"
 # app recomputes both verdicts itself, unconditionally:
 #   - Sender-auth (SPF/DKIM/DMARC) via rspamd from the stamped connection
 #     facts, when SMTP_RSPAMD_ADDR is set;
-#   - Virus scanning via clamav, when SMTP_CLAMAV_ADDR is set.
+#   - Virus scanning via clamav, on by default (SMTP_CLAMAV_ADDR defaults
+#     to the clamav accessory; "" disables).
 # Anything not clean is filed into the account's Quarantine mailbox for
 # review instead of INBOX, deduped by Message-ID because a retrying sender
 # re-sends the same message for days.

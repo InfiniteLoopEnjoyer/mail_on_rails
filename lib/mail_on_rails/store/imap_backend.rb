@@ -109,7 +109,8 @@ module MailOnRails
 
       # APPEND is an authenticated write path with no scan in front of it
       # (unlike inbound mail, which the mailroom scans), so it scans here
-      # (when SMTP_CLAMAV_ADDR is set). Infected uploads are refused - the
+      # (on by default; SMTP_CLAMAV_ADDR="" disables). Infected uploads are
+      # refused - the
       # IMAP server renders the envelope as "NO APPEND failed: ...". A scanner outage stores the message in place flagged
       # "unscanned" rather than refusing or quarantining: this is an
       # authenticated user writing their own Sent/Drafts copies, and hiding
