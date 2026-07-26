@@ -39,5 +39,8 @@ html
         .mb-4.rounded-lg.bg-green-100.px-4.py-2.text-sm.text-green-700= flash[:notice]
       - if flash[:alert]
         .mb-4.rounded-lg.bg-red-100.px-4.py-2.text-sm.text-red-700= flash[:alert]
+
     = yield
+
     = console if Rails.env.development?
+    
