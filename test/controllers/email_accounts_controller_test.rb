@@ -18,6 +18,16 @@ class EmailAccountsControllerTest < ActionDispatch::IntegrationTest
     assert_select ".primary", text: @account.email
   end
 
+  test "index shows an unread count when an account has unseen messages" do
+    raw = "From: a@example.com\r\nTo: #{@account.email}\r\nSubject: hi\r\n\r\nbody\r\n"
+    EmailMessage.deliver_raw(@account.inbox, raw)
+    EmailMessage.deliver_raw(@account.inbox, raw, flags: [ "\\Seen" ])
+
+    get root_url
+    assert_response :success
+    assert_select "span", text: "1 unread"
+  end
+
   test "creates an account with the default folders and a generated password shown once" do
     assert_difference "EmailAccount.count", 1 do
       post email_accounts_url, params: { email_account: { email: "dave@example.com", name: "Dave" } }

@@ -12,6 +12,8 @@ header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
         = link_to email_account_path(account), class: "flex items-baseline gap-3 px-4 py-3" do
           span.primary.font-semibold= account.email
           span.truncate.text-slate-500= account.name
+          - if (unseen = @unseen_counts[account.id].to_i).positive?
+            span.rounded-full.bg-accent.px-2.text-xs.whitespace-nowrap.text-white= "#{unseen} unread"
           span.ml-auto.text-xs.whitespace-nowrap.text-slate-500= pluralize(account.mailboxes.size, "folder")
 - else
   p.text-slate-500

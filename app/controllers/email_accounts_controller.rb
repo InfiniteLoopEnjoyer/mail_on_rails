@@ -3,6 +3,10 @@ class EmailAccountsController < ApplicationController
 
   def index
     @email_accounts = EmailAccount.order(:email).includes(:mailboxes)
+    @unseen_counts = EmailMessage.joins(:mailbox)
+                                 .where.not("flags LIKE ?", "%Seen%")
+                                 .group("mailboxes.email_account_id")
+                                 .count
   end
 
   def show
