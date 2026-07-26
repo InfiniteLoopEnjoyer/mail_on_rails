@@ -86,11 +86,14 @@ class UsersControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to users_url
   end
 
-  test "refuses to destroy the signed-in user" do
-    assert_no_difference "User.count" do
+  test "destroying yourself signs you out" do
+    assert_difference "User.count", -1 do
       delete user_url(@user)
     end
-    assert_redirected_to users_url
-    assert flash[:alert].present?
+    assert_redirected_to new_session_url
+    assert_nil User.find_by(id: @user.id)
+
+    get users_url
+    assert_redirected_to new_session_url
   end
 end

@@ -10,13 +10,15 @@ class LayoutTest < ActionDispatch::IntegrationTest
     assert_response :success
 
     assert_select "aside[aria-label='Main navigation']" do
-      assert_select "a", text: "Mail on Rails"
       assert_select "nav a", text: "Domains"
       assert_select "nav a", text: "Mailboxes"
       assert_select "nav a", text: "Users"
-      assert_select "button", text: "Sign out"
     end
-    assert_select "header button[aria-label='Toggle navigation']"
+    assert_select "header" do
+      assert_select "a", text: "Mail on Rails"
+      assert_select "button", text: "Sign out"
+      assert_select "button[aria-label='Toggle navigation']"
+    end
     assert_select "[data-controller='drawer']"
     assert_select "[data-drawer-target='backdrop']"
 

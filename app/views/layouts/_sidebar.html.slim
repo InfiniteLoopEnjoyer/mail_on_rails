@@ -1,9 +1,5 @@
-aside.fixed.inset-y-0.left-0.z-40.flex.w-64.-translate-x-full.flex-col.border-r.border-slate-200.bg-white.transition-transform.duration-200.lg:translate-x-0 data-drawer-target="panel" aria-label="Main navigation"
-  .px-6.py-5
-    = link_to "Mail on Rails", root_path, class: "text-lg font-bold text-accent"
-  nav.flex-1.space-y-1.px-3
+aside.fixed.top-14.bottom-0.left-0.z-40.flex.w-64.-translate-x-full.flex-col.border-r.border-slate-200.bg-white.transition-transform.duration-200.lg:translate-x-0 data-drawer-target="panel" aria-label="Main navigation"
+  nav.flex-1.space-y-1.p-3
     = link_to "Domains", domains_path, class: nav_link_classes(domains_section?)
     = link_to "Mailboxes", root_path, class: nav_link_classes(mailboxes_section?, child: true)
     = link_to "Users", users_path, class: nav_link_classes(users_section?)
-  .border-t.border-slate-200.p-3
-    = button_to "Sign out", session_path, method: :delete, class: "w-full cursor-pointer rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-500 hover:bg-slate-50"
