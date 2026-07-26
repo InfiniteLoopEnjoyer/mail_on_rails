@@ -49,3 +49,6 @@
 # Ignore Docker-related files
 /.dockerignore
 /Dockerfile*
+
+# Production DB dumps pulled via mail_on_rails:remote:db.
+*.dump

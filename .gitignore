@@ -48,3 +48,6 @@
 
 # Deploy run log (may contain host details); never commit.
 /deploy.log
+
+# Production DB dumps pulled via mail_on_rails:remote:db.
+*.dump
