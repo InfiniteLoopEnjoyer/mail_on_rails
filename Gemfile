@@ -90,3 +90,6 @@ end
 
 gem "tailwindcss-rails"
 gem "slim"
+
+# Active Storage variants (attachment thumbnails) [https://guides.rubyonrails.org/active_storage_overview.html#transforming-images]
+gem "image_processing"
