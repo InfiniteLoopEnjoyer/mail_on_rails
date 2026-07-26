@@ -46,6 +46,10 @@ gem "dkim"
 # plain XML are handled with the stdlib. See DmarcReportParser.
 gem "rubyzip", require: "zip"
 
+# Cloudflare API client, used by CloudflareDns/DnsPublisher to publish
+# DNS records for hosted domains [https://github.com/socketry/cloudflare]
+gem "cloudflare"
+
 # The IMAP daemon, extracted to a sibling repo and deployed as its own
 # Kamal service (see docs/store_contract.md). The app needs it only on a
 # dev machine: the :mail_on_rails Puma plugin runs it in-process in

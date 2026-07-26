@@ -51,6 +51,14 @@ if rails_env == "development" || ENV["MAIL_ON_RAILS_SERVERS"] == "true"
   plugin :mail_on_rails
 end
 
+# In development, keep a local clamd docker container running so the
+# mailroom / IMAP APPEND virus scan works without any setup (in the deploy
+# that's the clamav accessory). The plugin handles docker being absent.
+if rails_env == "development"
+  require_relative "../lib/puma/plugin/clamav_dev"
+  plugin :clamav_dev
+end
+
 # Specify the PID file. Defaults to tmp/pids/server.pid in development.
 # In other environments, only set the PID file if requested.
 pidfile ENV["PIDFILE"] if ENV["PIDFILE"]

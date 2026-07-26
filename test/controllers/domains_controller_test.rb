@@ -3,8 +3,8 @@ require "test_helper"
 class DomainsControllerTest < ActionDispatch::IntegrationTest
   setup do
     sign_in_as users(:one)
-    # No MAIL_ON_RAILS_DKIM_DIR / MAIL_ON_RAILS_EXIM_DOMAINS_FILE in test:
-    # key generation and exim sync are no-ops (covered in the model test).
+    # No MAIL_ON_RAILS_EXIM_DOMAINS_FILE in test: the exim sync is a
+    # no-op (covered in the model test); the DKIM key mints into the row.
     @domain = Domain.create!(name: "example.com")
   end
 

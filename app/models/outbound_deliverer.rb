@@ -93,7 +93,7 @@ class OutboundDeliverer
     domain = signing_domain(message)
     return message.data if domain.blank?
 
-    pem = Domain.find_by(name: domain)&.dkim_private_key || legacy_key_file(domain)
+    pem = Domain.find_by(name: domain)&.dkim_private_key
     if pem.blank?
       Rails.logger.warn "[mail_on_rails] outbound to <#{message.recipient}> goes out UNSIGNED: " \
                         "no DKIM key for #{domain} - add the domain in the Domains UI to generate one"
@@ -110,16 +110,6 @@ class OutboundDeliverer
     Rails.logger.warn "[mail_on_rails] outbound to <#{message.recipient}> goes out UNSIGNED: " \
                       "signing failed (#{e.class}: #{e.message})"
     message.data
-  end
-
-  # TRANSITIONAL (remove after the DB migration has shipped): pre-migration
-  # deployments kept keys as <domain>.pem files under MAIL_ON_RAILS_DKIM_DIR.
-  def legacy_key_file(domain)
-    dir = ENV["MAIL_ON_RAILS_DKIM_DIR"]
-    return nil if dir.blank?
-
-    path = File.join(dir, "#{domain}.pem")
-    File.read(path) if File.exist?(path)
   end
 
   def signing_domain(message)

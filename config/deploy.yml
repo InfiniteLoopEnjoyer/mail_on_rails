@@ -44,11 +44,11 @@ servers:
         # generation in config/environments/production.rb).
         MAIL_ON_RAILS_WEB_HOST: www.example.com
 
-        # Outbound DKIM signing: <domain>.pem private keys live on the storage
-        # volume; the public halves are published as
-        # <selector>._domainkey.<domain> TXT records (selector default: rail).
-        # The Domains admin UI generates keys here on domain creation.
-        MAIL_ON_RAILS_DKIM_DIR: /rails/storage/dkim
+        # Outbound DKIM signing needs no config here: private keys live
+        # encrypted in the domains table (minted by the Domains admin UI on
+        # domain creation); the public halves are published as
+        # <selector>._domainkey.<domain> TXT records (selector default:
+        # rail, override with MAIL_ON_RAILS_DKIM_SELECTOR).
 
         # The exim edge's hosted-domains list, on the mailconf volume shared
         # with the mail_on_rails_exim service (mounted there at

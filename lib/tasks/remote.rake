@@ -2,8 +2,9 @@
 #
 #   bin/rails mail_on_rails:remote:db     # dump the prod primary DB (compressed), import into the dev DB,
 #                                         # then ask whether to keep the dump file (KEEP=1/0 skips the prompt)
-#   bin/rails mail_on_rails:remote:dkim   # fetch the prod DKIM keys into the local key dir,
-#                                         # asking before overwriting any key that differs
+#
+# DKIM keys ride along: they live encrypted in the domains table, and this
+# machine holds the same config/master.key, so the imported rows decrypt.
 #
 # The remote host comes from config/deploy.prod.yml (servers.web.hosts[0]);
 # override with REMOTE_HOST=... . The dump travels compressed (pg_dump -Fc,
@@ -16,13 +17,11 @@
 namespace :mail_on_rails do
   namespace :remote do
     require "rainbow"
-    require "tmpdir"
 
     module RemotePull
       module_function
 
       DB_CONTAINER = "mail_on_rails-db"
-      STORAGE_VOLUME_DIR = "/var/lib/docker/volumes/mail_on_rails_storage/_data"
 
       def host
         ENV["REMOTE_HOST"].presence || begin
@@ -93,40 +92,6 @@ namespace :mail_on_rails do
         File.delete(dump)
         RemotePull.ok "Deleted #{dump}"
       end
-    end
-
-    desc "Fetch the production DKIM keys into the local key directory"
-    task dkim: :environment do
-      abort Rainbow("refusing: development only").red unless Rails.env.development?
-
-      host = RemotePull.host
-      local_dir = Rails.root.join(ENV.fetch("MAIL_ON_RAILS_DKIM_DIR", "storage/dkim"))
-      FileUtils.mkdir_p(local_dir)
-
-      RemotePull.step "Fetching DKIM keys from #{host}:#{RemotePull::STORAGE_VOLUME_DIR}/dkim ..."
-      Dir.mktmpdir do |tmp|
-        fetched = system("ssh root@#{host} 'tar czf - -C #{RemotePull::STORAGE_VOLUME_DIR} dkim' | tar xzf - -C #{tmp}")
-        abort Rainbow("fetch failed (is the storage volume path right?)").red unless fetched
-
-        Dir[File.join(tmp, "dkim", "*")].sort.each do |file|
-          name = File.basename(file)
-          target = local_dir.join(name)
-          if !File.exist?(target)
-            FileUtils.cp(file, target)
-            File.chmod(0o600, target)
-            RemotePull.ok "  #{name}: fetched"
-          elsif File.read(target) == File.read(file)
-            puts "  #{name}: unchanged"
-          elsif RemotePull.ask?("  #{name}: local copy DIFFERS - overwrite with the production key?")
-            FileUtils.cp(file, target)
-            File.chmod(0o600, target)
-            RemotePull.warn "  #{name}: overwritten"
-          else
-            RemotePull.warn "  #{name}: kept local copy"
-          end
-        end
-      end
-      RemotePull.ok "Keys are in #{local_dir}"
     end
   end
 end

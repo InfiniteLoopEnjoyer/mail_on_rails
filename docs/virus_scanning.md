@@ -21,10 +21,12 @@ Both stream the whole raw RFC822 message via clamd's INSTREAM protocol
 **on by default**: the clamav accessory always boots before the app, so
 `SMTP_CLAMAV_ADDR` defaults to `mail_on_rails-clamav:3310` (the
 accessory's container name on the kamal docker network) and only needs
-setting to override — `""` disables scanning (the test suite pins it to
-`""`; in dev outside docker the default hostname doesn't resolve, so
-either run a local clamd or set `""`). The edge path is enabled wherever
-`EXIM_CLAMAV_ADDR` is set and disabled where it isn't.
+setting to override — `""` disables scanning. The test suite pins it to
+`""`; in development the `clamav_dev` Puma plugin
+(`lib/puma/plugin/clamav_dev.rb`) manages a local `clamav-dev` docker
+container and repoints the env at it (or pins `""` when docker is
+unavailable), so dev scanning works with no setup. The edge path is
+enabled wherever `EXIM_CLAMAV_ADDR` is set and disabled where it isn't.
 
 ## Policy
 
@@ -75,10 +77,14 @@ AV doesn't eat your checkout (the two halves below are inert):
   as the body — expect `550 message rejected: virus detected
   (Eicar-Signature)` after the final `.`. Stop `clamav-smoke` and resend:
   expect `451`. (This is also verified live after each edge deploy.)
-- **App path**: `SMTP_CLAMAV_ADDR=127.0.0.1:3310 bin/dev`, then submit an
-  EICAR message through the Action Mailbox conductor at
+- **App path**: automatic in development — booting the server starts (or
+  reuses) the `clamav-dev` container via the `clamav_dev` Puma plugin and
+  points `SMTP_CLAMAV_ADDR` at it, so the manual `docker run` above isn't
+  needed. Submit an EICAR message through the Action Mailbox conductor at
   `/rails/conductor/action_mailbox/inbound_emails` — expect a Quarantine
-  row with `virus_name` in the web UI instead of an INBOX delivery.
+  row with `virus_name` in the web UI instead of an INBOX delivery. The
+  container is left running across server restarts (clamd cold starts are
+  slow); `docker stop clamav-dev` reclaims its ~1.5 GB when done.
 
 ## Ops notes
 

@@ -13,8 +13,9 @@ module MailOnRails
   # unreachable/timeout/unparseable answer). Never raises - callers decide
   # policy. Enabled by default: the clamav Kamal accessory always boots
   # before the app, so DEFAULT_ADDR is reachable in any deployed container.
-  # SMTP_CLAMAV_ADDR overrides it; set it to "" to disable scanning (e.g.
-  # dev outside docker, where the accessory hostname doesn't resolve).
+  # SMTP_CLAMAV_ADDR overrides it; set it to "" to disable scanning. In
+  # development the clamav_dev Puma plugin repoints it at a local container
+  # (or "" when docker is unavailable); the test suite pins "".
   # Read per call: no Ractors here, and tests can toggle it.
   module ClamavScanner
     Result = Struct.new(:status, :virus) do

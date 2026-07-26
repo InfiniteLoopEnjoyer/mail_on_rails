@@ -33,8 +33,11 @@ verified/unverified badges in the UI.
 
 In development the IMAP daemon is a path dependency (the `:daemons` Gemfile
 group) and runs in-process on a background thread via the `:mail_on_rails`
-Puma plugin, so `bin/dev` brings up web + IMAP in one process. The SMTP
-edge is a Docker/Exim service and runs on its own (see the exim repo).
+Puma plugin, so `bin/dev` brings up web + IMAP in one process. A second
+dev-only Puma plugin (`:clamav_dev`) keeps a local `clamav-dev` docker
+container running so virus scanning works too — with no docker it logs a
+note and leaves scanning off. The SMTP edge is a Docker/Exim service and
+runs on its own (see the exim repo).
 
 ## Running the test suite
 

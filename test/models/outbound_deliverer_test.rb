@@ -54,20 +54,6 @@ class OutboundDelivererTest < ActiveSupport::TestCase
     assert_includes warnings, "nokey.test"
   end
 
-  # TRANSITIONAL (remove with OutboundDeliverer#legacy_key_file): a domain
-  # not yet backfilled into the DB still signs from its pem file.
-  test "legacy key files still sign while the migration ships" do
-    dir = Dir.mktmpdir
-    ENV["MAIL_ON_RAILS_DKIM_DIR"] = dir
-    File.write(File.join(dir, "legacy.test.pem"), DkimKey.generate_pem)
-
-    signed = @deliverer.send(:signed, outbound(mail_from: "user@legacy.test", from_header: "user@legacy.test"))
-    assert_match(/^DKIM-Signature:.*d=legacy\.test;/m, signed)
-  ensure
-    ENV.delete("MAIL_ON_RAILS_DKIM_DIR")
-    FileUtils.remove_entry(dir)
-  end
-
   test "unsignable data goes out unsigned with a warning rather than raising" do
     Domain.create!(name: "envelope.test")
     raw = SmtpOutboundMessage.new(mail_from: "user@envelope.test", recipient: "rcpt@remote.test",
