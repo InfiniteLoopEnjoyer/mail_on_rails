@@ -43,10 +43,29 @@ class EmailMessagesControllerTest < ActionDispatch::IntegrationTest
     show(message)
     assert_response :success
     assert message.reload.seen?
+    assert_select "[data-controller=mark-read]", 0
 
     show(message)
     assert_response :success
     assert_equal [ "\\Seen" ], message.reload.flags
+  end
+
+  test "a hover-prefetch does not mark the message seen" do
+    message = EmailMessage.deliver_raw(@account.inbox, RAW)
+
+    get email_account_mailbox_email_message_url(@account, message.mailbox, message),
+        headers: { "X-Sec-Purpose" => "prefetch" }
+    assert_response :success
+    assert_not message.reload.seen?
+    assert_select "[data-controller=mark-read]", 1
+  end
+
+  test "mark_read marks the message seen" do
+    message = EmailMessage.deliver_raw(@account.inbox, RAW)
+
+    post mark_read_email_account_mailbox_email_message_url(@account, message.mailbox, message)
+    assert_response :no_content
+    assert message.reload.seen?
   end
 
   test "omits the footer for a message with no verdicts" do

@@ -45,7 +45,11 @@ Rails.application.routes.draw do
       post :generate_password
     end
     resources :mailboxes, except: %i[index] do
-      resources :email_messages, only: %i[show], path: "messages"
+      resources :email_messages, only: %i[show], path: "messages" do
+        member do
+          post :mark_read
+        end
+      end
     end
   end
 end

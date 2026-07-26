@@ -1,5 +1,10 @@
 - page_title "#{@email_message.subject.presence || "(no subject)"}"
 
+/ Present only when show skipped mark_seen! (hover-prefetch) - the POST fires
+/ once the user actually opens the message.
+- unless @email_message.seen?
+  div data-controller="mark-read" data-mark-read-url-value=mark_read_email_account_mailbox_email_message_path(@email_account, @mailbox, @email_message)
+
 nav.mb-2.text-sm.text-slate-500
   =<> link_to "Accounts", root_path, class: "text-accent"
   | /
