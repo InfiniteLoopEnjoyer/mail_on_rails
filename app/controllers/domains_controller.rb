@@ -1,5 +1,5 @@
 class DomainsController < ApplicationController
-  before_action :set_domain, only: %i[show destroy]
+  before_action :set_domain, only: %i[show destroy publish_dns]
 
   def index
     @domains = Domain.order(:name)
@@ -23,6 +23,21 @@ class DomainsController < ApplicationController
     else
       render :new, status: :unprocessable_entity
     end
+  end
+
+  # Explicit admin action: create this domain's missing DNS records in
+  # Cloudflare (see DnsPublisher for what is and isn't touched).
+  def publish_dns
+    unless CloudflareDns.enabled?
+      return redirect_to @domain, alert: "CLOUDFLARE_API_TOKEN is not configured."
+    end
+
+    result = DnsPublisher.publish!(@domain)
+    notice = result.actions.any? ? "Cloudflare: #{result.actions.join("; ")}." : "Cloudflare: nothing to publish."
+    notice += " Skipped: #{result.skipped.join("; ")}." if result.skipped.any?
+    redirect_to @domain, notice: notice
+  rescue CloudflareDns::Error => e
+    redirect_to @domain, alert: "Cloudflare publish failed: #{e.message}"
   end
 
   def destroy

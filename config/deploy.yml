@@ -99,6 +99,10 @@ env:
   secret:
     - RAILS_MASTER_KEY
     - POSTGRES_PASSWORD
+    # Cloudflare API token (Zone:Read + DNS:Edit over the hosted zones)
+    # for the Domains UI's "Publish DNS" button - see DnsPublisher. Unset
+    # = the button is hidden; nothing else uses it.
+    - CLOUDFLARE_API_TOKEN
   clear:
     # Database (postgres accessory below, reached over its Unix socket).
     # The rest of the connection config lives in config/database.yml.

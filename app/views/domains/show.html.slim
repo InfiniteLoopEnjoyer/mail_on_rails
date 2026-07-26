@@ -10,6 +10,8 @@ nav.mb-2.text-sm.text-slate-500
 header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
   h1.text-2xl.font-bold= @domain.name
   .flex.items-center.gap-2
+    - if CloudflareDns.enabled?
+      = button_to "Publish DNS to Cloudflare", publish_dns_domain_path(@domain), class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white", form: { data: { turbo_confirm: "Create #{@domain.name}'s missing DNS records in Cloudflare? Existing MX/SPF/DMARC records are never overwritten; only a mismatched DKIM TXT is updated." } }
     = button_to "Delete", domain_path(@domain), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 bg-white px-3.5 py-1 text-sm font-medium text-red-700", form: { data: { turbo_confirm: "Remove #{@domain.name}? Exim will immediately refuse inbound mail for it and outbound mail stops being DKIM-signed." } }
 
 .mb-4.flex.flex-wrap.gap-2

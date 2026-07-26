@@ -41,6 +41,12 @@ class DomainsControllerTest < ActionDispatch::IntegrationTest
     assert_match "v=spf1 mx -all", response.body
   end
 
+  test "publish_dns without a Cloudflare token redirects with an alert" do
+    post publish_dns_domain_url(@domain)
+    assert_redirected_to domain_url(@domain)
+    assert_match(/CLOUDFLARE_API_TOKEN/, flash[:alert])
+  end
+
   test "destroys a domain" do
     assert_difference "Domain.count", -1 do
       delete domain_url(@domain)

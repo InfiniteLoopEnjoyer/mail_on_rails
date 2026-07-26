@@ -28,8 +28,13 @@ Rails.application.routes.draw do
   resources :users, except: %i[show]
 
   # Domains we host. Create/destroy rewrites the exim edge's local_domains
-  # file live (shared volume) - see Domain / EximLocalDomains.
-  resources :domains, only: %i[index new create show destroy]
+  # file live (shared volume) - see Domain / EximLocalDomains. publish_dns
+  # creates the domain's missing DNS records in Cloudflare (DnsPublisher).
+  resources :domains, only: %i[index new create show destroy] do
+    member do
+      post :publish_dns
+    end
+  end
 
   resources :email_accounts, path: "accounts" do
     resources :mailboxes, except: %i[index] do
