@@ -43,6 +43,6 @@ section.mt-8
         span.text-sm.font-medium= email_alias.email
         span.ml-auto
           = button_to "Remove", email_account_email_alias_path(@email_account, email_alias), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 bg-white px-3.5 py-1 text-sm font-medium text-red-700", form: { data: { turbo_confirm: "Remove alias #{email_alias.email}? Mail sent to it will be refused." } }
-  = form_with model: [ @email_account, EmailAlias.new ], class: "flex max-w-md items-center gap-2" do |form|
+  = form_with model: [ @email_account, EmailAlias.new ], class: "flex max-w-lg items-center gap-2" do |form|
     = form.email_field :email, required: true, placeholder: "alias@#{@email_account.email.split("@").last}", class: "w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
     = form.submit "Add alias", class: "inline-block cursor-pointer whitespace-nowrap rounded-md border border-accent bg-accent px-3.5 py-1.5 text-sm font-medium text-white"
