@@ -17,10 +17,10 @@ p.mb-3.text-sm.text-slate-500
 - @exim_files.each do |file|
   section.mb-4.rounded-lg.border.border-slate-200.bg-white
     header.flex.flex-wrap.items-center.gap-2.border-b.border-slate-200.px-4.py-3
-      h3.font-semibold= file.label
-      .ml-auto.flex.flex-wrap.items-center.gap-2
-        - if file.configured?
-          = button_to "Sync now", sync_settings_path(file: file.key), class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white"
+      h3
+        span.font-semibold
+          = file.label
+
         - if !file.configured?
           span.rounded-full.bg-slate-200.px-2.py-0.5.text-xs.text-slate-600
             = "#{file.env_var} not set"
@@ -30,8 +30,18 @@ p.mb-3.text-sm.text-slate-500
           span.rounded-full.bg-green-100.px-2.py-0.5.text-xs.text-green-700 in sync
         - else
           span.rounded-full.bg-red-100.px-2.py-0.5.text-xs.text-red-700 diverged
+      
+      .ml-auto.flex.flex-wrap.items-center.gap-2
+        
+        - if file.configured?
+          = button_to "Sync now", sync_settings_path(file: file.key), class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white"
+        
+
+    
     .px-4.py-3
+      
       p.mb-3.text-sm.text-slate-500= file.description
+      
       - if file.configured?
         dl class="mb-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm"
           dt.text-slate-500 Path
@@ -42,10 +52,12 @@ p.mb-3.text-sm.text-slate-500
               = "#{time_ago_in_words(file.mtime)} ago"
               span.text-slate-400<= file.mtime.utc.strftime(" (%Y-%m-%d %H:%M UTC)")
         - if file.exists?
+          
           - if file.lines.any?
             pre.overflow-x-auto.rounded-md.bg-slate-50.p-3.font-mono.text-xs.leading-5= file.lines.join("\n")
           - else
             p.text-sm.text-amber-700 The file is empty - exim answers 550 for every entry it would otherwise match.
+          
           - if file.missing.any?
             p.mt-2.text-sm.text-red-700
               strong In the database but not the file (exim rejects these):
