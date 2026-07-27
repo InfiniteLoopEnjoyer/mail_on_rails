@@ -16,12 +16,12 @@ class TwoFactor::TotpControllerTest < ActionDispatch::IntegrationTest
     secret = css_select("code").first.text
 
     post two_factor_totp_path, params: { code: ROTP::TOTP.new(secret).now }
-    assert_redirected_to security_path
+    assert_redirected_to edit_user_path(@user)
     assert @user.reload.otp_enabled?
     assert_equal secret, @user.otp_secret
 
     delete two_factor_totp_path
-    assert_redirected_to security_path
+    assert_redirected_to edit_user_path(@user)
     assert_not @user.reload.otp_enabled?
   end
 

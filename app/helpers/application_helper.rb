@@ -7,9 +7,8 @@ module ApplicationHelper
   # Section predicates for the sidebar nav. Mailboxes is the child of Domains
   # and owns the whole account/mailbox/message drill-down.
   def domains_section?   = controller_name == "domains"
-  def users_section?     = controller_name == "users"
+  def users_section?     = controller_name == "users" || controller_path.start_with?("two_factor/")
   def settings_section?  = controller_name == "settings"
-  def security_section?  = controller_name == "security" || controller_path.start_with?("two_factor/")
   def mailboxes_section? = %w[email_accounts mailboxes email_messages].include?(controller_name)
 
   # Sidebar link classes; child items are indented + a shade lighter to read

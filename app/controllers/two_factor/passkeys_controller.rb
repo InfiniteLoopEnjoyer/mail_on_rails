@@ -1,4 +1,4 @@
-# Passkey enrollment for the signed-in user (see the security page).
+# Passkey enrollment for the signed-in user (see the user edit page).
 # options issues the creation challenge; create verifies the attestation the
 # browser posts back (webauthn_controller.js) and stores the public key.
 class TwoFactor::PasskeysController < ApplicationController
@@ -22,13 +22,13 @@ class TwoFactor::PasskeysController < ApplicationController
       nickname: params[:nickname].presence || "Passkey"
     )
     flash[:notice] = "Passkey registered."
-    render json: { location: security_url }
+    render json: { location: edit_user_url(Current.user) }
   rescue WebAuthn::Error, ActiveRecord::RecordInvalid, ActionController::ParameterMissing
     render json: { error: "Passkey registration failed." }, status: :unprocessable_entity
   end
 
   def destroy
     Current.user.webauthn_credentials.find(params[:id]).destroy!
-    redirect_to security_path, notice: "Passkey removed."
+    redirect_to edit_user_path(Current.user), notice: "Passkey removed."
   end
 end

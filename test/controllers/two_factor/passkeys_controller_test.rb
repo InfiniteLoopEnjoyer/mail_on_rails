@@ -22,14 +22,14 @@ class TwoFactor::PasskeysControllerTest < ActionDispatch::IntegrationTest
       post two_factor_passkeys_path, params: { credential: credential, nickname: "Test key" }, as: :json
     end
     assert_response :success
-    assert_equal security_url, response.parsed_body["location"]
+    assert_equal edit_user_url(@user), response.parsed_body["location"]
 
     passkey = @user.webauthn_credentials.last
     assert_equal "Test key", passkey.nickname
     assert @user.reload.webauthn_id.present?, "user handle minted on first registration"
 
     delete two_factor_passkey_path(passkey)
-    assert_redirected_to security_path
+    assert_redirected_to edit_user_path(@user)
     assert_not WebauthnCredential.exists?(passkey.id)
   end
 

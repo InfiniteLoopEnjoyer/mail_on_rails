@@ -16,15 +16,16 @@ class LayoutTest < ActionDispatch::IntegrationTest
     end
     assert_select "header" do
       assert_select "a", text: "Mail on Rails"
+      assert_select "a[href=?]", edit_user_path(users(:one)), text: "Profile"
       assert_select "button", text: "Sign out"
       assert_select "button[aria-label='Toggle navigation']"
     end
     assert_select "[data-controller='drawer']"
     assert_select "[data-drawer-target='backdrop']"
 
-    # link order: Domains, then child Mailboxes, then Users, then Security, then Settings
+    # link order: Domains, then child Mailboxes, then Users, then Settings
     links = css_select("aside nav a").map(&:text)
-    assert_equal %w[Domains Mailboxes Users Security Settings], links
+    assert_equal %w[Domains Mailboxes Users Settings], links
   end
 
   test "mailboxes child link is active on root, domains link active on domains" do

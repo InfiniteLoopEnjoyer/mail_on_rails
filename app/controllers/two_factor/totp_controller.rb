@@ -18,7 +18,7 @@ class TwoFactor::TotpController < ApplicationController
     if timestep
       Current.user.update!(otp_secret: secret, otp_last_used_at: timestep)
       session.delete(:pending_totp_secret)
-      redirect_to security_path, notice: "Authenticator app enabled."
+      redirect_to edit_user_path(Current.user), notice: "Authenticator app enabled."
     else
       redirect_to new_two_factor_totp_path, alert: "That code didn't match. Scan the QR code and try again."
     end
@@ -26,6 +26,6 @@ class TwoFactor::TotpController < ApplicationController
 
   def destroy
     Current.user.update!(otp_secret: nil, otp_last_used_at: nil)
-    redirect_to security_path, notice: "Authenticator app disabled."
+    redirect_to edit_user_path(Current.user), notice: "Authenticator app disabled."
   end
 end

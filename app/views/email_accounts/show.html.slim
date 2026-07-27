@@ -27,10 +27,12 @@ ul
       = link_to email_account_mailbox_path(@email_account, mailbox), class: "flex items-baseline gap-3 px-4 py-3" do
         span.primary.font-semibold= mailbox.name
         span.ml-auto.text-xs.whitespace-nowrap.text-slate-500
-          => pluralize(mailbox.email_messages.count, "message")
+          - total = mailbox.email_messages.count
           - if (unseen = mailbox.unseen_count).positive?
             span.rounded-full.bg-accent.px-2.text-xs.text-white
-              = "#{unseen} unread"
+              = "#{unseen} new / #{total}"
+          - else
+            = total
 
 section.mt-8
   h2.text-lg.font-bold Aliases
@@ -42,5 +44,5 @@ section.mt-8
         span.ml-auto
           = button_to "Remove", email_account_email_alias_path(@email_account, email_alias), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 bg-white px-3.5 py-1 text-sm font-medium text-red-700", form: { data: { turbo_confirm: "Remove alias #{email_alias.email}? Mail sent to it will be refused." } }
   = form_with model: [ @email_account, EmailAlias.new ], class: "flex max-w-md items-center gap-2" do |form|
-    = form.email_field :email, required: true, placeholder: "alias@#{@email_account.email.split("@").last}", class: "w-full rounded-md border border-slate-200 bg-slate-100 px-2.5 py-1.5 text-sm"
+    = form.email_field :email, required: true, placeholder: "alias@#{@email_account.email.split("@").last}", class: "w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
     = form.submit "Add alias", class: "inline-block cursor-pointer whitespace-nowrap rounded-md border border-accent bg-accent px-3.5 py-1.5 text-sm font-medium text-white"

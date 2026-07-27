@@ -34,6 +34,24 @@ class UsersControllerTest < ActionDispatch::IntegrationTest
     assert_not_includes response.body, plaintext
   end
 
+  test "editing your own account shows passkeys and totp state" do
+    @user.webauthn_credentials.create!(external_id: "abc", public_key: "pk", nickname: "My YubiKey")
+
+    get edit_user_url(@user)
+
+    assert_response :success
+    assert_match "My YubiKey", response.body
+    assert_match "Set up authenticator app", response.body
+  end
+
+  test "editing another user hides the two-factor sections" do
+    get edit_user_url(users(:two))
+
+    assert_response :success
+    assert_no_match "Set up authenticator app", response.body
+    assert_no_match "Register passkey", response.body
+  end
+
   test "rejects a duplicate email address" do
     assert_no_difference "User.count" do
       post users_url, params: { user: { email_address: @user.email_address } }
