@@ -67,7 +67,9 @@ Rails.application.routes.draw do
 
   # Operational internals (exim's shared-volume files, ...) - see
   # SettingsController.
-  resource :settings, only: :show
+  resource :settings, only: :show do
+    post :sync
+  end
 
 
 

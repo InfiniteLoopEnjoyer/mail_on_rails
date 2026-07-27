@@ -8,17 +8,19 @@ p.mb-3.text-sm.text-slate-500
   ' These are the files this app writes on the mailconf volume shared with
   ' the exim container, shown exactly as exim reads them (re-read per
   ' connection, no restart). Drift against the database means a sync was
-  ' skipped or failed - reconcile with
+  ' skipped or failed - reconcile with each file's Sync button (or
   code.rounded.bg-slate-100.px-1 bin/rails mail_on_rails:domains:sync
   '  /
   code.rounded.bg-slate-100.px-1 bin/rails mail_on_rails:recipients:sync
-  ' .
+  ' ).
 
 - @exim_files.each do |file|
   section.mb-4.rounded-lg.border.border-slate-200.bg-white
     header.flex.flex-wrap.items-center.gap-2.border-b.border-slate-200.px-4.py-3
       h3.font-semibold= file.label
-      .ml-auto.flex.flex-wrap.gap-2
+      .ml-auto.flex.flex-wrap.items-center.gap-2
+        - if file.configured?
+          = button_to "Sync now", sync_settings_path(file: file.key), class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white"
         - if !file.configured?
           span.rounded-full.bg-slate-200.px-2.py-0.5.text-xs.text-slate-600
             = "#{file.env_var} not set"
