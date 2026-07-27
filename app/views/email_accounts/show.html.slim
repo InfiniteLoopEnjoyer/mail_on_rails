@@ -30,8 +30,7 @@ ul
         span.ml-auto.text-xs.whitespace-nowrap.text-slate-500
           - total = mailbox.email_messages.count
           - if (unseen = mailbox.unseen_count).positive?
-            span.rounded-full.bg-accent.px-2.text-xs.text-white
-              = "#{unseen} new / #{total}"
+            = "#{unseen} new / #{total}"
           - else
             = total
 
