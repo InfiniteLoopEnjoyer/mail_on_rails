@@ -25,9 +25,9 @@ p.mb-3.text-sm.text-slate-500
         - elsif !file.exists?
           span.rounded-full.bg-red-100.px-2.py-0.5.text-xs.text-red-700 file missing - exim defers all inbound
         - elsif file.in_sync?
-          span.rounded-full.bg-green-100.px-2.py-0.5.text-xs.text-green-700 in sync with database
+          span.rounded-full.bg-green-100.px-2.py-0.5.text-xs.text-green-700 in sync
         - else
-          span.rounded-full.bg-red-100.px-2.py-0.5.text-xs.text-red-700 drifted from database
+          span.rounded-full.bg-red-100.px-2.py-0.5.text-xs.text-red-700 diverged
     .px-4.py-3
       p.mb-3.text-sm.text-slate-500= file.description
       - if file.configured?
