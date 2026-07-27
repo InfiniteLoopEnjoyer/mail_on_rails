@@ -31,13 +31,13 @@ class SettingsControllerTest < ActionDispatch::IntegrationTest
 
       get settings_url
       assert_response :success
-      assert_select "span", text: "in sync"
+      assert_select "span", text: "Synced"
       assert_select "pre", text: /settings@example\.test/
 
       # Drift both ways: a file entry with no row, a row not in the file.
       File.write(ENV["MAIL_ON_RAILS_EXIM_RECIPIENTS_FILE"], "ghost@example.test\n")
       get settings_url
-      assert_select "span", text: "diverged"
+      assert_select "span", text: "Diverged"
       assert_select "p", text: /exim rejects these\):\s*#{Regexp.escape(account.email)}/
       assert_select "p", text: /exim still accepts these\):\s*ghost@example\.test/
     end
