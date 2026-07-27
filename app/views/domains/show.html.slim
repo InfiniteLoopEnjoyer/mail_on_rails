@@ -32,37 +32,33 @@ p.mb-3.text-sm.text-slate-500
 
 - dns_status = @dns.checks.index_by(&:record)
 - status_badges = { pass: [ "published", "bg-green-100 text-green-700" ], warn: [ "verify", "bg-yellow-100 text-yellow-700" ], fail: [ "missing/wrong", "bg-red-100 text-red-700" ], unknown: [ "unknown", "bg-slate-200 text-slate-600" ] }
-.mb-4.overflow-x-auto.rounded-lg.border.border-slate-200.bg-white
-  table.w-full.text-left.text-sm
-    thead
-      tr.border-b.border-slate-200.text-xs.text-slate-500
-        th.px-4.py-2 Type
-        th.px-4.py-2 Name
-        th.px-4.py-2 Value
-        th.px-4.py-2 Status
-    tbody
-      - rows = [ [ "MX", "MX", @domain.name, "10 #{mail_host}." ], [ "TXT (SPF)", "SPF", @domain.name, "v=spf1 mx -all" ], [ "TXT (DKIM)", "DKIM", @domain.dkim_txt_name, nil ], [ "TXT (DMARC)", "DMARC", "_dmarc.#{@domain.name}", "v=DMARC1; p=none; rua=mailto:#{@domain.dmarc_address}" ] ]
-      - rows.each do |label, key, record_name, value|
-        - c = dns_status[key]
-        tr.border-b.border-slate-100
-          td.px-4.py-2.font-semibold= label
-          td.px-4.py-2: code= record_name
-          td.px-4.py-2
-            - if key == "DKIM"
-              - if @domain.dkim_private_key.present?
-                code.break-all= @domain.dkim_txt_value
-              - else
-                span.text-slate-500 (no key on this server)
+.mb-4.divide-y.divide-slate-100.rounded-lg.border.border-slate-200.bg-white
+  - rows = [ [ "MX", "MX", @domain.name, "10 #{mail_host}." ], [ "TXT (SPF)", "SPF", @domain.name, "v=spf1 mx -all" ], [ "TXT (DKIM)", "DKIM", @domain.dkim_txt_name, nil ], [ "TXT (DMARC)", "DMARC", "_dmarc.#{@domain.name}", "v=DMARC1; p=none; rua=mailto:#{@domain.dmarc_address}" ] ]
+  - rows.each do |label, key, record_name, value|
+    - c = dns_status[key]
+    - badge_text, badge_class = status_badges[c.status]
+    .p-4
+      .mb-2.flex.flex-wrap.items-center.gap-2
+        span.text-sm.font-semibold= label
+        span.rounded-full.px-2.py-0.5.text-xs.whitespace-nowrap class=badge_class
+          = badge_text
+      .space-y-1.text-sm
+        .flex.gap-3
+          span.w-12.shrink-0.pt-0.5.text-xs.text-slate-500 Name
+          code.break-all= record_name
+        .flex.gap-3
+          span.w-12.shrink-0.pt-0.5.text-xs.text-slate-500 Value
+          - if key == "DKIM"
+            - if @domain.dkim_private_key.present?
+              code.break-all= @domain.dkim_txt_value
             - else
-              code= value
-          td.px-4.py-2
-            - badge_text, badge_class = status_badges[c.status]
-            span.rounded-full.px-2.py-0.5.text-xs.whitespace-nowrap class=badge_class
-              = badge_text
-            - if c.note
-              p.mt-1.text-xs.text-slate-500= c.note
-            - elsif c.found && c.status == :pass && key != "DMARC"
-              p.mt-1.text-xs.break-all.text-slate-500= c.found
+              span.text-slate-500 (no key on this server)
+          - else
+            code= value
+      - if c.note
+        p.mt-2.text-xs.text-slate-500= c.note
+      - elsif c.found && c.status == :pass && key != "DMARC"
+        p.mt-2.text-xs.break-all.text-slate-500= c.found
 
 p.mb-6.text-xs.text-slate-500
   ' Start with p=none; the monitoring section below tells you when it is
