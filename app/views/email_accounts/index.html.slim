@@ -5,7 +5,8 @@
 header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
   h1.text-2xl.font-bold Email Accounts
   .flex.items-center.gap-2
-    = link_to "New account", new_email_account_path, class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white"
+    = link_to "New email", new_email_path, class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white"
+    = link_to "New account", new_email_account_path, class: "inline-block cursor-pointer rounded-md border border-slate-200 bg-white px-3.5 py-1 text-sm font-medium text-slate-800"
 
 - if @email_accounts.any?
   ul

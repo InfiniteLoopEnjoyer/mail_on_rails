@@ -86,6 +86,9 @@ Rails.application.routes.draw do
     end
   end
 
+  # Web-UI compose (ComposedEmail); ?from= preselects the sending account.
+  resources :emails, only: %i[new create]
+
   resources :email_accounts, path: "accounts" do
     member do
       post :generate_password

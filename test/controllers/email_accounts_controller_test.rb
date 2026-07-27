@@ -35,6 +35,24 @@ class EmailAccountsControllerTest < ActionDispatch::IntegrationTest
     assert_select "span", text: "1 unread"
   end
 
+  test "account page shows unseen/total per mailbox, or just the total when all seen" do
+    raw = "From: a@example.com\r\nTo: #{@account.email}\r\nSubject: hi\r\n\r\nbody\r\n"
+    EmailMessage.deliver_raw(@account.inbox, raw)
+    EmailMessage.deliver_raw(@account.inbox, raw, flags: [ "\\Seen" ])
+    sent = @account.mailboxes.find_by!(name: "Sent")
+    EmailMessage.deliver_raw(sent, raw, flags: [ "\\Seen" ])
+
+    get email_account_url(@account)
+
+    assert_response :success
+    assert_select "span", text: "1 new / 2"
+    assert_select "li" do |items|
+      sent_row = items.find { |li| li.text.include?("Sent") }
+      assert_includes sent_row.text, "1"
+      assert_not_includes sent_row.text, "new /"
+    end
+  end
+
   test "creates an account with the default folders and a generated password shown once" do
     assert_difference "EmailAccount.count", 1 do
       post email_accounts_url, params: { email_account: { email: "dave@example.com", name: "Dave" } }
