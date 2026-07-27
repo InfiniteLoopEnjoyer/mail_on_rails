@@ -5,8 +5,10 @@ class EmailAccount < ApplicationRecord
   include GeneratedPassword
 
   has_many :mailboxes, dependent: :destroy
+  has_many :email_aliases, dependent: :destroy
 
   validates :email, presence: true, uniqueness: { case_sensitive: false }
+  validate :email_not_an_alias_address
 
   normalizes :email, with: ->(email) { email.strip.downcase }
 
@@ -47,5 +49,12 @@ class EmailAccount < ApplicationRecord
 
   def sync_exim_recipients
     EximLocalRecipients.sync!
+  end
+
+  # Mirror of EmailAlias#email_not_an_account_address - an address can be
+  # an account or an alias, never both. Own aliases count too: renaming an
+  # account onto one of its aliases would shadow that alias forever.
+  def email_not_an_alias_address
+    errors.add(:email, "is already in use as an alias") if email.present? && EmailAlias.exists?(email: email)
   end
 end

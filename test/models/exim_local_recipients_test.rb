@@ -29,6 +29,14 @@ class EximLocalRecipientsTest < ActiveSupport::TestCase
     assert_equal 0o644, File.stat(@path).mode & 0o777
   end
 
+  test "aliases are interleaved with account addresses" do
+    account = EmailAccount.create!(email: "b@example.test", password: "secret-pass-123")
+    account.email_aliases.create!(email: "a@example.test")
+    account.email_aliases.create!(email: "c@example.test")
+
+    assert_equal %w[a@example.test b@example.test c@example.test], EximLocalRecipients.current
+  end
+
   test "an empty account table writes an empty list without force" do
     assert_equal :written, EximLocalRecipients.sync!
     assert_equal [], EximLocalRecipients.current

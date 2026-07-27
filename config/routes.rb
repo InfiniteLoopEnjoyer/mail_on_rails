@@ -91,6 +91,7 @@ Rails.application.routes.draw do
     member do
       post :generate_password
     end
+    resources :email_aliases, only: %i[create destroy], path: "aliases"
     resources :mailboxes, except: %i[index] do
       resources :email_messages, only: %i[show], path: "messages" do
         member do

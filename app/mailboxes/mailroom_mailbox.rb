@@ -23,9 +23,9 @@ require "mail_on_rails/rspamd_analyzer"
 class MailroomMailbox < ApplicationMailbox
   def process
     verdict = scan_verdict
-    recipients.each do |recipient|
-      account = EmailAccount.find_by(email: recipient.strip.downcase)
-      next unless account
+    # uniq: several recipient addresses (an account plus its aliases) can
+    # resolve to the same account - it still gets exactly one copy.
+    recipients.filter_map { |recipient| resolve_account(recipient.strip.downcase) }.uniq.each do |account|
 
       if verdict && verdict[:status] != "clean"
         quarantine(account, verdict)
@@ -52,6 +52,13 @@ class MailroomMailbox < ApplicationMailbox
   end
 
   private
+
+  # A recipient address is either an account's own address or one of its
+  # aliases (the two sets are kept disjoint by model validations); both
+  # deliver into the account's mailboxes.
+  def resolve_account(address)
+    EmailAccount.find_by(email: address) || EmailAlias.find_by(email: address)&.email_account
+  end
 
   def recipients
     envelope = header_values("X-Original-To")

@@ -12,7 +12,8 @@
 # domain. Unlike EximLocalDomains, an empty list needs no force flag: with
 # zero EmailAccount rows a 550 is the same (correct) answer the rcpt_check
 # endpoint used to give. Addresses are already normalized (strip +
-# downcase) by EmailAccount, matching exim's caseless address-list lookup.
+# downcase) by EmailAccount and EmailAlias, matching exim's caseless
+# address-list lookup.
 class EximLocalRecipients
   class Error < StandardError; end
 
@@ -22,7 +23,7 @@ class EximLocalRecipients
     path = ENV["MAIL_ON_RAILS_EXIM_RECIPIENTS_FILE"]
     return :skipped if path.blank?
 
-    addresses = EmailAccount.order(:email).pluck(:email)
+    addresses = self.addresses
 
     dir = File.dirname(path)
     unless File.writable?(dir)
@@ -41,6 +42,13 @@ class EximLocalRecipients
       File.unlink(tmp) if File.exist?(tmp)
     end
     :written
+  end
+
+  # Every address exim should accept at RCPT time: account addresses plus
+  # aliases (extra addresses that deliver into an account's INBOX). The
+  # cross-model uniqueness validations keep the two sets disjoint.
+  def self.addresses
+    (EmailAccount.pluck(:email) + EmailAlias.pluck(:email)).sort
   end
 
   # The addresses exim currently accepts, straight from the file.

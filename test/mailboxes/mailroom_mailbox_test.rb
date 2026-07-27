@@ -28,9 +28,9 @@ class MailroomMailboxTest < ActionMailbox::TestCase
   # scan/virus/auth_results kwargs stamp *forged* verdict headers (what a
   # sender might smuggle past a broken edge) so tests can prove they're ignored.
   def source(scan: nil, virus: nil, auth_results: nil, authenticated: "no", ip: nil, helo: nil,
-             message_id: "<mid-1@remote.test>", subject: "hi")
+             message_id: "<mid-1@remote.test>", subject: "hi", to: EMAIL)
     headers = [ "Return-Path: <sender@remote.test>",
-                "X-Original-To: #{EMAIL}",
+                "X-Original-To: #{to}",
                 "X-MailOnRails-Authenticated: #{authenticated}" ]
     headers << "X-MailOnRails-Client-Ip: #{ip}" if ip
     headers << "X-MailOnRails-Helo: #{helo}" if helo
@@ -39,7 +39,7 @@ class MailroomMailboxTest < ActionMailbox::TestCase
     headers << "X-MailOnRails-Virus: #{virus}" if virus
     headers += [ "Message-ID: #{message_id}",
                  "From: sender@remote.test",
-                 "To: #{EMAIL}",
+                 "To: #{to}",
                  "Subject: #{subject}" ]
     headers.join("\r\n") + "\r\n\r\nbody\r\n"
   end
@@ -73,6 +73,23 @@ class MailroomMailboxTest < ActionMailbox::TestCase
     message = @account.inbox.email_messages.sole
     assert_equal "clean", message.scan_status
     assert_nil quarantine, "no quarantine mailbox should be created for clean mail"
+  end
+
+  test "mail to an alias delivers to the account's INBOX" do
+    @account.email_aliases.create!(email: "alias@example.test")
+
+    scanning(CLEAN) { receive_inbound_email_from_source(source(to: "Alias@Example.test")) }
+
+    assert_equal 1, @account.inbox.email_messages.count
+  end
+
+  test "mail to an account and its alias delivers a single copy" do
+    @account.email_aliases.create!(email: "alias@example.test")
+
+    raw = source.sub("To: #{EMAIL}", "To: #{EMAIL}, alias@example.test")
+    scanning(CLEAN) { receive_inbound_email_from_source(raw) }
+
+    assert_equal 1, @account.inbox.email_messages.count
   end
 
   test "a local infected scan quarantines with its virus name, INBOX untouched" do

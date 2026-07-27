@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_07_27_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_07_27_130000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -84,6 +84,15 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_27_120000) do
     t.string "password_digest", null: false
     t.datetime "updated_at", null: false
     t.index ["email"], name: "index_email_accounts_on_email", unique: true
+  end
+
+  create_table "email_aliases", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.string "email", null: false
+    t.bigint "email_account_id", null: false
+    t.datetime "updated_at", null: false
+    t.index ["email"], name: "index_email_aliases_on_email", unique: true
+    t.index ["email_account_id"], name: "index_email_aliases_on_email_account_id"
   end
 
   create_table "email_messages", force: :cascade do |t|
@@ -172,6 +181,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_27_120000) do
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
   add_foreign_key "dmarc_reports", "domains"
+  add_foreign_key "email_aliases", "email_accounts"
   add_foreign_key "email_messages", "mailboxes"
   add_foreign_key "mailboxes", "email_accounts"
   add_foreign_key "sessions", "users"

@@ -31,3 +31,16 @@ ul
           - if (unseen = mailbox.unseen_count).positive?
             span.rounded-full.bg-accent.px-2.text-xs.text-white
               = "#{unseen} unread"
+
+section.mt-8
+  h2.text-lg.font-bold Aliases
+  p.mb-3.text-sm.text-slate-500 Mail sent to an alias is delivered to this account's inbox. An alias has no inbox or password of its own and cannot send mail.
+  ul
+    - @email_account.email_aliases.order(:email).each do |email_alias|
+      li.mb-2.flex.items-center.gap-3.rounded-lg.border.border-slate-200.bg-white.px-4.py-2
+        span.text-sm.font-medium= email_alias.email
+        span.ml-auto
+          = button_to "Remove", email_account_email_alias_path(@email_account, email_alias), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 bg-white px-3.5 py-1 text-sm font-medium text-red-700", form: { data: { turbo_confirm: "Remove alias #{email_alias.email}? Mail sent to it will be refused." } }
+  = form_with model: [ @email_account, EmailAlias.new ], class: "flex max-w-md items-center gap-2" do |form|
+    = form.email_field :email, required: true, placeholder: "alias@#{@email_account.email.split("@").last}", class: "w-full rounded-md border border-slate-200 bg-slate-100 px-2.5 py-1.5 text-sm"
+    = form.submit "Add alias", class: "inline-block cursor-pointer whitespace-nowrap rounded-md border border-accent bg-accent px-3.5 py-1.5 text-sm font-medium text-white"
