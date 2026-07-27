@@ -1,6 +1,22 @@
 Rails.application.routes.draw do
   resource :session
   resources :passwords, param: :token
+
+  # Two-factor auth. The challenge is the login-time second step (password
+  # accepted, session not yet started - see SessionsController#create);
+  # passkeys/totp manage enrollment from the security page.
+  namespace :two_factor do
+    resource :challenge, only: :new do
+      post :webauthn_options
+      post :webauthn
+      post :totp
+    end
+    resources :passkeys, only: %i[create destroy] do
+      collection { post :options }
+    end
+    resource :totp, only: %i[new create destroy], controller: "totp"
+  end
+  resource :security, only: :show, controller: "security"
   # Define your application routes per the DSL in https://guides.rubyonrails.org/routing.html
 
   # Reveal health status on /up that returns 200 if the app boots with no exceptions, otherwise 500.

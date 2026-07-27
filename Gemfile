@@ -42,6 +42,13 @@ gem "rainbow", require: false
 # DKIM signing for outbound mail (RFC 6376) [https://github.com/jhawthorn/dkim]
 gem "dkim"
 
+# Two-factor auth: WebAuthn/passkeys as the primary second factor
+# [https://github.com/cedarcode/webauthn-ruby], TOTP authenticator apps as
+# the fallback (rotp), with rqrcode rendering the enrollment QR code.
+gem "webauthn"
+gem "rotp"
+gem "rqrcode"
+
 # DMARC aggregate reports arrive as .zip attachments (RFC 7489); gzip and
 # plain XML are handled with the stdlib. See DmarcReportParser.
 gem "rubyzip", require: "zip"

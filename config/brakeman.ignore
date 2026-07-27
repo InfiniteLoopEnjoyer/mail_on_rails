@@ -1,0 +1,39 @@
+{
+  "ignored_warnings": [
+    {
+      "warning_type": "Cross-Site Scripting",
+      "warning_code": 2,
+      "fingerprint": "a735a641df0cf3bdb7cae250b55e5b23d6644bfe18bb336c482b7f43159a1afa",
+      "check_name": "CrossSiteScripting",
+      "message": "Unescaped model attribute",
+      "file": "app/views/two_factor/totp/new.html.slim",
+      "line": 10,
+      "link": "https://brakemanscanner.org/docs/warning_types/cross_site_scripting",
+      "code": "RQRCode::QRCode.new(Current.user.otp_provisioning_uri(ROTP::Base32.random)).as_svg(:module_size => 4, :viewbox => true, :use_path => true)",
+      "render_path": [
+        {
+          "type": "controller",
+          "class": "TwoFactor::TotpController",
+          "method": "new",
+          "line": 10,
+          "file": "app/controllers/two_factor/totp_controller.rb",
+          "rendered": {
+            "name": "two_factor/totp/new",
+            "file": "app/views/two_factor/totp/new.html.slim"
+          }
+        }
+      ],
+      "location": {
+        "type": "template",
+        "template": "two_factor/totp/new"
+      },
+      "user_input": "Current.user.otp_provisioning_uri(ROTP::Base32.random)",
+      "confidence": "Weak",
+      "cwe_id": [
+        79
+      ],
+      "note": "The TOTP enrollment QR code is rendered raw on purpose: rqrcode's as_svg emits only <svg>/<path> markup it generates itself. The provisioning URI is data encoded INTO the QR modules, not interpolated into the SVG text, so no user-influenced string reaches the page unescaped."
+    }
+  ],
+  "updated": "2026-07-27"
+}

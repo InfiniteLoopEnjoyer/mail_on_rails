@@ -1,0 +1,19 @@
+- page_title "Authenticator app"
+
+.mx-auto.max-w-md
+  h1.mb-4.text-2xl.font-bold Set up authenticator app
+
+  .rounded-lg.border.border-slate-200.bg-white.p-5
+    p.mb-4.text-sm.text-slate-600 Scan this QR code with your authenticator app (1Password, Google Authenticator, Aegis, …), then enter the code it shows to confirm.
+
+    .mb-4.flex.justify-center
+      .w-48== @qr_svg
+
+    p.mb-4.text-xs.text-slate-500
+      | Can't scan? Enter this secret manually:
+      code.ml-1.rounded.bg-slate-100.px-1.py-0.5.font-mono= @secret
+
+    = form_with url: two_factor_totp_path do |form|
+      .mb-4
+        = form.text_field :code, required: true, autofocus: true, autocomplete: "one-time-code", inputmode: "numeric", maxlength: 7, placeholder: "123 456", class: "w-full rounded-md border border-slate-200 bg-slate-100 px-2.5 py-1.5"
+      = form.submit "Confirm and enable", class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white"

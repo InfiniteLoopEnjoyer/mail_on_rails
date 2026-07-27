@@ -1,0 +1,34 @@
+- page_title "Security"
+
+header.mb-4
+  h1.text-2xl.font-bold Security
+
+section.mb-6.rounded-lg.border.border-slate-200.bg-white.p-5
+  h2.mb-1.text-lg.font-semibold Passkeys
+  p.mb-4.text-sm.text-slate-500 Finish signing in with Touch ID, Windows Hello, or a hardware security key. Register more than one so a lost device doesn't lock you out.
+
+  - if @passkeys.any?
+    ul.mb-4
+      - @passkeys.each do |passkey|
+        li.mb-2.flex.items-baseline.gap-3.rounded-md.border.border-slate-200.px-4.py-2
+          span.font-medium= passkey.nickname
+          span.text-xs.whitespace-nowrap.text-slate-500= "added #{passkey.created_at.strftime("%b %-d, %Y")}"
+          .ml-auto
+            = button_to "Remove", two_factor_passkey_path(passkey), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 bg-white px-3.5 py-1 text-sm font-medium text-red-700", form: { data: { turbo_confirm: "Remove #{passkey.nickname}? You'll no longer be able to sign in with it." } }
+
+  div data-controller="webauthn" data-webauthn-options-url-value=options_two_factor_passkeys_path data-webauthn-verify-url-value=two_factor_passkeys_path
+    .flex.flex-wrap.items-center.gap-2
+      input.rounded-md.border.border-slate-200.bg-slate-100.px-2.5.py-1.5.text-sm type="text" placeholder="Name this passkey (e.g. YubiKey)" data-webauthn-target="nickname"
+      button.inline-block.cursor-pointer.rounded-md.border.border-accent.bg-accent.px-3.5.py-1.text-sm.font-medium.text-white type="button" data-action="webauthn#register" Register passkey
+    p.mt-2.text-sm.text-red-700 hidden=true data-webauthn-target="error"
+
+section.rounded-lg.border.border-slate-200.bg-white.p-5
+  h2.mb-1.text-lg.font-semibold Authenticator app
+  p.mb-4.text-sm.text-slate-500 The fallback second factor: 6-digit codes from an authenticator app, for when no passkey is at hand.
+
+  - if @user.otp_enabled?
+    .flex.items-center.gap-3
+      span.rounded-full.bg-green-100.px-2.py-0.5.text-xs.text-green-700 Enabled
+      = button_to "Disable", two_factor_totp_path, method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 bg-white px-3.5 py-1 text-sm font-medium text-red-700", form: { data: { turbo_confirm: "Disable authenticator-app codes? Your app's entry will stop working." } }
+  - else
+    = link_to "Set up authenticator app", new_two_factor_totp_path, class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white"
