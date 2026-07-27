@@ -7,23 +7,26 @@ Rails.application.routes.draw do
   # Can be used by load balancers and uptime monitors to verify that the app is live.
   get "up" => "rails/health#show", as: :rails_health_check
 
-  # The Action Mailbox relay ingress is only ever posted to by the exim edge,
-  # which reaches the app over the docker network (its INGRESS_URL resolves to
-  # kamal-proxy's network alias), so every legitimate client IP is private.
-  # On top of the ingress password, refuse the endpoint to public clients
-  # entirely: this route is drawn before Action Mailbox's engine routes, so a
-  # non-local request matches it and gets the same 404 an unknown path would,
-  # while local requests fail the constraint and fall through to the real
-  # ingress. kamal-proxy appends the true client IP to X-Forwarded-For, so a
+  # The mail edges (exim, the IMAP daemon) reach the app over the docker
+  # network - their INGRESS_URL / INTERNAL_API_URL resolve to kamal-proxy's
+  # network alias - so every legitimate client IP on those endpoints is
+  # private. On top of their password auth, refuse them to public clients
+  # entirely. kamal-proxy appends the true client IP to X-Forwarded-For, so a
   # spoofed private address in that header still resolves to the public IP.
-  non_local = lambda do |request|
+  local_client = lambda do |request|
     ip = begin
       IPAddr.new(request.remote_ip)
     rescue IPAddr::Error
       nil
     end
-    ip.nil? || !(ip.loopback? || ip.private?)
+    !ip.nil? && (ip.loopback? || ip.private?)
   end
+  non_local = ->(request) { !local_client.call(request) }
+
+  # Action Mailbox's routes are drawn after this file, so blocking public
+  # clients takes an explicit earlier route: a non-local request matches it
+  # and gets the same 404 an unknown path would, while local requests fail
+  # the constraint and fall through to the real relay ingress.
   match "rails/action_mailbox/*path", via: :all, constraints: non_local,
     to: proc { [ 404, { "Content-Type" => "text/plain" }, [ "Not Found\n" ] ] }
 
@@ -35,7 +38,10 @@ Rails.application.routes.draw do
   # outbound_messages) and the IMAP daemon (imap/:op) - basic-auth'd with
   # credentials mail_on_rails.internal_api_password, so those services hold
   # no database connection at all. See MailOnRails::InternalController.
-  scope "mail_on_rails/internal", controller: "mail_on_rails/internal" do
+  # Local clients only: public requests fail the constraint, match nothing,
+  # and 404.
+  scope "mail_on_rails/internal", controller: "mail_on_rails/internal",
+        constraints: local_client do
     post :authenticate, action: :authenticate, as: :mail_on_rails_internal_authenticate
     post :outbound_messages, action: :create_outbound, as: :mail_on_rails_internal_outbound_messages
     post "imap/:op", action: :imap, as: :mail_on_rails_internal_imap, constraints: { op: /[a-z_]+/ }
