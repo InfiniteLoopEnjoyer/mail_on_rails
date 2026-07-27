@@ -46,7 +46,7 @@ class SettingsControllerTest < ActionDispatch::IntegrationTest
   test "flags a missing file" do
     ENV["MAIL_ON_RAILS_EXIM_DOMAINS_FILE"] = "/nonexistent/local_domains"
     get settings_url
-    assert_select "span", text: "file missing - exim defers all inbound"
+    assert_select "span", text: "File missing - exim defers all inbound"
   end
 
   test "sync rewrites the recipients file from the database" do
