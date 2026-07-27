@@ -30,6 +30,36 @@ module MailOnRails
         end
       end
 
+      def delete_mailbox(account_id, name)
+        db do
+          mailbox = EmailAccount.find(account_id).find_mailbox(name)
+          next { error: "no such mailbox", code: :notfound } unless mailbox
+
+          mailbox.destroy!
+          {}
+        end
+      end
+
+      # Renames the mailbox and everything under it in the "/" hierarchy.
+      def rename_mailbox(account_id, from, to)
+        db do
+          account = EmailAccount.find(account_id)
+          mailbox = account.find_mailbox(from)
+          next { error: "no such mailbox", code: :notfound } unless mailbox
+          next { error: "mailbox exists", code: :exists } if account.find_mailbox(to)
+
+          Mailbox.transaction do
+            prefix = "#{mailbox.name}/"
+            escaped = prefix.gsub(/[\\%_]/) { |c| "\\#{c}" }
+            account.mailboxes.where("name LIKE ?", "#{escaped}%").find_each do |child|
+              child.update!(name: to + child.name[mailbox.name.length..])
+            end
+            mailbox.update!(name: to)
+          end
+          {}
+        end
+      end
+
       def select_mailbox(account_id, name)
         db do
           mailbox = EmailAccount.find(account_id).find_mailbox(name)
@@ -96,14 +126,17 @@ module MailOnRails
         end
       end
 
-      def expunge(mailbox_id)
+      # uids: nil removes every \Deleted message; a list restricts removal
+      # to \Deleted messages with those UIDs (UID EXPUNGE).
+      def expunge(mailbox_id, uids = nil)
         db do
           deleted = EmailMessage.where(mailbox_id: mailbox_id)
                                 .where("flags LIKE ?", "%\\\\Deleted%")
                                 .order(:uid)
-          uids = deleted.map(&:uid)
+          deleted = deleted.where(uid: uids) if uids
+          removed = deleted.map(&:uid)
           deleted.destroy_all
-          { uids: uids }
+          { uids: removed }
         end
       end
 
@@ -152,6 +185,31 @@ module MailOnRails
                                               scan_status: m.scan_status, virus_name: m.virus_name)
             src_uids << m.uid
             dest_uids << copied.uid
+          end
+          { uid_validity: dest.uid_validity, src_uids: src_uids, dest_uids: dest_uids }
+        end
+      end
+
+      # RFC 6851 MOVE as one transaction: copy into the destination and
+      # remove the source rows together, so a failure leaves the message
+      # in exactly one mailbox.
+      def move(mailbox_id, uids, dest_name)
+        db do
+          source = Mailbox.find(mailbox_id)
+          dest = source.email_account.find_mailbox(dest_name)
+          next { error: "no such mailbox", code: :notfound } unless dest
+
+          src_uids = []
+          dest_uids = []
+          EmailMessage.transaction do
+            EmailMessage.where(mailbox_id: mailbox_id, uid: uids).order(:uid).each do |m|
+              # Same bytes, same verdict - no rescan on move.
+              copied = EmailMessage.deliver_raw(dest, m.raw, flags: m.flags, internal_date: m.internal_date,
+                                                scan_status: m.scan_status, virus_name: m.virus_name)
+              src_uids << m.uid
+              dest_uids << copied.uid
+              m.destroy!
+            end
           end
           { uid_validity: dest.uid_validity, src_uids: src_uids, dest_uids: dest_uids }
         end

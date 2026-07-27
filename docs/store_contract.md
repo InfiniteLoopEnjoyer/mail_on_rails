@@ -67,6 +67,21 @@ Flags are arrays of IMAP system-flag strings (`"\\Seen"`, `"\\Deleted"`,
 `{}` on success. `code: :exists` if a mailbox by that name exists
 (including `inbox` vs `INBOX`).
 
+### `delete_mailbox(account_id, name)`
+
+`{}` on success, removing the mailbox and its messages (not its
+children in the `/` hierarchy — RFC 3501 DELETE is exact-name).
+`code: :notfound` for an unknown mailbox. The IMAP server refuses
+`DELETE INBOX` before calling this.
+
+### `rename_mailbox(account_id, from, to)`
+
+`{}` on success. Renames the mailbox **and** every child under
+`from/` in the `/` hierarchy, keeping messages and UIDs intact.
+`code: :notfound` for an unknown source, `code: :exists` when the
+target name is taken. The IMAP server refuses `RENAME INBOX` before
+calling this.
+
 ### `select_mailbox(account_id, name)`
 
 `{ mailbox_id:, name:, uid_validity:, uid_next:, messages: [[uid, flags], ...] }`
@@ -112,9 +127,12 @@ with `code: :infected` (the IMAP server renders any error envelope as
 place flagged `unscanned` rather than refusing — the client is an
 authenticated user writing their own Sent/Drafts copies.
 
-### `expunge(mailbox_id)`
+### `expunge(mailbox_id, uids = nil)`
 
-Permanently removes messages flagged `\Deleted`. Returns
+Permanently removes messages flagged `\Deleted`. With `uids: nil` every
+`\Deleted` message goes; with a uid list (UID EXPUNGE, RFC 4315) removal
+is restricted to `\Deleted` messages whose uid is in the list — listed
+uids without `\Deleted` are ignored. Returns
 `{ uids: [<removed uid>, ...] }` in ascending order (empty when nothing
 was flagged).
 
@@ -125,6 +143,13 @@ account, assigning fresh UIDs in the destination. Returns
 `{ uid_validity:, src_uids:, dest_uids: }` (`uid_validity` of the
 destination; the two uid arrays correspond pairwise, ascending source
 order). `code: :notfound` for an unknown destination.
+
+### `move(mailbox_id, uids, dest_name)`
+
+Like `copy`, but atomically removes the source messages in the same
+operation (RFC 6851 MOVE) — a failure must leave each message in
+exactly one mailbox. Same return shape and `:notfound` semantics as
+`copy`.
 
 ## Conformance
 

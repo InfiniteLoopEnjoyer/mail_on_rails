@@ -33,6 +33,11 @@ class DnsPublisherTest < ActiveSupport::TestCase
     [ result, client ]
   end
 
+  # RFC 1035 presentation form, as DnsPublisher sends TXT content.
+  def quoted(content)
+    content.scan(/.{1,255}/m).map { |part| %("#{part}") }.join(" ")
+  end
+
   test "an empty zone gets all four records created" do
     result, client = publish
 
@@ -41,9 +46,9 @@ class DnsPublisherTest < ActiveSupport::TestCase
     assert_equal "mail.host.test", by_type["MX"].first[:content]
     assert_equal 10, by_type["MX"].first[:priority]
     contents = by_type["TXT"].map { |r| r[:content] }
-    assert_includes contents, "v=spf1 mx -all"
-    assert_includes contents, @domain.dkim_txt_value
-    assert_includes contents, "v=DMARC1; p=none; rua=mailto:dmarc@example.com"
+    assert_includes contents, '"v=spf1 mx -all"'
+    assert_includes contents, quoted(@domain.dkim_txt_value)
+    assert_includes contents, '"v=DMARC1; p=none; rua=mailto:dmarc@example.com"'
     assert_equal 4, result.actions.size
     assert_empty client.updated
   end
@@ -81,6 +86,13 @@ class DnsPublisherTest < ActiveSupport::TestCase
     assert_equal 2, result.skipped.grep(/SPF|DMARC/).size
   end
 
+  test "a matching DKIM TXT stored in quoted multi-string form is left alone" do
+    result, client = publish([ "TXT", @domain.dkim_txt_name ] => [ { "id" => "r1", "content" => quoted(@domain.dkim_txt_value) } ])
+
+    assert_empty client.updated
+    assert result.skipped.any? { |s| s.include?("DKIM TXT already matches") }
+  end
+
   test "a mismatched DKIM TXT is updated in place" do
     other = "v=DKIM1; k=rsa; p=#{Base64.strict_encode64(OpenSSL::PKey::RSA.new(2048).public_to_der)}"
     result, client = publish([ "TXT", @domain.dkim_txt_name ] => [ { "id" => "rec-9", "content" => other } ])
@@ -88,7 +100,7 @@ class DnsPublisherTest < ActiveSupport::TestCase
     assert_equal 1, client.updated.size
     record_id, attrs = client.updated.first
     assert_equal "rec-9", record_id
-    assert_equal @domain.dkim_txt_value, attrs[:content]
+    assert_equal quoted(@domain.dkim_txt_value), attrs[:content]
     assert result.actions.any? { |a| a.include?("updated DKIM") }
   end
 

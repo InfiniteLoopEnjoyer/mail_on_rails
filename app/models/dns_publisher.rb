@@ -61,7 +61,7 @@ class DnsPublisher
     if spf
       @skipped << "SPF already published (#{content_of(spf)}) - not modifying an existing policy"
     else
-      @client.create_record(@zone, type: "TXT", name: @domain.name, content: "v=spf1 mx -all", ttl: TTL)
+      @client.create_record(@zone, type: "TXT", name: @domain.name, content: quoted_txt("v=spf1 mx -all"), ttl: TTL)
       @actions << "created SPF (v=spf1 mx -all)"
     end
   end
@@ -75,12 +75,12 @@ class DnsPublisher
     existing = txt_records(@domain.dkim_txt_name)
     expected = @domain.dkim_txt_value
     if existing.empty?
-      @client.create_record(@zone, type: "TXT", name: @domain.dkim_txt_name, content: expected, ttl: TTL)
+      @client.create_record(@zone, type: "TXT", name: @domain.dkim_txt_name, content: quoted_txt(expected), ttl: TTL)
       @actions << "created DKIM TXT (#{@domain.dkim_txt_name})"
     elsif existing.any? { |r| dkim_p(content_of(r)) == dkim_p(expected) }
       @skipped << "DKIM TXT already matches the key"
     else
-      @client.update_record(@zone, existing.first["id"], type: "TXT", name: @domain.dkim_txt_name, content: expected, ttl: TTL)
+      @client.update_record(@zone, existing.first["id"], type: "TXT", name: @domain.dkim_txt_name, content: quoted_txt(expected), ttl: TTL)
       @actions << "updated DKIM TXT to this server's key"
     end
   end
@@ -92,7 +92,7 @@ class DnsPublisher
       @skipped << "DMARC already published (#{content_of(existing)}) - tighten it manually when the monitoring section says so"
     else
       @client.create_record(@zone, type: "TXT", name: name,
-                                   content: "v=DMARC1; p=none; rua=mailto:#{@domain.dmarc_address}", ttl: TTL)
+                                   content: quoted_txt("v=DMARC1; p=none; rua=mailto:#{@domain.dmarc_address}"), ttl: TTL)
       @actions << "created DMARC (p=none, reports to #{@domain.dmarc_address})"
     end
   end
@@ -101,9 +101,19 @@ class DnsPublisher
     @client.records(@zone, type: "TXT", name: name)
   end
 
-  # Cloudflare returns TXT content sometimes wrapped in quotes.
+  # Cloudflare requires TXT content in RFC 1035 presentation form:
+  # double-quoted, split into 255-character strings (the DKIM value
+  # overflows a single one).
+  def quoted_txt(content)
+    content.scan(/.{1,255}/m).map { |part| %("#{part}") }.join(" ")
+  end
+
+  # Cloudflare returns TXT content in that same quoted form; unwrap to
+  # the logical value for comparisons.
   def content_of(record)
-    record["content"].to_s.gsub(/\A"|"\z/, "").strip
+    raw = record["content"].to_s.strip
+    parts = raw.scan(/"([^"]*)"/)
+    parts.any? ? parts.join : raw
   end
 
   def dkim_p(content)

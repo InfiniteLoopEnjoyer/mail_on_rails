@@ -66,15 +66,18 @@ class MailOnRails::InternalController < ActionController::API
       case params[:op]
       when "list_mailboxes" then backend.list_mailboxes(params[:account_id].to_i)
       when "create_mailbox" then backend.create_mailbox(params[:account_id].to_i, params[:name].to_s)
+      when "delete_mailbox" then backend.delete_mailbox(params[:account_id].to_i, params[:name].to_s)
+      when "rename_mailbox" then backend.rename_mailbox(params[:account_id].to_i, params[:from].to_s, params[:to].to_s)
       when "select_mailbox" then backend.select_mailbox(params[:account_id].to_i, params[:name].to_s)
       when "status" then backend.status(params[:account_id].to_i, params[:name].to_s)
       when "fetch" then encode_raws(backend.fetch(params[:mailbox_id].to_i, int_list(:uids), params[:with_raw] == true))
       when "store_flags" then backend.store_flags(params[:mailbox_id].to_i, int_list(:uids), params[:mode].to_s, string_list(:flags))
-      when "expunge" then backend.expunge(params[:mailbox_id].to_i)
+      when "expunge" then backend.expunge(params[:mailbox_id].to_i, params[:uids].nil? ? nil : int_list(:uids))
       when "append" then backend.append(params[:account_id].to_i, params[:mailbox_name].to_s,
                                         params[:raw_base64].to_s.unpack1("m0"), string_list(:flags),
                                         params[:internal_date_epoch]&.to_i)
       when "copy" then backend.copy(params[:mailbox_id].to_i, int_list(:uids), params[:dest_name].to_s)
+      when "move" then backend.move(params[:mailbox_id].to_i, int_list(:uids), params[:dest_name].to_s)
       else return head :not_found
       end
     render json: result
