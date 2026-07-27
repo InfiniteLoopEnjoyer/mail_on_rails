@@ -15,6 +15,13 @@ class EmailAccount < ApplicationRecord
   after_commit -> { broadcast_refresh_later_to :email_accounts }
   after_update_commit -> { broadcast_refresh_later }
 
+  # Keep the exim edge's RCPT-time recipient list (a file on the shared
+  # mailconf volume, see EximLocalRecipients) in step with the table.
+  # One registration for create/rename/destroy: repeating the same method
+  # symbol across after_*_commit macros keeps only the last registration.
+  # saved_change_to_email? is also true on create (nil -> address).
+  after_commit :sync_exim_recipients, if: -> { destroyed? || saved_change_to_email? }
+
   after_create :create_default_mailboxes
 
   def inbox
@@ -36,5 +43,9 @@ class EmailAccount < ApplicationRecord
 
   def create_default_mailboxes
     DEFAULT_MAILBOXES.each { |name| mailboxes.create!(name: name) }
+  end
+
+  def sync_exim_recipients
+    EximLocalRecipients.sync!
   end
 end

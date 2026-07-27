@@ -18,8 +18,8 @@ class MailOnRails::InternalControllerTest < ActionDispatch::IntegrationTest
     post mail_on_rails_internal_authenticate_path, params: { email: EMAIL, password: PASSWORD }, as: :json
     assert_response :unauthorized
 
-    post mail_on_rails_internal_rcpt_check_path,
-         params: { addresses: [ EMAIL ] }, as: :json,
+    post mail_on_rails_internal_authenticate_path,
+         params: { email: EMAIL, password: PASSWORD }, as: :json,
          headers: { "Authorization" => ActionController::HttpAuthentication::Basic.encode_credentials("mail_on_rails", "wrong") }
     assert_response :unauthorized
   end
@@ -34,14 +34,6 @@ class MailOnRails::InternalControllerTest < ActionDispatch::IntegrationTest
                                                as: :json, headers: api_auth
     assert_response :success
     assert_equal({ "account_id" => nil, "email" => nil }, response.parsed_body)
-  end
-
-  test "rcpt_check returns the known normalized subset" do
-    post mail_on_rails_internal_rcpt_check_path,
-         params: { addresses: [ " #{EMAIL.upcase} ", "stranger@example.test" ] },
-         as: :json, headers: api_auth
-    assert_response :success
-    assert_equal({ "local" => [ EMAIL ] }, response.parsed_body)
   end
 
   test "outbound_messages queues one row per recipient" do

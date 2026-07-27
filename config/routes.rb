@@ -17,7 +17,6 @@ Rails.application.routes.draw do
   # no database connection at all. See MailOnRails::InternalController.
   scope "mail_on_rails/internal", controller: "mail_on_rails/internal" do
     post :authenticate, action: :authenticate, as: :mail_on_rails_internal_authenticate
-    post :rcpt_check, action: :rcpt_check, as: :mail_on_rails_internal_rcpt_check
     post :outbound_messages, action: :create_outbound, as: :mail_on_rails_internal_outbound_messages
     post "imap/:op", action: :imap, as: :mail_on_rails_internal_imap, constraints: { op: /[a-z_]+/ }
   end

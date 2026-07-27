@@ -1,8 +1,10 @@
 # The private HTTP API the mail edges use instead of a database connection:
-# the exim service (authenticate for SMTP AUTH, rcpt_check for RCPT-time
-# recipient verification, outbound_messages to queue authenticated outbound)
-# and the IMAP daemon (imap/:op, the IMAP store contract over HTTP). Inbound
-# mail itself arrives via Action Mailbox's relay ingress, not here. Endpoints
+# the exim service (authenticate for SMTP AUTH, outbound_messages to queue
+# authenticated outbound) and the IMAP daemon (imap/:op, the IMAP store
+# contract over HTTP). Inbound mail itself arrives via Action Mailbox's
+# relay ingress, not here; RCPT-time recipient verification is not here
+# either - exim answers it from the local_recipients file this app writes
+# on the shared mailconf volume (EximLocalRecipients). Endpoints
 # are POST-only JSON, authenticated with HTTP basic auth against
 # SMTP_INTERNAL_API_PASSWORD (env, used by CI where no RAILS_MASTER_KEY
 # exists) falling back to credentials mail_on_rails.internal_api_password -
@@ -25,12 +27,6 @@ class MailOnRails::InternalController < ActionController::API
       email: params.require(:email), password: params.require(:password)
     )
     render json: { account_id: account&.id, email: account&.email }
-  end
-
-  # RCPT TO validation: which of these addresses are local accounts?
-  def rcpt_check
-    normalized = Array(params[:addresses]).map { |a| a.to_s.strip.downcase }.uniq
-    render json: { local: EmailAccount.where(email: normalized).pluck(:email) }
   end
 
   # Queue outbound mail (authenticated submission to remote recipients),

@@ -50,11 +50,15 @@ servers:
         # <selector>._domainkey.<domain> TXT records (selector default:
         # rail, override with MAIL_ON_RAILS_DKIM_SELECTOR).
 
-        # The exim edge's hosted-domains list, on the mailconf volume shared
-        # with the mail_on_rails_exim service (mounted there at
-        # /var/lib/exim4/dynamic). The Domain model rewrites it on domain
-        # add/remove; exim re-reads it per connection - no exim redeploy.
+        # The exim edge's hosted-domains and local-recipients lists, on the
+        # mailconf volume shared with the mail_on_rails_exim service
+        # (mounted there at /var/lib/exim4/dynamic). The Domain model
+        # rewrites the domains file on domain add/remove and EmailAccount
+        # rewrites the recipients file on account add/remove/rename; exim
+        # re-reads them per connection/RCPT - no exim redeploy, and no HTTP
+        # call at RCPT time.
         MAIL_ON_RAILS_EXIM_DOMAINS_FILE: /rails/shared/local_domains
+        MAIL_ON_RAILS_EXIM_RECIPIENTS_FILE: /rails/shared/local_recipients
 
         # App-side virus scanning (mailroom inbound scan + IMAP APPEND)
         # needs no address here: the clamav accessory (see accessories
