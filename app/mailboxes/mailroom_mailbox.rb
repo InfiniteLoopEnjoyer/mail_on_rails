@@ -26,7 +26,6 @@ class MailroomMailbox < ApplicationMailbox
     # uniq: several recipient addresses (an account plus its aliases) can
     # resolve to the same account - it still gets exactly one copy.
     recipients.filter_map { |recipient| resolve_account(recipient.strip.downcase) }.uniq.each do |account|
-
       if verdict && verdict[:status] != "clean"
         quarantine(account, verdict)
       else
