@@ -7,6 +7,26 @@ Rails.application.routes.draw do
   # Can be used by load balancers and uptime monitors to verify that the app is live.
   get "up" => "rails/health#show", as: :rails_health_check
 
+  # The Action Mailbox relay ingress is only ever posted to by the exim edge,
+  # which reaches the app over the docker network (its INGRESS_URL resolves to
+  # kamal-proxy's network alias), so every legitimate client IP is private.
+  # On top of the ingress password, refuse the endpoint to public clients
+  # entirely: this route is drawn before Action Mailbox's engine routes, so a
+  # non-local request matches it and gets the same 404 an unknown path would,
+  # while local requests fail the constraint and fall through to the real
+  # ingress. kamal-proxy appends the true client IP to X-Forwarded-For, so a
+  # spoofed private address in that header still resolves to the public IP.
+  non_local = lambda do |request|
+    ip = begin
+      IPAddr.new(request.remote_ip)
+    rescue IPAddr::Error
+      nil
+    end
+    ip.nil? || !(ip.loopback? || ip.private?)
+  end
+  match "rails/action_mailbox/*path", via: :all, constraints: non_local,
+    to: proc { [ 404, { "Content-Type" => "text/plain" }, [ "Not Found\n" ] ] }
+
   # Render dynamic PWA files from app/views/pwa/* (remember to link manifest in application.html.erb)
   # get "manifest" => "rails/pwa#manifest", as: :pwa_manifest
   # get "service-worker" => "rails/pwa#service_worker", as: :pwa_service_worker
@@ -23,6 +43,12 @@ Rails.application.routes.draw do
 
   # Defines the root path route ("/")
   root "email_accounts#index"
+
+  # Operational internals (exim's shared-volume files, ...) - see
+  # SettingsController.
+  resource :settings, only: :show
+
+
 
   resources :users, except: %i[show] do
     member do

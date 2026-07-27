@@ -15,6 +15,10 @@ Rails.application.configure do
   # loading is working properly before deploying your code.
   config.eager_load = ENV["CI"].present?
 
+  # Same ingress as production so tests exercise the real relay endpoint
+  # (e.g. the local-only routing constraint in front of it).
+  config.action_mailbox.ingress = :relay
+
   # Configure public file server for tests with cache-control for performance.
   config.public_file_server.headers = { "cache-control" => "public, max-age=3600" }
 
