@@ -5,6 +5,12 @@ class EmailMessage < ApplicationRecord
 
   validates :uid, presence: true, uniqueness: { scope: :mailbox_id }
 
+  # CONDSTORE (RFC 7162): every content mutation carries the mailbox's
+  # next mod-sequence so IMAP clients can sync flag changes incrementally.
+  before_create { self.modseq = mailbox.claim_modseq! }
+  after_update :bump_modseq_on_flag_change
+  after_destroy { mailbox.claim_modseq! unless destroyed_by_association }
+
   # Any message change (delivery, flag change, expunge) live-refreshes the
   # folder's message list, the account page's per-folder unread counts, and
   # the accounts index's unread badges.
@@ -92,6 +98,10 @@ class EmailMessage < ApplicationRecord
   end
 
   private
+
+  def bump_modseq_on_flag_change
+    update_column(:modseq, mailbox.claim_modseq!) if saved_change_to_flags?
+  end
 
   def broadcast_page_refreshes
     broadcast_refresh_later_to mailbox

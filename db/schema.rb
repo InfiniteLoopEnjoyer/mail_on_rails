@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_07_27_130000) do
+ActiveRecord::Schema[8.1].define(version: 2026_07_27_220000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -104,6 +104,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_27_130000) do
     t.datetime "internal_date", null: false
     t.integer "mailbox_id", null: false
     t.string "message_id"
+    t.bigint "modseq", default: 1, null: false
     t.binary "raw", null: false
     t.string "scan_status"
     t.integer "size", default: 0, null: false
@@ -124,6 +125,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_27_130000) do
   create_table "mailboxes", force: :cascade do |t|
     t.datetime "created_at", null: false
     t.integer "email_account_id", null: false
+    t.bigint "highest_modseq", default: 1, null: false
     t.string "name", null: false
     t.integer "uid_next", default: 1, null: false
     t.integer "uid_validity", null: false

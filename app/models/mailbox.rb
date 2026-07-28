@@ -41,6 +41,16 @@ class Mailbox < ApplicationRecord
     end
   end
 
+  # Advances and returns the mailbox's mod-sequence (RFC 7162 CONDSTORE).
+  # Every content mutation - delivery, flag change, expunge - claims one.
+  def claim_modseq!
+    with_lock do
+      seq = highest_modseq + 1
+      update_columns(highest_modseq: seq)
+      seq
+    end
+  end
+
   def unseen_count
     email_messages.where.not("flags LIKE ?", "%Seen%").count
   end

@@ -84,24 +84,30 @@ calling this.
 
 ### `select_mailbox(account_id, name)`
 
-`{ mailbox_id:, name:, uid_validity:, uid_next:, messages: [[uid, flags], ...] }`
-with messages in ascending UID order and `name` in its stored form.
-`code: :notfound` for an unknown mailbox.
+`{ mailbox_id:, name:, uid_validity:, uid_next:, highest_modseq:,
+messages: [[uid, flags, modseq], ...] }` with messages in ascending UID
+order and `name` in its stored form. `code: :notfound` for an unknown
+mailbox.
 
 UID semantics (RFC 3501): UIDs start at 1 per mailbox, strictly ascend,
 and are never reused; `uid_next` is the UID the next stored message will
 receive; `uid_validity` is fixed at mailbox creation.
 
+Modseq semantics (RFC 7162 CONDSTORE): every content mutation — delivery,
+flag change, expunge — claims the mailbox's next mod-sequence;
+`highest_modseq` never regresses and is always ≥ every message's
+`modseq`. Per-message modseqs ascend with delivery order.
+
 ### `status(account_id, name)`
 
-`{ messages:, unseen:, uid_next:, uid_validity: }` (counts as integers;
-`unseen` = messages without `\Seen`). `code: :notfound` for an unknown
-mailbox.
+`{ messages:, unseen:, uid_next:, uid_validity:, highest_modseq: }`
+(counts as integers; `unseen` = messages without `\Seen`).
+`code: :notfound` for an unknown mailbox.
 
 ### `fetch(mailbox_id, uids, with_raw)`
 
-`{ messages: [{ uid:, flags:, internal_date:, size: }, ...] }` in
-ascending UID order, silently skipping unknown UIDs (an unknown
+`{ messages: [{ uid:, flags:, internal_date:, size:, modseq: }, ...] }`
+in ascending UID order, silently skipping unknown UIDs (an unknown
 `mailbox_id` yields an empty list). `internal_date` is a Unix epoch
 integer; `size` the stored byte size. When `with_raw` is true each entry
 also carries `raw:` with the full stored message bytes.
@@ -109,7 +115,8 @@ also carries `raw:` with the full stored message bytes.
 ### `store_flags(mailbox_id, uids, mode, flags)`
 
 Mode `"+"` adds, `"-"` removes, `"="` replaces. Returns
-`{ messages: [[uid, new_flags], ...] }` for each matched message.
+`{ messages: [[uid, new_flags, modseq], ...] }` for each matched message,
+where `modseq` reflects the flag change just applied.
 
 ### `append(account_id, mailbox_name, raw, flags, internal_date_epoch)`
 

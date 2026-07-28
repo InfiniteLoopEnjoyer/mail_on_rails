@@ -65,12 +65,13 @@ module MailOnRails
           mailbox = EmailAccount.find(account_id).find_mailbox(name)
           next { error: "no such mailbox", code: :notfound } unless mailbox
 
-          messages = mailbox.email_messages.order(:uid).map { |m| [ m.uid, m.flags ] }
+          messages = mailbox.email_messages.order(:uid).map { |m| [ m.uid, m.flags, m.modseq ] }
           {
             mailbox_id: mailbox.id,
             name: mailbox.name,
             uid_validity: mailbox.uid_validity,
             uid_next: mailbox.uid_next,
+            highest_modseq: mailbox.highest_modseq,
             messages: messages
           }
         end
@@ -85,7 +86,8 @@ module MailOnRails
             messages: mailbox.email_messages.count,
             unseen: mailbox.unseen_count,
             uid_next: mailbox.uid_next,
-            uid_validity: mailbox.uid_validity
+            uid_validity: mailbox.uid_validity,
+            highest_modseq: mailbox.highest_modseq
           }
         end
       end
@@ -100,7 +102,8 @@ module MailOnRails
               uid: m.uid,
               flags: m.flags,
               internal_date: m.internal_date.to_i,
-              size: m.size
+              size: m.size,
+              modseq: m.modseq
             }
             entry[:raw] = m.raw.to_s if with_raw
             entry
@@ -120,7 +123,7 @@ module MailOnRails
               else flags
               end
             m.update!(flags: new_flags)
-            [ m.uid, new_flags ]
+            [ m.uid, new_flags, m.modseq ]
           end
           { messages: updated }
         end
