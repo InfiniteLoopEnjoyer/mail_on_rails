@@ -87,7 +87,8 @@ module MailOnRails
             unseen: mailbox.unseen_count,
             uid_next: mailbox.uid_next,
             uid_validity: mailbox.uid_validity,
-            highest_modseq: mailbox.highest_modseq
+            highest_modseq: mailbox.highest_modseq,
+            size: mailbox.email_messages.sum(:size)
           }
         end
       end
