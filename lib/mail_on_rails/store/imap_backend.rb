@@ -25,9 +25,15 @@ module MailOnRails
           account = EmailAccount.find(account_id)
           next { error: "mailbox exists", code: :exists } if account.find_mailbox(name)
 
-          account.mailboxes.create!(name: name)
-          {}
+          mailbox = account.mailboxes.create!(name: name)
+          { mailbox_object_id: mailbox_object_id(mailbox) }
         end
+      end
+
+      # MAILBOXID (RFC 8474): pk + uid_validity - survives rename, never
+      # reused (pks are monotonic; validity disambiguates any reuse).
+      def mailbox_object_id(mailbox)
+        "M#{mailbox.id}-#{mailbox.uid_validity}"
       end
 
       def delete_mailbox(account_id, name)
@@ -69,6 +75,7 @@ module MailOnRails
           {
             mailbox_id: mailbox.id,
             name: mailbox.name,
+            mailbox_object_id: mailbox_object_id(mailbox),
             uid_validity: mailbox.uid_validity,
             uid_next: mailbox.uid_next,
             highest_modseq: mailbox.highest_modseq,
@@ -88,7 +95,8 @@ module MailOnRails
             uid_next: mailbox.uid_next,
             uid_validity: mailbox.uid_validity,
             highest_modseq: mailbox.highest_modseq,
-            size: mailbox.email_messages.sum(:size)
+            size: mailbox.email_messages.sum(:size),
+            mailbox_object_id: mailbox_object_id(mailbox)
           }
         end
       end
@@ -104,7 +112,11 @@ module MailOnRails
               flags: m.flags,
               internal_date: m.internal_date.to_i,
               size: m.size,
-              modseq: m.modseq
+              modseq: m.modseq,
+              email_id: m.email_object_id,
+              # SAVEDATE (RFC 8514): when the row entered this mailbox -
+              # COPY/MOVE create fresh rows, so created_at is exactly it.
+              saved_date: m.created_at.to_i
             }
             entry[:raw] = m.raw.to_s if with_raw
             entry

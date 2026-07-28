@@ -29,6 +29,9 @@ class EmailMessage < ApplicationRecord
       uid: mailbox.claim_uid!,
       raw: raw,
       size: raw.bytesize,
+      # OBJECTID (RFC 8474): content-derived, so COPY/MOVE (which
+      # re-deliver the same bytes) preserve the EMAILID.
+      email_object_id: "E#{Digest::SHA256.hexdigest(raw)[0, 24]}",
       flags: flags,
       internal_date: internal_date || mail&.date&.to_time || Time.current,
       message_id: mail&.message_id.to_s.presence,

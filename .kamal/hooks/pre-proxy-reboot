@@ -1,0 +1,19 @@
+#!/bin/bash
+set -e
+
+# The proxy image is our patched kamal-proxy fork with raw TCP forwarding
+# (github.com/InfiniteLoopEnjoyer/kamal-proxy, cloned at ~/kamal-proxy),
+# built locally: docker build -t localhost:5555/kamal-proxy:<version> .
+# The localhost:5555 registry is only reachable from this machine during
+# kamal's own build tunnel, so the server can never pull it - ship it over
+# ssh before the proxy reboots into it. No-op when the host already has it.
+
+IMAGE=localhost:5555/kamal-proxy:v0.9.3-mail1   # keep in sync with proxy.run in config/deploy.yml
+
+IFS=',' read -ra HOSTS <<< "$KAMAL_HOSTS"
+for host in "${HOSTS[@]}"; do
+  if ! ssh "root@$host" "docker image inspect $IMAGE" >/dev/null 2>&1; then
+    echo "Shipping $IMAGE to $host..."
+    docker save "$IMAGE" | gzip | ssh "root@$host" "gunzip | docker load"
+  fi
+done
