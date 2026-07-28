@@ -112,18 +112,21 @@ module MailOnRails
         end
       end
 
-      # mode: "+" adds, "-" removes, "=" replaces.
+      # mode: "+" adds, "-" removes, "=" replaces. Flags are
+      # case-insensitive atoms: adding a case-variant of a present flag is
+      # a no-op (first-seen spelling kept), removal matches any case, and
+      # a store that changes nothing claims no new modseq.
       def store_flags(mailbox_id, uids, mode, flags)
         db do
           updated = EmailMessage.where(mailbox_id: mailbox_id, uid: uids).map do |m|
             new_flags =
               case mode
-              when "+" then (m.flags | flags)
-              when "-" then (m.flags - flags)
+              when "+" then m.flags + flags.reject { |f| m.flags.any? { |e| e.casecmp?(f) } }
+              when "-" then m.flags.reject { |e| flags.any? { |f| e.casecmp?(f) } }
               else flags
               end
-            m.update!(flags: new_flags)
-            [ m.uid, new_flags, m.modseq ]
+            m.update!(flags: new_flags) if new_flags.sort != m.flags.sort
+            [ m.uid, m.flags, m.modseq ]
           end
           { messages: updated }
         end
@@ -133,13 +136,16 @@ module MailOnRails
       # to \Deleted messages with those UIDs (UID EXPUNGE).
       def expunge(mailbox_id, uids = nil)
         db do
+          mailbox = Mailbox.find(mailbox_id)
           deleted = EmailMessage.where(mailbox_id: mailbox_id)
                                 .where("flags LIKE ?", "%\\\\Deleted%")
                                 .order(:uid)
           deleted = deleted.where(uid: uids) if uids
           removed = deleted.map(&:uid)
           deleted.destroy_all
-          { uids: removed }
+          # The post-expunge modseq rides the tagged OK as HIGHESTMODSEQ
+          # (RFC 7162); tombstone recording above just advanced it.
+          { uids: removed, highest_modseq: mailbox.reload.highest_modseq }
         end
       end
 
