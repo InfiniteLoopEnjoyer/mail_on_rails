@@ -28,6 +28,17 @@ servers:
   web:
     hosts:
       - 192.168.0.1
+    # Stable DNS name on the kamal docker network. Kamal only gives app
+    # containers per-deploy names (versioned container name + random
+    # hostname); this alias lets the mail edges reach the private API
+    # directly over plain HTTP (http://mail_on_rails-web/mail_on_rails/
+    # internal) instead of hairpinning through kamal-proxy with TLS.
+    # Container-to-container only: the port stays unpublished, so nothing
+    # outside the host can route to it. During a deploy old and new
+    # containers briefly share the alias (docker DNS round-robins); both
+    # serve the API, so the overlap is harmless.
+    options:
+      network-alias: mail_on_rails-web
     env:
       clear:
         # Run the Solid Queue supervisor inside Puma (see config/puma.rb).
