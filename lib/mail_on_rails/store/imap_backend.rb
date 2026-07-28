@@ -193,6 +193,25 @@ module MailOnRails
         end
       end
 
+      # QRESYNC: uids expunged after since_modseq. complete: false means
+      # tombstone history was pruned past since_modseq; the fallback set
+      # (every uid ever allocated but no longer present) is still correct,
+      # just larger, because uids are never reused.
+      def expunged_since(mailbox_id, since_modseq)
+        db do
+          mailbox = Mailbox.find(mailbox_id)
+          if since_modseq >= mailbox.tombstone_floor
+            uids = ExpungedMessage.where(mailbox_id: mailbox_id)
+                                  .where("modseq > ?", since_modseq)
+                                  .distinct.order(:uid).pluck(:uid)
+            { uids: uids, complete: true }
+          else
+            present = EmailMessage.where(mailbox_id: mailbox_id).pluck(:uid)
+            { uids: (1...mailbox.uid_next).to_a - present, complete: false }
+          end
+        end
+      end
+
       # RFC 6851 MOVE as one transaction: copy into the destination and
       # remove the source rows together, so a failure leaves the message
       # in exactly one mailbox.

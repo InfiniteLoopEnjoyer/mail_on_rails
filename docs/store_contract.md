@@ -158,6 +158,16 @@ operation (RFC 6851 MOVE) — a failure must leave each message in
 exactly one mailbox. Same return shape and `:notfound` semantics as
 `copy`.
 
+### `expunged_since(mailbox_id, since_modseq)`
+
+QRESYNC (RFC 7162): `{ uids: [...], complete: bool }` — the uids
+expunged (by expunge or move) after `since_modseq`, from per-mailbox
+tombstones. Tombstone history is bounded; when `since_modseq` predates
+the retained history the store must return `complete: false` with the
+over-approximation of every uid ever allocated but no longer present
+(correct because uids are never reused). An unknown mailbox yields
+`{ uids: [], complete: true }`.
+
 ## Conformance
 
 Include `MailOnRails::Imap::Store::Contracts::Imap` (from the gem) in a

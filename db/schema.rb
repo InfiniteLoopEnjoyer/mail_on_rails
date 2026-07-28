@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_07_27_220000) do
+ActiveRecord::Schema[8.1].define(version: 2026_07_27_230000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -122,11 +122,20 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_27_220000) do
     t.index ["mailbox_id"], name: "index_email_messages_on_mailbox_id"
   end
 
+  create_table "expunged_messages", force: :cascade do |t|
+    t.bigint "mailbox_id", null: false
+    t.bigint "modseq", null: false
+    t.bigint "uid", null: false
+    t.index ["mailbox_id", "modseq"], name: "index_expunged_messages_on_mailbox_id_and_modseq"
+    t.index ["mailbox_id"], name: "index_expunged_messages_on_mailbox_id"
+  end
+
   create_table "mailboxes", force: :cascade do |t|
     t.datetime "created_at", null: false
     t.integer "email_account_id", null: false
     t.bigint "highest_modseq", default: 1, null: false
     t.string "name", null: false
+    t.bigint "tombstone_floor", default: 0, null: false
     t.integer "uid_next", default: 1, null: false
     t.integer "uid_validity", null: false
     t.datetime "updated_at", null: false
@@ -185,6 +194,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_27_220000) do
   add_foreign_key "dmarc_reports", "domains"
   add_foreign_key "email_aliases", "email_accounts"
   add_foreign_key "email_messages", "mailboxes"
+  add_foreign_key "expunged_messages", "mailboxes"
   add_foreign_key "mailboxes", "email_accounts"
   add_foreign_key "sessions", "users"
   add_foreign_key "webauthn_credentials", "users"

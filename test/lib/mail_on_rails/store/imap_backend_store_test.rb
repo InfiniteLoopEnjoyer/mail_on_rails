@@ -30,5 +30,26 @@ class ImapBackendStoreTest < ActiveSupport::TestCase
   def build_store(**)
     MailOnRails::Store::ImapBackend.new
   end
+
+  test "tombstone pruning raises the floor and expunged_since falls back" do
+    raw = MailOnRails::Imap::Store::Contracts::Imap::RAW_CRLF
+    uids = 3.times.map { store.append(account_id, "INBOX", raw, [ "\\Deleted" ], nil)[:uid] }
+    mailbox = Mailbox.find(store.select_mailbox(account_id, "INBOX")[:mailbox_id])
+
+    uids.each { |uid| store.expunge(mailbox.id, [ uid ]) }
+    ExpungedMessage.prune!(mailbox, limit: 2)
+    mailbox.reload
+
+    assert_operator mailbox.tombstone_floor, :>, 0
+    assert_equal 2, mailbox.expunged_messages.count
+
+    result = store.expunged_since(mailbox.id, 0)
+    refute result[:complete]
+    assert_equal uids.sort, result[:uids].sort, "fallback must cover every missing uid"
+
+    recent = store.expunged_since(mailbox.id, mailbox.tombstone_floor)
+    assert recent[:complete]
+    assert_equal uids.last(2).sort, recent[:uids].sort
+  end
 end
 end

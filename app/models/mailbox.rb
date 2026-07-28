@@ -1,6 +1,7 @@
 class Mailbox < ApplicationRecord
   belongs_to :email_account
   has_many :email_messages, dependent: :delete_all
+  has_many :expunged_messages, dependent: :delete_all
 
   INBOX = "INBOX"
 
