@@ -79,6 +79,7 @@ class MailOnRails::InternalController < ActionController::API
       when "copy" then backend.copy(params[:mailbox_id].to_i, int_list(:uids), params[:dest_name].to_s)
       when "move" then backend.move(params[:mailbox_id].to_i, int_list(:uids), params[:dest_name].to_s)
       when "expunged_since" then backend.expunged_since(params[:mailbox_id].to_i, params[:since_modseq].to_i)
+      when "scram_credentials" then backend.scram_credentials(params[:email].to_s)
       else return head :not_found
       end
     render json: result

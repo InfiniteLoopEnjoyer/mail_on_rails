@@ -4,6 +4,17 @@ class EmailAccount < ApplicationRecord
   has_secure_password
   include GeneratedPassword
 
+  SCRAM_ITERATIONS = 4096 # RFC 7677 minimum; the heavy PBKDF2 runs client-side
+
+  # The stored/server keys are password-verifier material - not the
+  # password, but worth encrypting at rest like otp_secret.
+  encrypts :scram_stored_key, :scram_server_key
+
+  # Derived while the plaintext is available at password-set time; bcrypt
+  # digests can't be converted, so pre-existing accounts keep nil (and
+  # can't use AUTH=SCRAM-SHA-256) until their next password change.
+  before_save :derive_scram_credentials, if: -> { password.present? }
+
   has_many :mailboxes, dependent: :destroy
   has_many :email_aliases, dependent: :destroy
 
@@ -42,6 +53,19 @@ class EmailAccount < ApplicationRecord
   end
 
   private
+
+  # SCRAM-SHA-256 (RFC 5802/7677): StoredKey = H(HMAC(SaltedPassword,
+  # "Client Key")), ServerKey = HMAC(SaltedPassword, "Server Key").
+  def derive_scram_credentials
+    salt = SecureRandom.random_bytes(16)
+    salted = OpenSSL::KDF.pbkdf2_hmac(password, salt: salt, iterations: SCRAM_ITERATIONS,
+                                      length: 32, hash: "SHA256")
+    client_key = OpenSSL::HMAC.digest("SHA256", salted, "Client Key")
+    self.scram_salt = [ salt ].pack("m0")
+    self.scram_iterations = SCRAM_ITERATIONS
+    self.scram_stored_key = [ OpenSSL::Digest.digest("SHA256", client_key) ].pack("m0")
+    self.scram_server_key = [ OpenSSL::HMAC.digest("SHA256", salted, "Server Key") ].pack("m0")
+  end
 
   def create_default_mailboxes
     DEFAULT_MAILBOXES.each { |name| mailboxes.create!(name: name) }

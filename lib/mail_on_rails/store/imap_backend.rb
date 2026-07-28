@@ -193,6 +193,25 @@ module MailOnRails
         end
       end
 
+      # SCRAM-SHA-256 verifier material for the daemon's AUTHENTICATE
+      # exchange; :notfound until the account's password was (re)set after
+      # the scram columns shipped (bcrypt digests can't be converted).
+      def scram_credentials(email)
+        db do
+          account = EmailAccount.find_by(email: email.to_s.strip.downcase)
+          next { error: "no scram credentials", code: :notfound } unless account&.scram_salt
+
+          {
+            account_id: account.id,
+            email: account.email,
+            salt_base64: account.scram_salt,
+            iterations: account.scram_iterations,
+            stored_key_base64: account.scram_stored_key,
+            server_key_base64: account.scram_server_key
+          }
+        end
+      end
+
       # QRESYNC: uids expunged after since_modseq. complete: false means
       # tombstone history was pruned past since_modseq; the fallback set
       # (every uid ever allocated but no longer present) is still correct,

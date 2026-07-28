@@ -58,6 +58,15 @@ has at least `INBOX`.
 Flags are arrays of IMAP system-flag strings (`"\\Seen"`, `"\\Deleted"`,
 …), stored per message, order not significant.
 
+### `scram_credentials(email)`
+
+SCRAM-SHA-256 verifier material (RFC 5802/7677) for the daemon's
+AUTHENTICATE exchange: `{ account_id:, email:, salt_base64:,
+iterations:, stored_key_base64:, server_key_base64: }`. Never returns
+the password. `code: :notfound` for unknown accounts or accounts whose
+credentials haven't been derived (the app derives them at
+password-set time; bcrypt digests can't be converted).
+
 ### `list_mailboxes(account_id)`
 
 `{ mailboxes: [<name>, ...] }`, sorted by name.
