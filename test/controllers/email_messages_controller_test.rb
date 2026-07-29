@@ -26,14 +26,39 @@ class EmailMessagesControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :success
     assert_select "footer", 1
-    assert_select "footer" do
-      assert_match "spf pass", response.body
-      assert_match "dkim fail", response.body
-      assert_match "dmarc pass", response.body
-      assert_match "clean", response.body
-      assert_match "2.1 / 6.0", response.body
-      assert_match "no action", response.body
-    end
+    footer = css_select("footer").text
+
+    assert_match "spf pass", footer
+    assert_match "dkim fail", footer
+    assert_match "dmarc pass", footer
+    assert_match "✓ No virus", footer
+    assert_match "Spam score: 2.1 / 6.0 — no action", footer
+  end
+
+  # The scan-status badge is the one part of the footer with a branch per
+  # outcome, and its wording is not derived from anything - assert the
+  # strings so a template edit can't quietly change what a reader is told
+  # about a message's safety.
+  def footer_for(scan_status:, virus_name: nil)
+    message = EmailMessage.deliver_raw(@account.inbox, RAW,
+                                       auth_results: "mail.test; spf=pass",
+                                       scan_status: scan_status, virus_name: virus_name)
+    show(message)
+    assert_response :success
+    css_select("footer").text
+  end
+
+  test "an infected message names the virus" do
+    assert_match "☣ Eicar-Test-Signature", footer_for(scan_status: "infected",
+                                                      virus_name: "Eicar-Test-Signature")
+  end
+
+  test "a message that arrived while the scanner was down is marked unscanned" do
+    assert_match "⚠ Unscanned", footer_for(scan_status: "unscanned")
+  end
+
+  test "a message with no scan status is marked not scanned" do
+    assert_match "⚠ Not scanned", footer_for(scan_status: nil)
   end
 
   test "viewing a message marks it as seen" do
