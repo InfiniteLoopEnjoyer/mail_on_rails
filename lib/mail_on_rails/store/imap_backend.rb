@@ -215,8 +215,16 @@ module MailOnRails
       # SCRAM-SHA-256 verifier material for the daemon's AUTHENTICATE
       # exchange; :notfound until the account's password was (re)set after
       # the scram columns shipped (bcrypt digests can't be converted).
-      def scram_credentials(email)
+      # A throttled caller is refused the verifier material outright: the
+      # salt and iteration count are the only things a SCRAM exchange hands
+      # out before the proof, and handing them to an attacker mid-block
+      # would let them grind offline.
+      def scram_credentials(email, ip: nil)
         db do
+          if (blocked = AuthThrottle.check(ip: ip, email: email))
+            next throttled_result(blocked, email, ip)
+          end
+
           account = EmailAccount.find_by(email: email.to_s.strip.downcase)
           next { error: "no scram credentials", code: :notfound } unless account&.scram_salt
 

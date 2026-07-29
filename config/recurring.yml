@@ -28,3 +28,9 @@ production:
   scan_pending_dmarc_reports:
     class: ScanPendingDmarcReportsJob
     schedule: every hour at minute 41
+
+  # Auth throttle counters are only read for live windows and blocks; this
+  # keeps the table from growing without bound under a sustained attack.
+  prune_auth_throttles:
+    command: "AuthThrottle.prune!"
+    schedule: every hour at minute 23

@@ -36,6 +36,71 @@ class MailOnRails::InternalControllerTest < ActionDispatch::IntegrationTest
     assert_equal({ "account_id" => nil, "email" => nil }, response.parsed_body)
   end
 
+  def authenticate_as(password:, ip: "203.0.113.9")
+    post mail_on_rails_internal_authenticate_path,
+         params: { email: EMAIL, password: password, ip: ip }, as: :json, headers: api_auth
+    response.parsed_body
+  end
+
+  test "authenticate throttles after repeated failures and reports retry_after" do
+    original = ENV["MAIL_ON_RAILS_AUTH_MAX_ACCOUNT_FAILURES"]
+    ENV["MAIL_ON_RAILS_AUTH_MAX_ACCOUNT_FAILURES"] = "3"
+
+    3.times { assert_nil authenticate_as(password: "wrong")["throttled"] }
+
+    blocked = authenticate_as(password: "wrong")
+    assert blocked["throttled"]
+    assert_operator blocked["retry_after"], :>, 0
+    assert_nil blocked["account_id"]
+
+    # The block outranks a correct password - that is the point.
+    assert authenticate_as(password: PASSWORD)["throttled"]
+  ensure
+    original ? ENV["MAIL_ON_RAILS_AUTH_MAX_ACCOUNT_FAILURES"] = original
+             : ENV.delete("MAIL_ON_RAILS_AUTH_MAX_ACCOUNT_FAILURES")
+  end
+
+  test "a successful authenticate clears the account's failure counter" do
+    2.times { authenticate_as(password: "wrong") }
+    assert AuthThrottle.find_by(scope: "account", key: EMAIL)
+
+    assert_equal @account.id, authenticate_as(password: PASSWORD)["account_id"]
+    assert_nil AuthThrottle.find_by(scope: "account", key: EMAIL)
+  end
+
+  test "authenticate without an ip still counts the account scope" do
+    post mail_on_rails_internal_authenticate_path,
+         params: { email: EMAIL, password: "wrong" }, as: :json, headers: api_auth
+    assert_response :success
+    assert AuthThrottle.find_by(scope: "account", key: EMAIL)
+    assert_nil AuthThrottle.find_by(scope: "ip")
+  end
+
+  test "imap record_auth_failure counts a failure the daemon adjudicated" do
+    post "/mail_on_rails/internal/imap/record_auth_failure",
+         params: { email: EMAIL, ip: "203.0.113.9" }, as: :json, headers: api_auth
+    assert_response :success
+
+    assert_equal 1, AuthThrottle.find_by(scope: "account", key: EMAIL).failure_count
+    assert_equal 1, AuthThrottle.find_by(scope: "ip", key: "203.0.113.9").failure_count
+  end
+
+  test "imap scram_credentials is refused while throttled" do
+    original = ENV["MAIL_ON_RAILS_AUTH_MAX_ACCOUNT_FAILURES"]
+    ENV["MAIL_ON_RAILS_AUTH_MAX_ACCOUNT_FAILURES"] = "1"
+    authenticate_as(password: "wrong")
+
+    post "/mail_on_rails/internal/imap/scram_credentials",
+         params: { email: EMAIL, ip: "203.0.113.9" }, as: :json, headers: api_auth
+    assert_response :success
+    body = response.parsed_body
+    assert body["throttled"], "verifier material must not be handed out mid-block"
+    assert_nil body["salt_base64"]
+  ensure
+    original ? ENV["MAIL_ON_RAILS_AUTH_MAX_ACCOUNT_FAILURES"] = original
+             : ENV.delete("MAIL_ON_RAILS_AUTH_MAX_ACCOUNT_FAILURES")
+  end
+
   test "outbound_messages queues one row per recipient" do
     raw = "From: #{EMAIL}\r\nSubject: out\r\n\r\nbody\r\n"
     assert_difference -> { SmtpOutboundMessage.count }, 2 do

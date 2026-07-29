@@ -41,14 +41,17 @@ dependency-free reference implementation (`MailOnRails::Imap::Store::Memory`).
 Route a message to the host's logging. `level` is a symbol
 (`:debug`/`:info`/`:warn`/`:error`). Returns nil. Must never raise.
 
-### `authenticate(email, password)`
+### `authenticate(email, password, ip: nil)`
 
-Check credentials against the account base.
+Check credentials against the account base. `ip` is the mail client's
+address as the edge saw it, used for throttling (below); it is optional,
+and a store must behave sanely without it.
 
 Returns `{ account_id:, email: }` — both non-nil on success (`email`
 normalized as stored), both nil on failure (unknown account, wrong
 password). Email lookup is case-insensitive and ignores surrounding
-whitespace.
+whitespace. A throttled attempt returns
+`{ account_id: nil, email: nil, throttled: true, retry_after: <seconds> }`.
 
 `account_id` below is the id returned by `authenticate`. `mailbox_id`
 comes from `select_mailbox`. Mailbox name matching: `INBOX` is
@@ -58,14 +61,60 @@ has at least `INBOX`.
 Flags are arrays of IMAP system-flag strings (`"\\Seen"`, `"\\Deleted"`,
 …), stored per message, order not significant.
 
-### `scram_credentials(email)`
+### Brute-force throttling
+
+A store must refuse credential checks for an address or an account that
+has failed too often, in two independent scopes: per source IP and per
+account. This is separate from any per-connection cap the protocol server
+applies — that one bounds a single connection, this one bounds an
+attacker who hangs up and dials again, which is the only bound that
+actually matters.
+
+Requirements, in the order they matter:
+
+- Once throttled, **the correct password is still refused.** Otherwise an
+  attacker who guesses right on attempt 500 still wins.
+- The check runs **before** the password comparison, so a blocked caller
+  costs an indexed lookup rather than a KDF. This is a CPU-exhaustion
+  control as much as a credential-guessing one.
+- `scram_credentials` is refused the same way. Salt and iteration count
+  are all a SCRAM client receives before proving anything, and they are
+  enough to grind a password offline.
+- Throttling is scoped: blocking one identity must not lock out everyone
+  else, or the control becomes a denial-of-service tool.
+- A successful login clears that **account's** counter. The IP counter is
+  left alone, so one lucky guess doesn't restore an attacker's budget.
+- Attempts made *during* a block must not extend it, or an attacker could
+  pin a shared address (or someone else's account) indefinitely.
+- Serving a block restores the full budget, rather than leaving the
+  counter at the limit where the next failure re-blocks immediately —
+  that difference is a throttle versus an endless lockout for a user
+  whose own device is retrying a stale password.
+
+Limits, windows and block durations are the implementation's to choose;
+the contract suite discovers them rather than assuming any. The app's
+implementation is `AuthThrottle` (counters in the database, so the IMAP
+daemon's worker Ractors and the exim edge share one budget and it
+survives a restart); `Store::Memory` mirrors the semantics in a Hash.
+
+### `record_auth_failure(email, ip: nil)`
+
+Count one failed credential check that the store did not adjudicate
+itself. SCRAM proofs are verified in the daemon against verifier
+material, so the store never sees those failures — without this, SCRAM
+would be an unthrottled path around the `authenticate` throttle. Returns
+`{}`.
+
+### `scram_credentials(email, ip: nil)`
 
 SCRAM-SHA-256 verifier material (RFC 5802/7677) for the daemon's
 AUTHENTICATE exchange: `{ account_id:, email:, salt_base64:,
 iterations:, stored_key_base64:, server_key_base64: }`. Never returns
 the password. `code: :notfound` for unknown accounts or accounts whose
 credentials haven't been derived (the app derives them at
-password-set time; bcrypt digests can't be converted).
+password-set time; bcrypt digests can't be converted). Returns
+`{ throttled: true, retry_after: }` instead of any material when the
+caller is throttled.
 
 ### `list_mailboxes(account_id)`
 
@@ -211,7 +260,10 @@ trust boundary it enforces.
   `mail_on_rails.internal_api_password`, or the `SMTP_INTERNAL_API_PASSWORD`
   env fallback). Exim's AUTH check calls this; a 2xx with a non-null
   `account_id` grants the login. Backed by the same account base as the
-  IMAP store's `authenticate`.
+  IMAP store's `authenticate`. Send the client address as `ip` so SMTP
+  AUTH and IMAP LOGIN share one brute-force budget; a throttled attempt
+  answers `account_id: null` with `throttled: true`, which an edge that
+  only reads `account_id` correctly treats as a denial.
 
 - **`POST mail_on_rails/internal/outbound_messages`** (same auth). Remote
   recipients of an authenticated submission are queued here for the app to

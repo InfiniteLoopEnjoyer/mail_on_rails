@@ -19,14 +19,16 @@ class MailOnRails::InternalController < ActionController::API
 
   before_action :require_internal_api_password
 
-  # Credential check for SMTP AUTH. Mirrors the store contract's
-  # authenticate: both fields null on failure (a 200, not a 401 - the 401
-  # space belongs to the API password above).
+  # Credential check for SMTP AUTH and IMAP LOGIN. Mirrors the store
+  # contract's authenticate: both fields null on failure (a 200, not a 401 -
+  # the 401 space belongs to the API password above). Delegating to the
+  # store means both edges share one brute-force budget (AuthThrottle);
+  # +ip+ is the mail client's address as the edge saw it, and is optional -
+  # an edge that omits it still gets per-account throttling.
   def authenticate
-    account = EmailAccount.authenticate_by(
-      email: params.require(:email), password: params.require(:password)
+    render json: MailOnRails::Store::ImapBackend.new.authenticate(
+      params.require(:email), params.require(:password), ip: params[:ip].presence
     )
-    render json: { account_id: account&.id, email: account&.email }
   end
 
   # Queue outbound mail (authenticated submission to remote recipients),
@@ -79,7 +81,8 @@ class MailOnRails::InternalController < ActionController::API
       when "copy" then backend.copy(params[:mailbox_id].to_i, int_list(:uids), params[:dest_name].to_s)
       when "move" then backend.move(params[:mailbox_id].to_i, int_list(:uids), params[:dest_name].to_s)
       when "expunged_since" then backend.expunged_since(params[:mailbox_id].to_i, params[:since_modseq].to_i)
-      when "scram_credentials" then backend.scram_credentials(params[:email].to_s)
+      when "scram_credentials" then backend.scram_credentials(params[:email].to_s, ip: params[:ip].presence)
+      when "record_auth_failure" then backend.record_auth_failure(params[:email].to_s, ip: params[:ip].presence)
       else return head :not_found
       end
     render json: result

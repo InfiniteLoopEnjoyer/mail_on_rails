@@ -16,14 +16,46 @@ module MailOnRails
         nil
       end
 
-      def authenticate(email, password)
+      # +ip+ is the mail client's address as the edge saw it, used for
+      # brute-force throttling (AuthThrottle). It is optional so an edge
+      # that cannot supply one still gets per-account throttling.
+      #
+      # A throttled attempt returns { throttled: true, retry_after: } and
+      # never reaches the bcrypt comparison - the point is to make guessing
+      # both futile and cheap to refuse.
+      def authenticate(email, password, ip: nil)
         db do
+          if (blocked = AuthThrottle.check(ip: ip, email: email))
+            next throttled_result(blocked, email, ip)
+          end
+
           account = EmailAccount.authenticate_by(email: email.to_s, password: password.to_s)
+          if account
+            AuthThrottle.clear_account(account.email)
+          else
+            AuthThrottle.record_failure(ip: ip, email: email)
+          end
           { account_id: account&.id, email: account&.email }
         end
       end
 
+      # Counts a failure the store itself did not adjudicate: SCRAM proofs
+      # are verified by the daemon against verifier material, so the app
+      # only learns of those failures when the daemon reports them.
+      def record_auth_failure(email, ip: nil)
+        db do
+          AuthThrottle.record_failure(ip: ip, email: email)
+          {}
+        end
+      end
+
       private
+
+      def throttled_result(blocked, email, ip)
+        Rails.logger.warn("[mail_on_rails] auth throttled by #{blocked[:scope]} " \
+                          "(#{ip || "no ip"}, #{email}): #{blocked[:retry_after]}s remaining")
+        { account_id: nil, email: nil, throttled: true, retry_after: blocked[:retry_after] }
+      end
 
       def db
         Rails.application.executor.wrap { yield }
