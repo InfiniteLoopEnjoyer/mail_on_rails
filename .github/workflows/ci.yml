@@ -48,6 +48,12 @@ jobs:
         with:
           bundler-cache: true
 
+      # bin/importmap boots the full app (config/application + Bundler.require),
+      # and ruby-vips raises at load time without the native library - same
+      # reason the test jobs install it.
+      - name: Install libvips
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvips
+
       - name: Scan for security vulnerabilities in JavaScript dependencies
         run: bin/importmap audit
 
