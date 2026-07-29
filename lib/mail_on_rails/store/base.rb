@@ -23,6 +23,18 @@ module MailOnRails
       # A throttled attempt returns { throttled: true, retry_after: } and
       # never reaches the bcrypt comparison - the point is to make guessing
       # both futile and cheap to refuse.
+      #
+      # Returning here also means a refused attempt is not counted, in
+      # either scope. That is deliberate in both directions: hammering an
+      # already-blocked account must not climb the source's counter (it is
+      # one target, nearly always a client retrying a stale password, and
+      # escalating to an ip block would take out everyone else behind that
+      # address), and a blocked source must not be able to push accounts
+      # toward blocks (that would make the throttle a lockout tool). The
+      # scopes still trip independently across *different* targets: a
+      # blocked account is no shield for an attacker working through
+      # others, since each fresh address is adjudicated normally and feeds
+      # the ip counter. Pinned in test/models/auth_throttle_test.rb.
       def authenticate(email, password, ip: nil)
         db do
           if (blocked = AuthThrottle.check(ip: ip, email: email))

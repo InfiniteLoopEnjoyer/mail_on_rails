@@ -1,4 +1,7 @@
 require "test_helper"
+# lib/mail_on_rails is on the autoload ignore list (config/application.rb);
+# the scope-interaction cases below drive the store, so require it.
+require "mail_on_rails/store"
 
 class AuthThrottleTest < ActiveSupport::TestCase
   IP = "203.0.113.9"
@@ -183,6 +186,63 @@ class AuthThrottleTest < ActiveSupport::TestCase
       # Once the block lapses too, it goes.
       AuthThrottle.prune!(now: 2000.seconds.from_now)
       assert_nil AuthThrottle.find_by(scope: "account", key: EMAIL)
+    end
+  end
+
+  # -- how the two scopes interact in use ------------------------------------
+  # check/record_failure are composed by Store::Base#authenticate, which
+  # returns early on a live block without recording. That early return
+  # decides whether one scope's block can stall the other's counter, so
+  # these drive the store rather than the model.
+
+  def store = MailOnRails::Store::ImapBackend.new
+
+  def fail_auth(email:, ip:, times: 1)
+    times.times { store.authenticate(email, "wrong-password", ip: ip) }
+  end
+
+  def counter(scope, key) = AuthThrottle.find_by(scope: scope, key: key)&.failure_count
+
+  # The scopes do trip independently: a block on one account is not a
+  # shield an attacker can hide behind while working through others.
+  test "a blocked account does not stop the ip scope counting other accounts" do
+    with_limits(ip: 100, account: 2) do
+      fail_auth(email: EMAIL, ip: IP, times: 2)
+      assert AuthThrottle.check(ip: IP, email: EMAIL), "expected the account to be blocked"
+      assert_equal 2, counter("ip", IP)
+
+      # Spraying: each address is fresh, so none of them blocks and every
+      # attempt reaches the source counter.
+      3.times { |i| fail_auth(email: "spray#{i}@example.test", ip: IP) }
+      assert_equal 5, counter("ip", IP), "attempts on other accounts must still count"
+    end
+  end
+
+  # ...but hammering one already-blocked account does not. The attempt is
+  # refused before the password check, tells us nothing new about the
+  # source, and is almost always one misconfigured client retrying a stale
+  # password - letting it climb would escalate into an ip block that takes
+  # out everyone else behind the same address.
+  test "repeated attempts on an already-blocked account do not climb the ip scope" do
+    with_limits(ip: 100, account: 2) do
+      fail_auth(email: EMAIL, ip: IP, times: 2)
+      before = counter("ip", IP)
+
+      fail_auth(email: EMAIL, ip: IP, times: 20)
+      assert_equal before, counter("ip", IP)
+    end
+  end
+
+  # The mirror case, and the more important one: a blocked source must not
+  # be usable to push accounts toward blocks, or the throttle becomes a
+  # tool for locking people out of their own mail.
+  test "attempts from a blocked ip do not climb any account counter" do
+    with_limits(ip: 3, account: 100) do
+      3.times { |i| fail_auth(email: "spray#{i}@example.test", ip: IP) }
+      assert AuthThrottle.check(ip: IP, email: nil), "expected the ip to be blocked"
+
+      fail_auth(email: EMAIL, ip: IP, times: 20)
+      assert_nil counter("account", EMAIL), "a blocked source must not reach a victim's counter"
     end
   end
 

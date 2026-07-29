@@ -90,6 +90,15 @@ Requirements, in the order they matter:
   counter at the limit where the next failure re-blocks immediately —
   that difference is a throttle versus an endless lockout for a user
   whose own device is retrying a stale password.
+- A refused attempt is not counted in either scope. Hammering an
+  already-blocked account must not climb the source's counter (one
+  target, nearly always a stale client, and escalating to an address
+  block would hit everyone else behind it), and a blocked source must
+  not be able to push accounts toward blocks (that would turn the
+  throttle into a lockout tool). The scopes still trip independently
+  across *different* targets, which is what stops a blocked account
+  being used as a shield: every fresh address is adjudicated normally
+  and feeds the address counter.
 
 Limits, windows and block durations are the implementation's to choose;
 the contract suite discovers them rather than assuming any. The app's
