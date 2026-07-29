@@ -105,4 +105,5 @@ gem "slim"
 # Active Storage variants (attachment thumbnails) [https://guides.rubyonrails.org/active_storage_overview.html#transforming-images]
 gem "image_processing"
 
-gem "requestjs-rails", "~> 0.0.14"
+gem "requestjs-rails"
+gem "ruby-vips"
