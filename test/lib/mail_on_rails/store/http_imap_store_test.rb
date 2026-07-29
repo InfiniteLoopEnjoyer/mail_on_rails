@@ -35,8 +35,9 @@ class HttpImapStoreTest < ActionDispatch::IntegrationTest
       @headers = { "Authorization" => ActionController::HttpAuthentication::Basic.encode_credentials("mail_on_rails", password) }
     end
 
-    def authenticate(email, password, ip: nil)
-      body = post("/mail_on_rails/internal/authenticate", { email: email, password: password, ip: ip })
+    def authenticate(email, password, ip: nil, source: nil)
+      body = post("/mail_on_rails/internal/authenticate",
+                  { email: email, password: password, ip: ip, source: source })
       result = { account_id: body[:account_id], email: body[:email] }
       result.merge!(throttled: true, retry_after: body[:retry_after]) if body[:throttled]
       result

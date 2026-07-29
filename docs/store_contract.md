@@ -41,11 +41,13 @@ dependency-free reference implementation (`MailOnRails::Imap::Store::Memory`).
 Route a message to the host's logging. `level` is a symbol
 (`:debug`/`:info`/`:warn`/`:error`). Returns nil. Must never raise.
 
-### `authenticate(email, password, ip: nil)`
+### `authenticate(email, password, ip: nil, source: nil)`
 
 Check credentials against the account base. `ip` is the mail client's
 address as the edge saw it, used for throttling (below); it is optional,
-and a store must behave sanely without it.
+and a store must behave sanely without it. `source` names the calling
+edge (`"imap"`/`"smtp"`) for the app's attempt log; it must never affect
+the verdict, and a store is free to ignore it.
 
 Returns `{ account_id:, email: }` — both non-nil on success (`email`
 normalized as stored), both nil on failure (unknown account, wrong
@@ -106,7 +108,7 @@ implementation is `AuthThrottle` (counters in the database, so the IMAP
 daemon's worker Ractors and the exim edge share one budget and it
 survives a restart); `Store::Memory` mirrors the semantics in a Hash.
 
-### `record_auth_failure(email, ip: nil)`
+### `record_auth_failure(email, ip: nil, source: nil)`
 
 Count one failed credential check that the store did not adjudicate
 itself. SCRAM proofs are verified in the daemon against verifier

@@ -10,6 +10,15 @@ module ApplicationHelper
   def users_section?     = controller_name == "users" || controller_path.start_with?("two_factor/")
   def settings_section?  = controller_name == "settings"
   def mailboxes_section? = %w[email_accounts mailboxes email_messages].include?(controller_name)
+  def auth_attempts_section? = controller_name == "auth_attempts"
+
+  # Window selector on the auth attempts page. Class literals again, so
+  # Tailwind's scanner sees them.
+  def window_tab_classes(active)
+    base = "rounded-md px-2.5 py-1 text-sm"
+    active ? "#{base} bg-accent/10 font-medium text-accent"
+           : "#{base} text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+  end
 
   # Sidebar link classes; child items are indented + a shade lighter to read
   # as nested. Keep every class literal so Tailwind's scanner sees them.
@@ -37,6 +46,13 @@ module ApplicationHelper
     when "softfail", "neutral"              then "bg-amber-100 text-amber-700"
     else                                         "bg-slate-100 text-slate-600"
     end
+  end
+
+  # Badge text for a sender-auth verdict, e.g. "✓ SPF Pass" / "⚠ DKIM Fail".
+  # Icon buckets mirror auth_badge_classes: ✓ only for a clean pass.
+  def auth_badge_label(mechanism, verdict)
+    icon = verdict == "pass" ? "✓" : "⚠"
+    "#{icon} #{mechanism.upcase} #{(verdict || "none").capitalize}"
   end
 
   # rspamd score for the footer: "score / threshold — action", degrading to

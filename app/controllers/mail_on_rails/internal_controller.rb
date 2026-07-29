@@ -27,7 +27,8 @@ class MailOnRails::InternalController < ActionController::API
   # an edge that omits it still gets per-account throttling.
   def authenticate
     render json: MailOnRails::Store::ImapBackend.new.authenticate(
-      params.require(:email), params.require(:password), ip: params[:ip].presence
+      params.require(:email), params.require(:password),
+      ip: params[:ip].presence, source: auth_source
     )
   end
 
@@ -82,13 +83,22 @@ class MailOnRails::InternalController < ActionController::API
       when "move" then backend.move(params[:mailbox_id].to_i, int_list(:uids), params[:dest_name].to_s)
       when "expunged_since" then backend.expunged_since(params[:mailbox_id].to_i, params[:since_modseq].to_i)
       when "scram_credentials" then backend.scram_credentials(params[:email].to_s, ip: params[:ip].presence)
-      when "record_auth_failure" then backend.record_auth_failure(params[:email].to_s, ip: params[:ip].presence)
+      when "record_auth_failure" then backend.record_auth_failure(params[:email].to_s, ip: params[:ip].presence,
+                                                                                      source: auth_source)
       else return head :not_found
       end
     render json: result
   end
 
   private
+
+  # Which mail edge is asking, for the attempt log (AuthAttempt). Only an
+  # edge names itself, and only from a known set - an unrecognised value is
+  # dropped rather than stored, so a caller can't invent a source label.
+  def auth_source
+    source = params[:source].to_s
+    source if AuthAttempt::SOURCES.include?(source)
+  end
 
   # Bounds the outbound queue (authenticated senders only, but still).
   def outbound_limit

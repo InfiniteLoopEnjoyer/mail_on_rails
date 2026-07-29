@@ -34,7 +34,7 @@ article.rounded-lg.border.border-slate-200.bg-white.px-5.py-4
         - if @email_message.authenticated?
           span.rounded-full.bg-green-100.px-2.text-xs.whitespace-nowrap.text-green-700 title="Sender authenticated as #{@email_message.authenticated_as}" ✓ verified
         - elsif @email_message.sender_verified?
-          span.rounded-full.bg-green-100.px-2.text-xs.whitespace-nowrap.text-green-700 title="Sender domain verified (#{@email_message.auth_results})" ✓ dmarc
+          span.rounded-full.bg-green-100.px-2.text-xs.whitespace-nowrap.text-green-700 title="Sender domain verified (#{@email_message.auth_results})" ✓ DMARC
         - else
           span.rounded-full.bg-red-100.px-2.text-xs.whitespace-nowrap.text-red-700 title="Sender not verified - may be spoofed#{@email_message.auth_results.present? ? " (#{@email_message.auth_results})" : ""}" ⚠ unverified
       dt.text-slate-500 To
@@ -52,7 +52,7 @@ article.rounded-lg.border.border-slate-200.bg-white.px-5.py-4
         - %w[spf dkim dmarc].each do |mech|
           - verdict = @email_message.auth_result(mech)
           span.rounded-full.px-2.whitespace-nowrap class=auth_badge_classes(verdict) title="#{mech.upcase}=#{verdict || "none"}"
-            = "#{mech} #{verdict || "none"}"
+            = auth_badge_label(mech, verdict)
 
       - case @email_message.scan_status
       - when "infected"

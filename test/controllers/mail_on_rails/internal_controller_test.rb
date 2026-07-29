@@ -76,6 +76,64 @@ class MailOnRails::InternalControllerTest < ActionDispatch::IntegrationTest
     assert_nil AuthThrottle.find_by(scope: "ip")
   end
 
+  test "a failed authenticate is logged with the edge's source" do
+    post mail_on_rails_internal_authenticate_path,
+         params: { email: EMAIL, password: "wrong", ip: "203.0.113.9", source: "smtp" },
+         as: :json, headers: api_auth
+    assert_response :success
+
+    attempt = AuthAttempt.sole
+    assert_equal "smtp", attempt.source
+    assert_equal "203.0.113.9", attempt.ip
+    assert_equal EMAIL, attempt.username
+    assert_equal "bad_credentials", attempt.outcome
+    assert attempt.account_exists, "this address does exist here"
+  end
+
+  test "an attempt on an address that does not exist is logged as unknown_account" do
+    post mail_on_rails_internal_authenticate_path,
+         params: { email: "cyrus", password: "wrong", ip: "203.0.113.9", source: "smtp" },
+         as: :json, headers: api_auth
+
+    attempt = AuthAttempt.sole
+    assert_equal "unknown_account", attempt.outcome
+    assert_not attempt.account_exists
+  end
+
+  test "a successful authenticate is not logged" do
+    post mail_on_rails_internal_authenticate_path,
+         params: { email: EMAIL, password: PASSWORD, ip: "203.0.113.9", source: "smtp" },
+         as: :json, headers: api_auth
+    assert_response :success
+    assert_equal 0, AuthAttempt.count, "successes would bury the signal"
+  end
+
+  # An edge names itself, but the label is only accepted from a known set -
+  # otherwise a caller could invent sources and poison the analysis.
+  test "an unrecognised source is dropped rather than stored" do
+    post mail_on_rails_internal_authenticate_path,
+         params: { email: EMAIL, password: "wrong", ip: "203.0.113.9", source: "../../etc" },
+         as: :json, headers: api_auth
+    assert_response :success
+    assert_equal 0, AuthAttempt.count
+  end
+
+  test "an omitted source is not logged either" do
+    post mail_on_rails_internal_authenticate_path,
+         params: { email: EMAIL, password: "wrong", ip: "203.0.113.9" },
+         as: :json, headers: api_auth
+    assert_response :success
+    assert_equal 0, AuthAttempt.count, "a row labelled with a guessed source is worse than none"
+    assert AuthThrottle.find_by(scope: "account", key: EMAIL), "...but it still counts for throttling"
+  end
+
+  test "imap record_auth_failure logs with the imap source" do
+    post "/mail_on_rails/internal/imap/record_auth_failure",
+         params: { email: EMAIL, ip: "203.0.113.9", source: "imap" }, as: :json, headers: api_auth
+
+    assert_equal "imap", AuthAttempt.sole.source
+  end
+
   test "imap record_auth_failure counts a failure the daemon adjudicated" do
     post "/mail_on_rails/internal/imap/record_auth_failure",
          params: { email: EMAIL, ip: "203.0.113.9" }, as: :json, headers: api_auth

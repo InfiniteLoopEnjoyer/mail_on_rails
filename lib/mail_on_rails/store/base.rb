@@ -35,10 +35,12 @@ module MailOnRails
       # blocked account is no shield for an attacker working through
       # others, since each fresh address is adjudicated normally and feeds
       # the ip counter. Pinned in test/models/auth_throttle_test.rb.
-      def authenticate(email, password, ip: nil)
+      # +source+ names the auth surface ("imap"/"smtp") for the attempt log;
+      # it only affects what gets recorded, never the verdict.
+      def authenticate(email, password, ip: nil, source: nil)
         db do
           if (blocked = AuthThrottle.check(ip: ip, email: email))
-            next throttled_result(blocked, email, ip)
+            next throttled_result(blocked, email, ip, source)
           end
 
           account = EmailAccount.authenticate_by(email: email.to_s, password: password.to_s)
@@ -46,6 +48,7 @@ module MailOnRails
             AuthThrottle.clear_account(account.email)
           else
             AuthThrottle.record_failure(ip: ip, email: email)
+            log_attempt(email, ip, source, "bad_credentials")
           end
           { account_id: account&.id, email: account&.email }
         end
@@ -54,19 +57,30 @@ module MailOnRails
       # Counts a failure the store itself did not adjudicate: SCRAM proofs
       # are verified by the daemon against verifier material, so the app
       # only learns of those failures when the daemon reports them.
-      def record_auth_failure(email, ip: nil)
+      def record_auth_failure(email, ip: nil, source: nil)
         db do
           AuthThrottle.record_failure(ip: ip, email: email)
+          log_attempt(email, ip, source, "bad_credentials")
           {}
         end
       end
 
       private
 
-      def throttled_result(blocked, email, ip)
+      def throttled_result(blocked, email, ip, source = nil)
         Rails.logger.warn("[mail_on_rails] auth throttled by #{blocked[:scope]} " \
                           "(#{ip || "no ip"}, #{email}): #{blocked[:retry_after]}s remaining")
+        log_attempt(email, ip, source, "throttled")
         { account_id: nil, email: nil, throttled: true, retry_after: blocked[:retry_after] }
+      end
+
+      # The attempt log is an audit trail, not part of the verdict, so it is
+      # skipped rather than guessed at when the caller named no surface -
+      # a row labelled with the wrong source is worse than no row.
+      def log_attempt(email, ip, source, outcome)
+        return if source.blank?
+
+        AuthAttempt.record(ip: ip, username: email, source: source, outcome: outcome)
       end
 
       def db

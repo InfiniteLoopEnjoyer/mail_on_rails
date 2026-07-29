@@ -15,6 +15,11 @@ class SessionsController < ApplicationController
         redirect_to after_authentication_url
       end
     else
+      # Recorded so the web login shows up alongside IMAP and SMTP AUTH in
+      # the attempt log. Enforcement here stays Rails' own rate_limit above
+      # (per-IP, cache-backed); this is the audit trail, not a second gate.
+      AuthAttempt.record(ip: request.remote_ip, username: params[:email_address],
+                         source: "web", outcome: "bad_credentials")
       redirect_to new_session_path, alert: "Try another email address or password."
     end
   end

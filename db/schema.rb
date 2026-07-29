@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_07_29_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_07_29_180000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -49,6 +49,24 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_29_120000) do
     t.bigint "blob_id", null: false
     t.string "variation_digest", null: false
     t.index ["blob_id", "variation_digest"], name: "index_active_storage_variant_records_uniqueness", unique: true
+  end
+
+  create_table "auth_attempts", force: :cascade do |t|
+    t.boolean "account_exists", default: false, null: false
+    t.integer "attempt_count", default: 1, null: false
+    t.datetime "created_at", null: false
+    t.string "ip"
+    t.datetime "occurred_at", null: false
+    t.string "outcome", null: false
+    t.boolean "rollup", default: false, null: false
+    t.string "source", null: false
+    t.datetime "updated_at", null: false
+    t.string "username"
+    t.index ["account_exists", "occurred_at"], name: "index_auth_attempts_on_account_exists_and_occurred_at"
+    t.index ["ip", "occurred_at"], name: "index_auth_attempts_on_ip_and_occurred_at"
+    t.index ["ip", "source", "occurred_at"], name: "index_auth_attempts_on_rollup_key", unique: true, where: "rollup"
+    t.index ["occurred_at"], name: "index_auth_attempts_on_occurred_at"
+    t.index ["username"], name: "index_auth_attempts_on_username"
   end
 
   create_table "auth_throttles", force: :cascade do |t|

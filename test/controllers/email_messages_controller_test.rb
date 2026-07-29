@@ -26,12 +26,16 @@ class EmailMessagesControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :success
     assert_select "footer", 1
-    footer = css_select("footer").text
 
-    assert_match "spf pass", footer
-    assert_match "dkim fail", footer
-    assert_match "dmarc pass", footer
-    assert_match "✓ No virus", footer
+    # Anchored on each badge's title rather than its label: the title is the
+    # verdict itself ("SPF=pass"), while the visible wording is presentation
+    # and has been restyled more than once.
+    assert_select "footer span[title=?]", "SPF=pass"
+    assert_select "footer span[title=?]", "DKIM=fail"
+    assert_select "footer span[title=?]", "DMARC=pass"
+
+    footer = css_select("footer").text
+    assert_match "No virus", footer
     assert_match "Spam score: 2.1 / 6.0 — no action", footer
   end
 

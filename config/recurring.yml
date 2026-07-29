@@ -34,3 +34,9 @@ production:
   prune_auth_throttles:
     command: "AuthThrottle.prune!"
     schedule: every hour at minute 23
+
+  # The attempt log's write rate is set by whoever is attacking, so its
+  # retention has to be enforced rather than assumed.
+  prune_auth_attempts:
+    command: "AuthAttempt.prune!"
+    schedule: every day at 4:17am

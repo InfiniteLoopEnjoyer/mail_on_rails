@@ -71,6 +71,10 @@ Rails.application.routes.draw do
     post :sync
   end
 
+  # Failed credential checks across all three auth surfaces - see
+  # AuthAttempt / AuthAttemptsController.
+  resources :auth_attempts, only: :index
+
 
 
   resources :users, except: %i[show] do
