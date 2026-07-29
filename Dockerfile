@@ -64,6 +64,14 @@ RUN SECRET_KEY_BASE_DUMMY=1 ./bin/rails assets:precompile
 # Final stage for app image
 FROM base
 
+# The bundle carries a fixed json (2.21.1); remove the base image's stale
+# default gem (json 2.18.0, CVE-2026-33210) - spec AND stdlib copies, since
+# plain `require "json"` outside bundler loads the stdlib file straight off
+# $LOAD_PATH and would silently get 2.18.0.
+RUN rm /usr/local/lib/ruby/gems/*/specifications/default/json-*.gemspec && \
+    rm -rf /usr/local/lib/ruby/[0-9]*/json.rb /usr/local/lib/ruby/[0-9]*/json \
+           /usr/local/lib/ruby/[0-9]*/*-linux*/json
+
 # Run and own only the runtime files as a non-root user for security.
 # /rails/shared is the mount point for the mailconf volume shared with the
 # exim edge, created as rails:rails so a fresh named volume inherits
