@@ -2,16 +2,13 @@
 ## Supply-chain hardening follow-ups (2026-07-29)
 
 Deferred items from the Docker/Omdia supply-chain report review (CI for the
-daemon repos, scheduled scans, and Trivy image scanning are done):
+daemon repos, scheduled scans, Trivy image scanning, digest-pinned base
+images, and Dependabot docker ecosystems in all three repos are done):
 
-- **Digest-pin base images + Dependabot docker ecosystem** — pin the
-  `FROM docker.io/library/ruby:4.0.6-slim` lines in all three repos'
-  Dockerfiles (and the `postgres:16` accessory in config/deploy.yml) by
-  digest, add `package-ecosystem: docker` to .github/dependabot.yml here,
-  and create dependabot.yml (bundler + github-actions + docker) in
-  mail_on_rails_imap and mail_on_rails_exim, which have none. Dependabot
-  then bumps digests via PR instead of builds silently picking up whatever
-  the tag points at.
+- **Accessory images aren't Dependabot-watched** — the `postgres:16` (and
+  registry/kamal-proxy) images live in config/deploy.yml, which the docker
+  ecosystem doesn't scan. Low churn; bump them manually when advisories
+  land.
 
 - **Pin GitHub Actions to commit SHAs** — `actions/checkout@v7` etc. are
   mutable tags (the tj-actions/changed-files compromise worked by

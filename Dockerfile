@@ -7,9 +7,10 @@
 
 # For a containerized dev environment, see Dev Containers: https://guides.rubyonrails.org/getting_started_with_devcontainer.html
 
-# Make sure RUBY_VERSION matches the Ruby version in .ruby-version
-ARG RUBY_VERSION=4.0.6
-FROM docker.io/library/ruby:$RUBY_VERSION-slim AS base
+# Digest-pinned so builds can't silently pick up whatever the tag points at;
+# Dependabot (docker ecosystem) PRs tag and digest bumps. Keep the version in
+# sync with .ruby-version.
+FROM docker.io/library/ruby:4.0.6-slim@sha256:abd7528c4df35d151e2643d5efb845e442a26e36a4babc6459bee508619137a2 AS base
 
 # Rails app lives here
 WORKDIR /rails
