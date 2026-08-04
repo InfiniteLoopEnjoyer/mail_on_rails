@@ -72,15 +72,27 @@ class ApplicationSystemTestCase < ActionDispatch::SystemTestCase
 
   # Accepts the data-turbo-confirm dialog raised by clicking `locator`.
   #
-  # Turbo's confirm interceptor exists only once its module has executed; a
-  # click that lands before then submits the form natively - the action goes
-  # through unconfirmed and accept_confirm times out waiting for a dialog
-  # that never opened. Seen on CI's slower runners, so wait for Turbo first.
+  # Two CI-runner races meet here. Turbo's confirm interceptor exists only
+  # once its module has executed - a click before then submits the form
+  # natively with no dialog - so wait for Turbo first. And on a starved
+  # renderer the click itself can miss (layout still shifting between find
+  # and click), leaving neither a dialog nor a submit; retry the whole
+  # click-and-wait, first accepting any dialog that opened late.
   def accept_turbo_confirm(locator)
     page.document.synchronize(5) do
       raise Capybara::ExpectationNotMet unless page.evaluate_script("!!window.Turbo")
     end
-    accept_confirm { click_on locator }
+
+    attempts = 0
+    begin
+      accept_confirm(wait: 5) { click_on locator }
+    rescue Capybara::ModalNotFound
+      begin
+        page.driver.browser.switch_to.alert.accept
+      rescue Selenium::WebDriver::Error::NoSuchAlertError
+        (attempts += 1) < 3 ? retry : raise
+      end
+    end
   end
 
   # Signs in through the form; the cookie-jar shortcut the integration tests
