@@ -229,4 +229,35 @@ class EmailDraftTest < ActiveSupport::TestCase
     saved = build(cc: "carbon@remote.test").save
     assert_match(/^Cc: carbon@remote\.test/, saved.raw)
   end
+
+  # -- switching the sending account -----------------------------------------
+
+  # The composer lets the user change who the message is from. That moves
+  # the draft into a different account's Drafts folder, so the revision it
+  # supersedes has to be found by id rather than inside the destination -
+  # otherwise it is stranded in the old account's folder and shows up on
+  # that account's devices forever.
+  test "changing the account moves the draft rather than leaving a copy behind" do
+    other = EmailAccount.create!(email: "dave@example.com", password: "secret123")
+    draft = build
+    draft.save
+    assert_equal 1, @drafts.email_messages.count
+
+    draft.email_account_id = other.id
+    moved = draft.save
+
+    assert_equal 0, @drafts.email_messages.count, "no orphan in the old account's Drafts"
+    assert_equal 1, other.find_mailbox("Drafts").email_messages.count
+    assert_equal other.find_mailbox("Drafts").id, moved.mailbox_id
+  end
+
+  # discard_previous takes an id from the client, so it must refuse to
+  # destroy anything that isn't a draft.
+  test "an id naming ordinary mail is never destroyed" do
+    received = EmailMessage.deliver_raw(@account.inbox, "From: a@b.test\r\nSubject: hi\r\n\r\nbody\r\n")
+    draft = build(draft_message_id: received.id)
+
+    draft.save
+    assert EmailMessage.exists?(received.id), "real mail must survive a stray draft id"
+  end
 end

@@ -3,17 +3,28 @@
 / Drafts mailbox, so the draft is a real IMAP message and shows up on the
 / user's other devices.
 /
-/ Locals: draft, title, discard_id (nil unless the draft is already saved).
+/ Locals: draft, title, discard_id (nil unless the draft is already saved),
+/ accounts (a From select instead of a fixed sender), errors.
+- accounts = local_assigns[:accounts]
+- errors = local_assigns[:errors]
 section.rounded-lg.border.border-slate-200.bg-white data-controller="draft-autosave" data-draft-autosave-url-value=drafts_path
   = form_with url: emails_path, method: :post, class: "contents" do |form|
     header.flex.flex-wrap.items-center.gap-2.border-b.border-slate-200.px-4.py-3
       h2.font-semibold= title
       span.ml-auto.text-xs.text-slate-500 data-draft-autosave-target="status"
 
+    - if errors&.any?
+      .border-b.border-red-200.bg-red-50.px-4.py-3.text-sm.text-red-700
+        ul.list-disc.pl-4
+          - errors.full_messages.each do |message|
+            li= message
+
     / Autosave posts every "field" target, so the identifiers the draft needs
     / to be saved and threaded are targets too. They never change, which
     / keeps the "has anything changed?" snapshot stable.
-    - [["email_account_id", draft.email_account_id], ["in_reply_to", draft.in_reply_to], ["references", draft.references]].each do |field, value|
+    - hidden = [["in_reply_to", draft.in_reply_to], ["references", draft.references]]
+    - hidden << ["email_account_id", draft.email_account_id] unless accounts
+    - hidden.each do |field, value|
       = hidden_field_tag "composed_email[#{field}]", value,
         data: { draft_autosave_target: "field", draft_field: field }
 
@@ -23,6 +34,18 @@ section.rounded-lg.border.border-slate-200.bg-white data-controller="draft-autos
     = hidden_field_tag "composed_email[draft_message_id]", draft.draft_message_id, data: { draft_autosave_target: "draftId" }
 
     .space-y-3.px-4.py-3
+      / Only when the sender is the user's to choose. Changing it moves the
+      / draft into that account's Drafts folder on the next save, so it is
+      / an autosave field like any other.
+      - if accounts
+        .grid class="grid-cols-[3rem_1fr] items-center gap-3"
+          = label_tag "composed_email_email_account_id", "From", class: "text-sm text-slate-500"
+          = select_tag "composed_email[email_account_id]",
+            options_from_collection_for_select(accounts, :id, :email, draft.email_account_id),
+            id: "composed_email_email_account_id",
+            class: "w-full rounded-md border border-slate-200 px-3 py-1.5 text-sm focus:border-accent focus:outline-none",
+            data: { draft_autosave_target: "field", draft_field: "email_account_id", action: "change->draft-autosave#schedule" }
+
       - [["to", "To", draft.to], ["cc", "Cc", draft.cc], ["subject", "Subject", draft.subject]].each do |field, label, value|
         .grid class="grid-cols-[3rem_1fr] items-center gap-3"
           = label_tag "composed_email_#{field}", label, class: "text-sm text-slate-500"

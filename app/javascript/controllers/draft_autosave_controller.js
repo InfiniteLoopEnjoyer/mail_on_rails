@@ -67,7 +67,9 @@ export default class extends Controller {
       if (data.message_id) this.messageIdTarget.value = data.message_id
     }
     this.lastSaved = current
-    this.setStatus(data.draft_message_id ? "Saved to Drafts" : "")
+    // The time matters: without it the status is a constant string, and a
+    // user cannot tell a save that just landed from one ten minutes old.
+    this.setStatus(data.draft_message_id ? `Saved to Drafts ${this.timeOf(data.saved_at)}` : "")
   }
 
   // Everything the server needs: the typed content plus the identifiers
@@ -92,6 +94,11 @@ export default class extends Controller {
 
   snapshot() {
     return JSON.stringify(this.snapshotFields())
+  }
+
+  timeOf(iso) {
+    const at = iso ? new Date(iso) : new Date()
+    return at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
   }
 
   setStatus(text) {

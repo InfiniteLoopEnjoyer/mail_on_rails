@@ -108,6 +108,8 @@ Rails.application.routes.draw do
       resources :email_messages, only: %i[show], path: "messages" do
         member do
           post :mark_read
+          post :rescan
+          get "attachments/:index", action: :attachment, as: :attachment, constraints: { index: /\d+/ }
         end
       end
     end

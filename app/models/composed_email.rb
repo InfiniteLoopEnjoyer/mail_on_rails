@@ -1,3 +1,5 @@
+require "mail_on_rails/clamav_scanner"
+
 # An email composed in the web UI. deliver builds the RFC822 message and
 # routes each recipient the same way the SMTP edge would: local addresses
 # (accounts or aliases) go straight into their account's INBOX, remote ones
@@ -31,10 +33,22 @@ class ComposedEmail
     return false unless valid?
 
     raw = build_raw
+    # The web composer is its own submission edge: mail it puts straight into
+    # a local INBOX never crosses exim or the mailroom, so it must run the
+    # same clamav scan itself. Unlike the mailroom (which has already
+    # accepted the message and can only quarantine), the sender is right
+    # here - an infected message is simply refused.
+    verdict = MailOnRails::ClamavScanner.scan(raw) if MailOnRails::ClamavScanner.enabled?
+    if verdict&.infected?
+      errors.add(:base, "Virus detected (#{verdict.virus}) - the message was not sent")
+      return false
+    end
+
+    scan_status = verdict && (verdict.clean? ? "clean" : "unscanned")
     ApplicationRecord.transaction do
       recipients.each do |recipient|
         if (inbox = local_inbox(recipient))
-          EmailMessage.deliver_raw(inbox, raw, authenticated_as: account.email)
+          EmailMessage.deliver_raw(inbox, raw, authenticated_as: account.email, scan_status: scan_status)
         else
           SmtpOutboundMessage.create!(mail_from: account.email, recipient: recipient,
                                       data: raw, next_attempt_at: Time.current)

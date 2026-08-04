@@ -30,7 +30,11 @@ class EmailDraft
 
   validate :account_chosen
 
+  # Re-resolved whenever email_account_id changes: the composer lets the
+  # sender be switched mid-draft, and a memo that outlived the change would
+  # file the next revision into the old account's Drafts folder.
   def account
+    @account = nil unless @account&.id.to_s == email_account_id.to_s
     @account ||= EmailAccount.find_by(id: email_account_id)
   end
 
@@ -105,7 +109,7 @@ class EmailDraft
     ApplicationRecord.transaction do
       saved = EmailMessage.deliver_raw(mailbox, build_raw, flags: FLAGS.dup,
                                                           authenticated_as: account.email)
-      discard_previous(mailbox)
+      discard_previous
       self.draft_message_id = saved.id
       saved
     end
@@ -114,8 +118,7 @@ class EmailDraft
   # Removes the saved revision, if it is still there. Used when a draft is
   # sent or abandoned.
   def discard
-    mailbox = drafts_mailbox
-    discard_previous(mailbox) if mailbox
+    discard_previous
     self.draft_message_id = nil
     true
   end
@@ -150,10 +153,17 @@ class EmailDraft
   # The previous revision may already be gone - expunged by a phone that
   # saved its own revision, or by a concurrent autosave. That is ordinary,
   # so a miss is silent.
-  def discard_previous(mailbox)
+  #
+  # Looked up by id rather than inside the destination mailbox: changing
+  # the From account moves the draft into a *different* account's Drafts
+  # folder, and scoping the lookup to the destination would strand the old
+  # revision in the previous account's folder. Guarded on draft? so an id
+  # naming an ordinary message can never delete real mail.
+  def discard_previous
     return if draft_message_id.blank?
 
-    mailbox.email_messages.find_by(id: draft_message_id)&.destroy
+    previous = EmailMessage.find_by(id: draft_message_id)
+    previous.destroy if previous&.draft?
   end
 
   def account_chosen

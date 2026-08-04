@@ -24,11 +24,9 @@ class DraftAutosaveTest < ApplicationSystemTestCase
     open_message
     assert_selector "h2", text: "Reply"
 
-    fill_in "composed_email[body]", with: "Thanks, that works for me."
+    compose("body", "Thanks, that works for me.")
 
-    # The debounce is 3s; the status line is the composer's own signal that
-    # the round trip finished.
-    assert_selector "[data-draft-autosave-target='status']", text: "Saved to Drafts", wait: 15
+    wait_for_autosave
 
     saved = @drafts.email_messages.sole
     assert_includes saved.flags, "\\Draft"
@@ -41,15 +39,12 @@ class DraftAutosaveTest < ApplicationSystemTestCase
   test "editing again replaces the draft instead of adding a second one" do
     open_message
 
-    fill_in "composed_email[body]", with: "First pass."
-    assert_selector "[data-draft-autosave-target='status']", text: "Saved to Drafts", wait: 15
+    compose("body", "First pass.")
+    wait_for_autosave
     first_id = @drafts.email_messages.sole.id
 
-    fill_in "composed_email[body]", with: "Second pass, revised."
-    # Wait for the id to actually turn over rather than for the status text,
-    # which already reads "Saved to Drafts" from the first save.
-    assert_no_selector "input[name='composed_email[draft_message_id]'][value='#{first_id}']",
-                       visible: :all, wait: 15
+    second_id = wait_for_autosave { compose("body", "Second pass, revised.") }
+    assert_not_equal first_id.to_s, second_id, "a revision is a new message"
 
     assert_equal 1, @drafts.email_messages.count, "one draft, not a revision history"
     assert_match(/Second pass, revised\./, @drafts.email_messages.sole.raw)
@@ -68,8 +63,8 @@ class DraftAutosaveTest < ApplicationSystemTestCase
   test "sending the reply leaves nothing behind in Drafts" do
     open_message
 
-    fill_in "composed_email[body]", with: "Sending this one."
-    assert_selector "[data-draft-autosave-target='status']", text: "Saved to Drafts", wait: 15
+    compose("body", "Sending this one.")
+    wait_for_autosave
 
     click_on "Send"
     assert_text "Email sent.", wait: 10
@@ -81,8 +76,8 @@ class DraftAutosaveTest < ApplicationSystemTestCase
   test "a draft can be reopened from the Drafts folder and carried on" do
     open_message
 
-    fill_in "composed_email[body]", with: "Started on the laptop."
-    assert_selector "[data-draft-autosave-target='status']", text: "Saved to Drafts", wait: 15
+    compose("body", "Started on the laptop.")
+    wait_for_autosave
 
     visit email_account_mailbox_url(@account, @drafts)
     click_on "Re: hello"
@@ -92,8 +87,8 @@ class DraftAutosaveTest < ApplicationSystemTestCase
     assert_field "composed_email[body]", with: /Started on the laptop\./
     assert_field "composed_email[to]", with: "sender@remote.test"
 
-    fill_in "composed_email[body]", with: "Started on the laptop. Finished here."
-    assert_selector "[data-draft-autosave-target='status']", text: "Saved to Drafts", wait: 15
+    compose("body", "Started on the laptop. Finished here.")
+    wait_for_autosave
 
     assert_equal 1, @drafts.email_messages.count, "still one draft after editing"
     assert_match(/Finished here\./, @drafts.email_messages.sole.raw)
@@ -101,8 +96,8 @@ class DraftAutosaveTest < ApplicationSystemTestCase
 
   test "discarding a draft removes it" do
     open_message
-    fill_in "composed_email[body]", with: "Never mind."
-    assert_selector "[data-draft-autosave-target='status']", text: "Saved to Drafts", wait: 15
+    compose("body", "Never mind.")
+    wait_for_autosave
 
     visit edit_draft_url(@drafts.email_messages.sole)
     accept_confirm { click_on "Discard draft" }

@@ -121,4 +121,40 @@ class EmailsControllerTest < ActionDispatch::IntegrationTest
 
     assert_match(/^In-Reply-To: <orig@remote\.test>/, SmtpOutboundMessage.sole.data)
   end
+
+  # -- the composer ----------------------------------------------------------
+
+  test "new renders the shared autosaving composer" do
+    get new_email_url
+
+    assert_response :success
+    assert_select "[data-controller='draft-autosave']", 1
+    assert_select "select[name='composed_email[email_account_id]'][data-draft-field='email_account_id']", 1
+    assert_select "textarea[name='composed_email[body]'][data-draft-field='body']", 1
+  end
+
+  test "?from preselects the sending account" do
+    other = EmailAccount.create!(email: "dave@example.com", password: "secret123")
+
+    get new_email_url(from: other.id)
+    assert_select "select[name='composed_email[email_account_id]'] option[selected][value=?]", other.id.to_s
+  end
+
+  # A rejected send must come back with the text still in the box, and with
+  # the id of the autosaved revision so the next save keeps replacing it
+  # rather than starting a second draft.
+  test "a rejected send re-renders the composer with what was typed" do
+    saved = EmailDraft.new(email_account_id: @account.id, to: "someone@remote.example",
+                           subject: "Hi", body: "Half written").save
+
+    post emails_url, params: { composed_email: {
+      email_account_id: @account.id, to: "not-an-address", subject: "Hi",
+      body: "Half written", draft_message_id: saved.id
+    } }
+
+    assert_response :unprocessable_entity
+    assert_select "textarea[name='composed_email[body]']", /Half written/
+    assert_select "input[name='composed_email[draft_message_id]'][value=?]", saved.id.to_s
+    assert_select "input[name='composed_email[to]'][value=?]", "not-an-address"
+  end
 end

@@ -11,6 +11,54 @@ class ApplicationSystemTestCase < ActionDispatch::SystemTestCase
     options.add_argument("--disable-dev-shm-usage")
   end
 
+  # Waits for the composer's next autosave to land, then reloads whatever
+  # the caller passes.
+  #
+  # The status text is not a usable signal on its own: after the first save
+  # it already reads "Saved to Drafts", so asserting on it passes instantly
+  # and reads stale data. Every save mints a new revision id, so watching
+  # that turn over is the signal that this particular save completed.
+  # Types into a composer field and confirms the text actually landed.
+  #
+  # Selenium will start typing as soon as the element is present, which can
+  # be before the page has finished initialising; Chrome drops keystrokes
+  # sent in that window, and the field ends up holding half a sentence. A
+  # test that then asserts on the saved draft passes or fails on a truncated
+  # string it never checked, so the fill is verified and retried here rather
+  # than trusted.
+  def compose(field, text)
+    locator = "composed_email[#{field}]"
+    # Keystrokes sent while the document is still loading go nowhere.
+    page.document.synchronize(5) do
+      raise Capybara::ExpectationNotMet unless page.evaluate_script("document.readyState") == "complete"
+    end
+
+    3.times do
+      fill_in locator, with: text
+      return if page.has_field?(locator, with: text, wait: 2)
+    end
+    assert_field locator, with: text
+  end
+
+  # Polls the field's live value rather than matching on [value=...]: a CSS
+  # attribute selector reads the HTML attribute, which never changes once
+  # rendered, while the autosave assigns the DOM property.
+  def wait_for_autosave(timeout: 15)
+    field = "input[name='composed_email[draft_message_id]']"
+    before = page.find(field, visible: :all).value
+    yield if block_given?
+
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+    loop do
+      current = page.find(field, visible: :all).value
+      return current if current.present? && current != before
+      flunk "autosave did not complete within #{timeout}s" if
+        Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+
+      sleep 0.2
+    end
+  end
+
   # Signs in through the form; the cookie-jar shortcut the integration tests
   # use isn't available to a real browser.
   def sign_in_as(user, password: "password")

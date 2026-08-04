@@ -3,7 +3,7 @@
 # hosted account. Routing/queueing lives in ComposedEmail#deliver.
 class EmailsController < ApplicationController
   def new
-    @composed_email = ComposedEmail.new(email_account_id: params[:from])
+    @draft = EmailDraft.new(email_account_id: params[:from] || EmailAccount.order(:email).first&.id)
     load_accounts
   end
 
@@ -16,6 +16,10 @@ class EmailsController < ApplicationController
       destination = sent ? email_account_mailbox_path(account, sent) : email_account_path(account)
       redirect_to destination, notice: "Email sent."
     else
+      # Re-render the composer with what was typed rather than an empty
+      # form; the autosaved revision (if any) is still in Drafts and its id
+      # goes back into the form so the next save keeps replacing it.
+      @draft = EmailDraft.new(composed_email_params)
       load_accounts
       render :new, status: :unprocessable_entity
     end

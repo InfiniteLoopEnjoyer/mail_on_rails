@@ -1,3 +1,5 @@
+require "mail_on_rails/clamav_scanner"
+
 class EmailMessage < ApplicationRecord
   belongs_to :mailbox
 
@@ -92,6 +94,40 @@ class EmailMessage < ApplicationRecord
     flags.any? { |flag| flag.casecmp?("\\Draft") }
   end
 
+  # Attachment metadata for the web UI. The MIME position keys the download
+  # URL - filenames repeat and would need escaping rules; a position needs
+  # neither.
+  Attachment = Data.define(:index, :filename, :content_type, :size)
+
+  def attachments
+    @attachments ||= begin
+      parsed.attachments.each_with_index.map do |part, index|
+        Attachment.new(index: index,
+                       filename: part.filename.presence || "attachment-#{index + 1}",
+                       content_type: part.mime_type.presence || "application/octet-stream",
+                       size: part.body.decoded.bytesize)
+      end
+    rescue StandardError
+      []
+    end
+  end
+
+  # Attachments open only once something vouched for the message: clamav
+  # pronounced it clean, or the mailbox owner wrote it themselves (Sent
+  # copies and drafts never pass through the scanner). Infected, "unscanned"
+  # (scanner was down), and never-scanned mail render without links.
+  def attachments_downloadable?
+    scan_status == "clean" || authored_by_owner?
+  end
+
+  # Gates the manual scan button and its endpoint: any message can be
+  # (re)scanned while the scanner is on, except the owner's own writing
+  # (Sent copies, drafts) - there authorship, not a verdict, is what
+  # vouches, and a scan banner on your own mail would only mislead.
+  def rescannable?
+    MailOnRails::ClamavScanner.enabled? && !draft? && !authored_by_owner?
+  end
+
   # RFC 5322 threading ancestry, read from the raw message rather than
   # denormalised into a column like subject and from are: it is only ever
   # needed to build the References of a reply.
@@ -118,6 +154,10 @@ class EmailMessage < ApplicationRecord
   end
 
   private
+
+  def authored_by_owner?
+    authenticated_as.present? && authenticated_as.casecmp?(mailbox.email_account.email)
+  end
 
   def bump_modseq_on_flag_change
     update_column(:modseq, mailbox.claim_modseq!) if saved_change_to_flags?
