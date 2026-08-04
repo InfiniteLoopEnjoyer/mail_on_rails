@@ -17,7 +17,9 @@
 class EmailDraft
   include ActiveModel::Model
 
-  FLAG = "\\Draft"
+  # \Seen alongside \Draft: it is the user's own message, so showing it as
+  # unread in the folder list (and in the account's unread badge) is noise.
+  FLAGS = [ "\\Draft", "\\Seen" ].freeze
   MAILBOX = "Drafts"
 
   attr_accessor :email_account_id, :to, :cc, :subject, :body,
@@ -42,6 +44,25 @@ class EmailDraft
       body: quoted(message),
       in_reply_to: message.message_id.presence,
       references: [ message.references, message.message_id ].compact_blank.join(" ").presence
+    )
+  end
+
+  # Reads a saved draft back out of its message so the composer can carry
+  # on from it. The message is the only record of the draft, so everything
+  # comes off the wire form - including message_id, which keeps the thread
+  # intact across the revisions this editing session will produce.
+  def self.from_message(message)
+    mail = message.parsed
+    new(
+      email_account_id: message.mailbox.email_account_id,
+      to: Array(mail.to).join(", ").presence,
+      cc: Array(mail.cc).join(", ").presence,
+      subject: mail.subject.to_s.presence,
+      body: message.text_body,
+      in_reply_to: Array(mail.in_reply_to).first,
+      references: Array(mail.references).join(" ").presence,
+      message_id: message.message_id.presence,
+      draft_message_id: message.id
     )
   end
 
@@ -82,7 +103,7 @@ class EmailDraft
 
     self.message_id ||= new_message_id
     ApplicationRecord.transaction do
-      saved = EmailMessage.deliver_raw(mailbox, build_raw, flags: [ FLAG ],
+      saved = EmailMessage.deliver_raw(mailbox, build_raw, flags: FLAGS.dup,
                                                           authenticated_as: account.email)
       discard_previous(mailbox)
       self.draft_message_id = saved.id
@@ -115,12 +136,6 @@ class EmailDraft
     ComposedEmail.new(email_account_id: email_account_id, to: to, cc: cc, subject: subject,
                       body: body, in_reply_to: in_reply_to, references: references,
                       message_id: message_id).build_raw
-  end
-
-  def attributes_for_form
-    { to: to, cc: cc, subject: subject, body: body,
-      in_reply_to: in_reply_to, references: references, message_id: message_id,
-      draft_message_id: draft_message_id }
   end
 
   private

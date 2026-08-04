@@ -97,7 +97,7 @@ Rails.application.routes.draw do
 
   # Composer autosave. A draft is a message in the Drafts mailbox, so each
   # save replaces the previous revision - see EmailDraft.
-  resources :drafts, only: %i[create destroy]
+  resources :drafts, only: %i[edit create destroy]
 
   resources :email_accounts, path: "accounts" do
     member do

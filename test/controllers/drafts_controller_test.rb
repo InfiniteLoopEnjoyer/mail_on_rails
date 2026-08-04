@@ -70,9 +70,64 @@ class DraftsControllerTest < ActionDispatch::IntegrationTest
   test "destroy discards the saved revision" do
     first = autosave
 
-    delete draft_path(first["draft_message_id"]),
-           params: { draft: { email_account_id: @account.id } }, as: :json
-    assert_response :no_content
+    delete draft_path(first["draft_message_id"])
+    assert_redirected_to email_account_mailbox_path(@account, @drafts)
+    assert_equal 0, @drafts.email_messages.count
+  end
+
+  # -- editing a saved draft -------------------------------------------------
+
+  test "edit reads a saved draft back into the composer" do
+    draft = EmailDraft.new(email_account_id: @account.id, to: "bob@remote.test",
+                           cc: "carbon@remote.test", subject: "Half written",
+                           body: "Got this far.", in_reply_to: "orig@remote.test")
+    saved = draft.save
+
+    get edit_draft_path(saved)
+    assert_response :success
+
+    assert_select "input[name='composed_email[to]'][value=?]", "bob@remote.test"
+    assert_select "input[name='composed_email[cc]'][value=?]", "carbon@remote.test"
+    assert_select "input[name='composed_email[subject]'][value=?]", "Half written"
+    assert_select "textarea[name='composed_email[body]']", /Got this far\./
+    # The revision being edited, so the first autosave replaces it rather
+    # than adding a second draft.
+    assert_select "input[name='composed_email[draft_message_id]'][value=?]", saved.id.to_s
+  end
+
+  test "edit carries the threading headers of a saved reply draft" do
+    draft = EmailDraft.new(email_account_id: @account.id, to: "bob@remote.test",
+                           subject: "Re: Hi", body: "Replying",
+                           in_reply_to: "orig@remote.test", references: "orig@remote.test")
+    saved = draft.save
+
+    get edit_draft_path(saved)
+    assert_select "input[name='composed_email[in_reply_to]'][value=?]", "orig@remote.test"
+    assert_select "input[name='composed_email[references]'][value=?]", "orig@remote.test"
+  end
+
+  # The id names an EmailMessage, so without a \\Draft check this route
+  # would open - and its destroy would delete - any message in any mailbox.
+  test "edit refuses a message that is not a draft" do
+    received = EmailMessage.deliver_raw(@account.inbox, "From: a@b.test\r\nSubject: hi\r\n\r\nbody\r\n")
+
+    get edit_draft_path(received)
+    assert_response :not_found
+  end
+
+  test "destroy refuses a message that is not a draft" do
+    received = EmailMessage.deliver_raw(@account.inbox, "From: a@b.test\r\nSubject: hi\r\n\r\nbody\r\n")
+
+    delete draft_path(received)
+    assert_response :not_found
+    assert EmailMessage.exists?(received.id), "an ordinary message must survive"
+  end
+
+  test "destroy discards the draft and returns to the folder" do
+    saved = EmailDraft.new(email_account_id: @account.id, subject: "Bin me", body: "x").save
+
+    delete draft_path(saved)
+    assert_redirected_to email_account_mailbox_path(@account, @drafts)
     assert_equal 0, @drafts.email_messages.count
   end
 end

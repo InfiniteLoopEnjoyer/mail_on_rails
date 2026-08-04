@@ -20,13 +20,19 @@ header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
   ul
     - @email_messages.each do |message|
       li.mb-2.rounded-lg.border.border-slate-200.bg-white
-        = link_to email_account_mailbox_email_message_path(@email_account, @mailbox, message), class: "flex items-baseline gap-3 px-4 py-3" do
+        / An unsent draft opens in the composer to carry on writing; anything
+        / else opens as a message to read.
+        - destination = message.draft? ? edit_draft_path(message) : email_account_mailbox_email_message_path(@email_account, @mailbox, message)
+        = link_to destination, class: "flex items-baseline gap-3 px-4 py-3" do
           span.primary.font-semibold
             - unless message.seen?
               span.mr-2.inline-block.h-2.w-2.rounded-full.bg-accent.align-middle
             = message.subject.presence || "(no subject)"
           span.truncate.text-slate-500
-            => message.from_address
+            - if message.draft?
+              span.rounded-full.bg-slate-100.px-2.text-xs.whitespace-nowrap.text-slate-600 Draft
+            - else
+              => message.from_address
             - if message.scan_status == "infected"
               span.rounded-full.bg-red-100.px-2.text-xs.whitespace-nowrap.text-red-700 title="ClamAV: #{message.virus_name}"
                 | ☣ virus: #{message.virus_name}

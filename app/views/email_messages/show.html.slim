@@ -49,10 +49,10 @@ article.rounded-lg.border.border-slate-200.bg-white.px-5.py-4
   - if @email_message.analyzed?
     footer.mt-4.flex.flex-wrap.items-center.gap-x-2.gap-y-1.border-t.border-slate-200.pt-3.text-xs.text-slate-500
       - if @email_message.auth_results.present?
-        - %w[spf dkim dmarc].each do |mech|
-          - verdict = @email_message.auth_result(mech)
-          span.rounded-full.px-2.whitespace-nowrap class=auth_badge_classes(verdict) title="#{mech.upcase}=#{verdict || "none"}"
-            = auth_badge_label(mech, verdict)
+        - %w[spf dkim dmarc].each do
+          - verdict = @email_message.auth_result it
+          span.rounded-full.px-2.whitespace-nowrap class=auth_badge_classes(verdict) title="#{it.upcase}=#{verdict || "none"}"
+            = auth_badge_label it, verdict
 
       - case @email_message.scan_status
       - when "infected"
@@ -70,4 +70,10 @@ article.rounded-lg.border.border-slate-200.bg-white.px-5.py-4
           | Spam score:
           =< spam_score_label(@email_message)
 
-= render "reply"
+- if @email_message.draft?
+  / An unsent draft: offer to carry on writing rather than to reply to it.
+  .mt-4.flex.flex-wrap.items-center.gap-3.rounded-lg.border.border-slate-200.bg-white.px-4.py-3
+    p.text-sm.text-slate-500 This is an unsent draft.
+    = link_to "Continue writing", edit_draft_path(@email_message), class: "cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1.5 text-sm font-medium text-white"
+- else
+  = render "reply"

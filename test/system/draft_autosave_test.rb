@@ -75,4 +75,39 @@ class DraftAutosaveTest < ApplicationSystemTestCase
     assert_text "Email sent.", wait: 10
     assert_equal 0, @drafts.email_messages.count
   end
+
+  # The whole point of saving into Drafts: leave the page, come back from
+  # the folder, and carry on from where you stopped.
+  test "a draft can be reopened from the Drafts folder and carried on" do
+    open_message
+
+    fill_in "composed_email[body]", with: "Started on the laptop."
+    assert_selector "[data-draft-autosave-target='status']", text: "Saved to Drafts", wait: 15
+
+    visit email_account_mailbox_url(@account, @drafts)
+    click_on "Re: hello"
+
+    # The composer, not the read view, prefilled with what was written.
+    assert_selector "h2", text: "Draft"
+    assert_field "composed_email[body]", with: /Started on the laptop\./
+    assert_field "composed_email[to]", with: "sender@remote.test"
+
+    fill_in "composed_email[body]", with: "Started on the laptop. Finished here."
+    assert_selector "[data-draft-autosave-target='status']", text: "Saved to Drafts", wait: 15
+
+    assert_equal 1, @drafts.email_messages.count, "still one draft after editing"
+    assert_match(/Finished here\./, @drafts.email_messages.sole.raw)
+  end
+
+  test "discarding a draft removes it" do
+    open_message
+    fill_in "composed_email[body]", with: "Never mind."
+    assert_selector "[data-draft-autosave-target='status']", text: "Saved to Drafts", wait: 15
+
+    visit edit_draft_url(@drafts.email_messages.sole)
+    accept_confirm { click_on "Discard draft" }
+
+    assert_text "Draft discarded.", wait: 10
+    assert_equal 0, @drafts.email_messages.count
+  end
 end

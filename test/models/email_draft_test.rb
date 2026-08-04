@@ -37,6 +37,9 @@ class EmailDraftTest < ActiveSupport::TestCase
 
     assert_equal @drafts.id, saved.mailbox_id
     assert_includes saved.flags, "\\Draft"
+    # Your own message: showing it unread in the folder list, and in the
+    # account's unread badge, is noise.
+    assert_includes saved.flags, "\\Seen"
     assert_equal 1, @drafts.email_messages.count
   end
 

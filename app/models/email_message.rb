@@ -85,6 +85,13 @@ class EmailMessage < ApplicationRecord
     @parsed ||= Mail.read_from_string(raw)
   end
 
+  # An unsent message the user is still writing. \Draft is the flag every
+  # mail client sets for this, so it - not the folder name - is what
+  # decides whether the web UI opens a message to read or to keep writing.
+  def draft?
+    flags.any? { |flag| flag.casecmp?("\\Draft") }
+  end
+
   # RFC 5322 threading ancestry, read from the raw message rather than
   # denormalised into a column like subject and from are: it is only ever
   # needed to build the References of a reply.

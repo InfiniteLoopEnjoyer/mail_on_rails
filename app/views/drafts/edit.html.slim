@@ -1,0 +1,15 @@
+- page_title "Draft"
+
+nav.mb-2.text-sm.text-slate-500
+  =<> link_to "Accounts", root_path, class: "text-accent"
+  | /
+  =<> link_to @email_account.email, email_account_path(@email_account), class: "text-accent"
+  | /
+  =<> link_to @mailbox.name, email_account_mailbox_path(@email_account, @mailbox), class: "text-accent"
+  | /
+  span<>= @draft.subject.presence || "(no subject)"
+
+header.mb-4
+  h1.text-2xl.font-bold= @draft.subject.presence || "(no subject)"
+
+= render "drafts/composer", draft: @draft, title: "Draft", discard_id: @message.id

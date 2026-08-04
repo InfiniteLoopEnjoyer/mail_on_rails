@@ -128,4 +128,15 @@ class EmailMessagesControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_select "article footer", 0
   end
+
+  # An unsent draft is something to keep writing, not something to reply to.
+  test "a draft offers to continue writing instead of a reply composer" do
+    saved = EmailDraft.new(email_account_id: @account.id, to: "bob@remote.test",
+                           subject: "Half written", body: "Got this far.").save
+    get email_account_mailbox_email_message_url(@account, saved.mailbox, saved)
+
+    assert_response :success
+    assert_select "[data-controller='draft-autosave']", 0
+    assert_select "a[href=?]", edit_draft_path(saved), text: "Continue writing"
+  end
 end
