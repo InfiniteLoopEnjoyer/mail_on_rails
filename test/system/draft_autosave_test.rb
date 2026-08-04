@@ -100,7 +100,7 @@ class DraftAutosaveTest < ApplicationSystemTestCase
     wait_for_autosave
 
     visit edit_draft_url(@drafts.email_messages.sole)
-    accept_confirm { click_on "Discard draft" }
+    accept_turbo_confirm "Discard draft"
 
     assert_text "Draft discarded.", wait: 10
     assert_equal 0, @drafts.email_messages.count

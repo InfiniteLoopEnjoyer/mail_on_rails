@@ -59,6 +59,19 @@ class ApplicationSystemTestCase < ActionDispatch::SystemTestCase
     end
   end
 
+  # Accepts the data-turbo-confirm dialog raised by clicking `locator`.
+  #
+  # Turbo's confirm interceptor exists only once its module has executed; a
+  # click that lands before then submits the form natively - the action goes
+  # through unconfirmed and accept_confirm times out waiting for a dialog
+  # that never opened. Seen on CI's slower runners, so wait for Turbo first.
+  def accept_turbo_confirm(locator)
+    page.document.synchronize(5) do
+      raise Capybara::ExpectationNotMet unless page.evaluate_script("!!window.Turbo")
+    end
+    accept_confirm { click_on locator }
+  end
+
   # Signs in through the form; the cookie-jar shortcut the integration tests
   # use isn't available to a real browser.
   def sign_in_as(user, password: "password")
