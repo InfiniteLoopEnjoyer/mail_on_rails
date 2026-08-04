@@ -89,8 +89,8 @@ article.rounded-lg.border.border-slate-200.bg-white.px-5.py-4
                     class: "cursor-pointer rounded-full border border-slate-300 px-2 text-xs text-slate-600 hover:border-accent hover:text-accent"
 
       - if @email_message.spam_score.present?
-        span.rounded-full.bg-slate-100.px-2.whitespace-nowrap.text-slate-600
-          | Spam score:
+        span.rounded-full.px-2.whitespace-nowrap class=spam_badge_classes(@email_message)
+          = spam_clean?(@email_message) ? "✓ Spam score:" : "Spam score:"
           =< spam_score_label(@email_message)
 
 - if @email_message.draft?

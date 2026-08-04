@@ -40,7 +40,22 @@ class EmailMessagesControllerTest < ActionDispatch::IntegrationTest
 
     footer = css_select("article footer").text
     assert_match "No virus", footer
-    assert_match "Spam score: 2.1 / 6.0 — no action", footer
+    assert_match "✓ Spam score: 2.1 / 6.0 — no action", footer
+    assert_select "article footer span.bg-green-100", text: /Spam score/
+  end
+
+  # rspamd verdicts that aren't "no action" keep the neutral slate pill, so
+  # green stays reserved for a clean bill of health.
+  test "a flagged spam action keeps the neutral badge without a check" do
+    message = EmailMessage.deliver_raw(@account.inbox, RAW,
+                                       scan_status: "clean", spam_score: 8.4, spam_threshold: 6.0,
+                                       spam_action: "add header")
+    show(message)
+
+    footer = css_select("article footer").text
+    assert_match "Spam score: 8.4 / 6.0 — add header", footer
+    assert_no_match(/✓ Spam score/, footer)
+    assert_select "article footer span.bg-green-100", text: /Spam score/, count: 0
   end
 
   # The scan-status badge is the one part of the footer with a branch per

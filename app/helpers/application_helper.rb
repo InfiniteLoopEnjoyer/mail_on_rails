@@ -66,4 +66,12 @@ module ApplicationHelper
     label += " — #{message.spam_action}" if message.spam_action.present?
     label
   end
+
+  # Green like a passing auth badge when rspamd decided "no action";
+  # the neutral slate pill otherwise.
+  def spam_badge_classes(message)
+    spam_clean?(message) ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-600"
+  end
+
+  def spam_clean?(message) = message.spam_action == "no action"
 end
