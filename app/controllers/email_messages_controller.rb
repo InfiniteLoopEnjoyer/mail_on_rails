@@ -36,6 +36,24 @@ class EmailMessagesController < ApplicationController
     end
   end
 
+  # "Mark as spam" / "Not spam" from the message page: an IMAP-style move
+  # into Junk or back to INBOX. The moved message is a new row with a new
+  # UID, so both land back on the folder the message left. Drafts are the
+  # owner's own writing - nothing there to mark.
+  def mark_spam
+    head :forbidden and return if @email_message.draft? || @mailbox.junk?
+
+    @email_message.move_to!(@email_account.junk_mailbox)
+    redirect_to email_account_mailbox_path(@email_account, @mailbox), notice: "Moved to Junk."
+  end
+
+  def unmark_spam
+    head :forbidden and return unless @mailbox.junk?
+
+    @email_message.move_to!(@email_account.inbox)
+    redirect_to email_account_mailbox_path(@email_account, @mailbox), notice: "Moved to INBOX."
+  end
+
   # Serves one MIME attachment as a download. The view only links attachments
   # on messages that pass attachments_downloadable?; enforce the same rule
   # here so a pasted URL can't fetch an unscanned or infected payload.

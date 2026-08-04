@@ -109,6 +109,8 @@ Rails.application.routes.draw do
         member do
           post :mark_read
           post :rescan
+          post :mark_spam
+          post :unmark_spam
           get "attachments/:index", action: :attachment, as: :attachment, constraints: { index: /\d+/ }
         end
       end

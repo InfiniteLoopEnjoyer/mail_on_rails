@@ -271,12 +271,10 @@ module MailOnRails
           dest_uids = []
           EmailMessage.transaction do
             EmailMessage.where(mailbox_id: mailbox_id, uid: uids).order(:uid).each do |m|
-              # Same bytes, same verdict - no rescan on move.
-              copied = EmailMessage.deliver_raw(dest, m.raw, flags: m.flags, internal_date: m.internal_date,
-                                                scan_status: m.scan_status, virus_name: m.virus_name)
+              # Same bytes, same verdicts - no rescan on move (see move_to!).
+              copied = m.move_to!(dest)
               src_uids << m.uid
               dest_uids << copied.uid
-              m.destroy!
             end
           end
           { uid_validity: dest.uid_validity, src_uids: src_uids, dest_uids: dest_uids }

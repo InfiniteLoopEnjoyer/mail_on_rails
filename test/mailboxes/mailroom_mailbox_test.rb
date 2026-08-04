@@ -225,4 +225,63 @@ class MailroomMailboxTest < ActionMailbox::TestCase
     assert_nil message.auth_results
     assert_not message.sender_verified?
   end
+
+  # -- spam filing -----------------------------------------------------------
+
+  def spam_verdict(action: "add header", score: 8.4)
+    MailOnRails::RspamdAnalyzer::Result.new(
+      status: :ok, action: action, score: score, required_score: 6.0,
+      spf: "fail", dkim: "none", dmarc: "fail", auth_results: "mail.test; spf=fail; dkim=none; dmarc=fail"
+    )
+  end
+
+  def junk
+    @account.find_mailbox(Mailbox::JUNK)
+  end
+
+  test "a spam action files into Junk instead of INBOX" do
+    scanning(CLEAN) do
+      with_rspamd(enabled: true, analyze: spam_verdict) { receive_inbound_email_from_source(source) }
+    end
+
+    assert_empty @account.inbox.email_messages
+    message = junk.email_messages.sole
+    assert_equal "add header", message.spam_action
+    assert_equal 8.4, message.spam_score
+    assert_equal "clean", message.scan_status, "junk mail still carries its virus verdict"
+    assert message.spam?
+  end
+
+  test "a greylist action is a soft signal and still delivers to INBOX" do
+    scanning(CLEAN) do
+      with_rspamd(enabled: true, analyze: spam_verdict(action: "greylist", score: 4.2)) do
+        receive_inbound_email_from_source(source)
+      end
+    end
+
+    message = @account.inbox.email_messages.sole
+    assert_equal "greylist", message.spam_action
+    assert_not message.spam?
+  end
+
+  test "spam filing recreates a deleted Junk mailbox" do
+    junk.destroy!
+
+    scanning(CLEAN) do
+      with_rspamd(enabled: true, analyze: spam_verdict) { receive_inbound_email_from_source(source) }
+    end
+
+    assert_equal 1, junk.email_messages.count
+  end
+
+  # Quarantine outranks Junk: an infected message is held for review even
+  # when rspamd also called it spam.
+  test "an infected spam message goes to Quarantine, not Junk" do
+    scanning(infected("Sig")) do
+      with_rspamd(enabled: true, analyze: spam_verdict) { receive_inbound_email_from_source(source) }
+    end
+
+    assert_empty junk.email_messages
+    assert_equal 1, quarantine.email_messages.count
+  end
 end

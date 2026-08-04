@@ -85,6 +85,21 @@ class DmarcIngestionTest < ActionMailbox::TestCase
     assert_equal 0, DmarcReport.count
   end
 
+  test "a report rspamd calls spam is filed to Junk and never parsed" do
+    spam = MailOnRails::RspamdAnalyzer::Result.new(
+      status: :ok, action: "add header", score: 8.4, required_score: 6.0,
+      spf: "pass", dkim: "pass", dmarc: "pass", auth_results: "mail.test; spf=pass; dkim=pass; dmarc=pass"
+    )
+    assert_no_enqueued_jobs only: IngestDmarcReportJob do
+      with_scanner(enabled: true, scan: CLEAN) do
+        with_rspamd(enabled: true, analyze: spam) { receive_inbound_email_from_source(report_mail("dmarc@example.test")) }
+      end
+    end
+    assert_equal 0, @dmarc_account.inbox.email_messages.count
+    assert_equal 1, @dmarc_account.find_mailbox("Junk").email_messages.count
+    assert_equal 0, DmarcReport.count
+  end
+
   test "mail to an ordinary account never triggers ingestion" do
     EmailAccount.create!(email: "user@example.test", password: "pw-123456")
     assert_no_enqueued_jobs only: IngestDmarcReportJob do

@@ -10,6 +10,10 @@ class Mailbox < ApplicationRecord
   # otherwise, so the web UI shows it like any other folder.
   QUARANTINE = "Quarantine"
 
+  # Where rspamd-flagged inbound mail is filed instead of INBOX, and where
+  # the web UI's "Mark as spam" moves a message.
+  JUNK = "Junk"
+
   validates :name, presence: true, uniqueness: { scope: :email_account_id }
   validate :inbox_cannot_be_renamed, on: :update
 
@@ -31,6 +35,10 @@ class Mailbox < ApplicationRecord
 
   def quarantine?
     name == QUARANTINE
+  end
+
+  def junk?
+    name == JUNK
   end
 
   # Reserves and returns the next UID for a new message.

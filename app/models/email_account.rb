@@ -52,6 +52,12 @@ class EmailAccount < ApplicationRecord
     find_mailbox(Mailbox::QUARANTINE) || mailboxes.create!(name: Mailbox::QUARANTINE)
   end
 
+  # Junk is a default mailbox, but it is deletable - recreate rather than
+  # bounce spam into INBOX when it is gone.
+  def junk_mailbox
+    find_mailbox(Mailbox::JUNK) || mailboxes.create!(name: Mailbox::JUNK)
+  end
+
   private
 
   # SCRAM-SHA-256 (RFC 5802/7677): StoredKey = H(HMAC(SaltedPassword,

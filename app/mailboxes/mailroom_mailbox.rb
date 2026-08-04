@@ -19,7 +19,8 @@ require "mail_on_rails/rspamd_analyzer"
 #     to the clamav accessory; "" disables).
 # Anything not clean is filed into the account's Quarantine mailbox for
 # review instead of INBOX, deduped by Message-ID because a retrying sender
-# re-sends the same message for days.
+# re-sends the same message for days. Virus-clean mail that rspamd calls
+# spam is filed into Junk instead of INBOX.
 class MailroomMailbox < ApplicationMailbox
   def process
     verdict = scan_verdict
@@ -29,17 +30,19 @@ class MailroomMailbox < ApplicationMailbox
       if verdict && verdict[:status] != "clean"
         quarantine(account, verdict)
       else
-        message = EmailMessage.deliver_raw(account.inbox, inbound_email.source,
+        # Virus-clean but rspamd says spam: file into Junk, not INBOX.
+        dest = sender_analysis&.spam? ? account.junk_mailbox : account.inbox
+        message = EmailMessage.deliver_raw(dest, inbound_email.source,
                                            authenticated_as: authenticated_as, auth_results: auth_results,
                                            scan_status: verdict&.dig(:status), **spam_attributes)
         sweep_stale_unscanned(account)
-        Rails.logger.info "[mail_on_rails] delivered inbound message to #{account.email} INBOX"
+        Rails.logger.info "[mail_on_rails] delivered inbound message to #{account.email} #{dest.name}"
         # Mail to a domain's dmarc@ ingestion account carries aggregate
         # reports - parse them only after a real clamav scan came back
-        # clean (on this branch a present verdict IS clean). Quarantined
-        # mail is never parsed, and neither is anything unscanned: with
-        # scanning disabled the report just stays in the mailbox.
-        if Domain.dmarc_ingestion_address?(account.email)
+        # clean (on this branch a present verdict IS clean). Quarantined,
+        # spam-filed and unscanned mail is never parsed: with scanning
+        # disabled the report just stays in the mailbox.
+        if dest.inbox? && Domain.dmarc_ingestion_address?(account.email)
           if verdict
             IngestDmarcReportJob.perform_later(message)
           else

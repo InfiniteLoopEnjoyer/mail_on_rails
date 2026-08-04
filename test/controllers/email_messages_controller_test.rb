@@ -318,6 +318,68 @@ class EmailMessagesControllerTest < ActionDispatch::IntegrationTest
     assert_equal "unscanned", message.reload.scan_status
   end
 
+  # -- spam marking ----------------------------------------------------------
+
+  test "mark_spam moves the message to Junk with all its verdicts" do
+    message = EmailMessage.deliver_raw(@account.inbox, RAW,
+                                       auth_results: "mail.test; spf=pass; dkim=pass; dmarc=pass",
+                                       scan_status: "clean", spam_score: 2.1, spam_threshold: 6.0,
+                                       spam_action: "no action")
+    post mark_spam_email_account_mailbox_email_message_url(@account, @account.inbox, message)
+
+    assert_redirected_to email_account_mailbox_url(@account, @account.inbox)
+    assert_equal "Moved to Junk.", flash[:notice]
+    assert_empty @account.inbox.email_messages
+    moved = @account.find_mailbox("Junk").email_messages.sole
+    assert_equal "mail.test; spf=pass; dkim=pass; dmarc=pass", moved.auth_results
+    assert_equal "clean", moved.scan_status
+    assert_equal 2.1, moved.spam_score
+    assert_equal message.raw, moved.raw
+  end
+
+  test "unmark_spam moves a Junk message back to INBOX" do
+    junk = @account.find_mailbox("Junk")
+    message = EmailMessage.deliver_raw(junk, RAW)
+    post unmark_spam_email_account_mailbox_email_message_url(@account, junk, message)
+
+    assert_redirected_to email_account_mailbox_url(@account, junk)
+    assert_equal "Moved to INBOX.", flash[:notice]
+    assert_empty junk.email_messages
+    assert_equal 1, @account.inbox.email_messages.count
+  end
+
+  test "mark_spam inside Junk and unmark_spam outside it are refused" do
+    junk = @account.find_mailbox("Junk")
+    junk_message = EmailMessage.deliver_raw(junk, RAW)
+    post mark_spam_email_account_mailbox_email_message_url(@account, junk, junk_message)
+    assert_response :forbidden
+
+    inbox_message = EmailMessage.deliver_raw(@account.inbox, RAW.sub("m1@", "m2@"))
+    post unmark_spam_email_account_mailbox_email_message_url(@account, @account.inbox, inbox_message)
+    assert_response :forbidden
+    assert_equal 1, junk.email_messages.count
+    assert_equal 1, @account.inbox.email_messages.count
+  end
+
+  test "a draft cannot be marked as spam" do
+    saved = EmailDraft.new(email_account_id: @account.id, to: "bob@remote.test",
+                           subject: "Half written", body: "text").save
+    post mark_spam_email_account_mailbox_email_message_url(@account, saved.mailbox, saved)
+    assert_response :forbidden
+  end
+
+  test "the message page offers Mark as spam outside Junk and Not spam inside it" do
+    message = EmailMessage.deliver_raw(@account.inbox, RAW)
+    show(message)
+    assert_select "form[action=?] button", mark_spam_email_account_mailbox_email_message_path(@account, @account.inbox, message), text: "Mark as spam"
+
+    junk = @account.find_mailbox("Junk")
+    junk_message = EmailMessage.deliver_raw(junk, RAW.sub("m1@", "m2@"))
+    get email_account_mailbox_email_message_url(@account, junk, junk_message)
+    assert_select "form[action=?] button", unmark_spam_email_account_mailbox_email_message_path(@account, junk, junk_message), text: "Not spam"
+    assert_select "button", text: "Mark as spam", count: 0
+  end
+
   # -- reply composer --------------------------------------------------------
 
   test "the message page offers a reply composer prefilled from the message" do

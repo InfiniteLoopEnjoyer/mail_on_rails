@@ -83,6 +83,31 @@ class EmailMessage < ApplicationRecord
     scan_status.present? || auth_results.present? || spam_score.present?
   end
 
+  # rspamd called it spam - the stored-column mirror of
+  # RspamdAnalyzer::Result#spam?: any action past plain
+  # acceptance/greylisting.
+  def spam?
+    spam_action.present? && ![ "no action", "greylist" ].include?(spam_action)
+  end
+
+  # Re-delivers this message into another mailbox of the same account and
+  # removes it here (IMAP MOVE semantics: new UID + tombstone, EMAILID
+  # preserved because it is content-derived). Every recorded verdict moves
+  # with it - the analysis happened to the bytes, not to the folder.
+  # Returns the new row.
+  def move_to!(dest)
+    moved = nil
+    transaction do
+      moved = EmailMessage.deliver_raw(dest, raw, flags: flags, internal_date: internal_date,
+                                       authenticated_as: authenticated_as, auth_results: auth_results,
+                                       scan_status: scan_status, virus_name: virus_name,
+                                       spam_score: spam_score, spam_threshold: spam_threshold,
+                                       spam_action: spam_action)
+      destroy!
+    end
+    moved
+  end
+
   def parsed
     @parsed ||= Mail.read_from_string(raw)
   end
