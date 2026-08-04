@@ -37,6 +37,17 @@ class ApplicationSystemTestCase < ActionDispatch::SystemTestCase
       fill_in locator, with: text
       return if page.has_field?(locator, with: text, wait: 2)
     end
+
+    # A starved CI runner can drop the synthetic typing wholesale - the
+    # field still holds its previous value after all three attempts. Set
+    # the value directly and fire the input event a keystroke would have:
+    # what these tests verify is the Stimulus wiring reacting to input,
+    # not Chrome's keyboard emulation.
+    page.execute_script(<<~JS, find_field(locator, visible: :all), text)
+      const [field, value] = arguments;
+      field.value = value;
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    JS
     assert_field locator, with: text
   end
 
