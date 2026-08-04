@@ -25,16 +25,16 @@ class EmailMessagesControllerTest < ActionDispatch::IntegrationTest
     show(message)
 
     assert_response :success
-    assert_select "footer", 1
+    assert_select "article footer", 1
 
     # Anchored on each badge's title rather than its label: the title is the
     # verdict itself ("SPF=pass"), while the visible wording is presentation
     # and has been restyled more than once.
-    assert_select "footer span[title=?]", "SPF=pass"
-    assert_select "footer span[title=?]", "DKIM=fail"
-    assert_select "footer span[title=?]", "DMARC=pass"
+    assert_select "article footer span[title=?]", "SPF=pass"
+    assert_select "article footer span[title=?]", "DKIM=fail"
+    assert_select "article footer span[title=?]", "DMARC=pass"
 
-    footer = css_select("footer").text
+    footer = css_select("article footer").text
     assert_match "No virus", footer
     assert_match "Spam score: 2.1 / 6.0 — no action", footer
   end
@@ -49,7 +49,7 @@ class EmailMessagesControllerTest < ActionDispatch::IntegrationTest
                                        scan_status: scan_status, virus_name: virus_name)
     show(message)
     assert_response :success
-    css_select("footer").text
+    css_select("article footer").text
   end
 
   test "an infected message names the virus" do
@@ -97,12 +97,35 @@ class EmailMessagesControllerTest < ActionDispatch::IntegrationTest
     assert message.reload.seen?
   end
 
+  # -- reply composer --------------------------------------------------------
+
+  test "the message page offers a reply composer prefilled from the message" do
+    message = EmailMessage.deliver_raw(@account.inbox, RAW)
+    show(message)
+
+    assert_response :success
+    assert_select "[data-controller='draft-autosave']", 1
+    assert_select "input[name='composed_email[to]'][value=?]", "sender@remote.test"
+    assert_select "input[name='composed_email[subject]'][value=?]", "Re: hello"
+    assert_select "textarea[name='composed_email[body]']", /sender@remote\.test wrote:/
+  end
+
+  # The composer has to carry the threading headers through to submit, or a
+  # reply sent from the web breaks the conversation for everyone else.
+  test "the composer carries the threading headers" do
+    message = EmailMessage.deliver_raw(@account.inbox, RAW)
+    show(message)
+
+    assert_select "input[name='composed_email[in_reply_to]'][value=?]", "m1@remote.test"
+    assert_select "input[name='composed_email[draft_message_id]']", 1
+  end
+
   test "omits the footer for a message with no verdicts" do
     sent = @account.find_mailbox("Sent")
     message = EmailMessage.deliver_raw(sent, RAW)
     show(message)
 
     assert_response :success
-    assert_select "footer", 0
+    assert_select "article footer", 0
   end
 end

@@ -95,6 +95,10 @@ Rails.application.routes.draw do
   # Web-UI compose (ComposedEmail); ?from= preselects the sending account.
   resources :emails, only: %i[new create]
 
+  # Composer autosave. A draft is a message in the Drafts mailbox, so each
+  # save replaces the previous revision - see EmailDraft.
+  resources :drafts, only: %i[create destroy]
+
   resources :email_accounts, path: "accounts" do
     member do
       post :generate_password

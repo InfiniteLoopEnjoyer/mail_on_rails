@@ -78,4 +78,47 @@ class EmailsControllerTest < ActionDispatch::IntegrationTest
     end
     assert_response :unprocessable_entity
   end
+
+  # A reply sent from the message page carries the id of its autosaved
+  # revision so the draft doesn't linger on every device after sending.
+  test "sending discards the draft revision it was composed from" do
+    drafts = @account.find_mailbox("Drafts")
+    draft = EmailDraft.new(email_account_id: @account.id, to: "someone@remote.example",
+                           subject: "Hi", body: "Hello")
+    saved = draft.save
+    assert_equal 1, drafts.email_messages.count
+
+    post emails_url, params: { composed_email: {
+      email_account_id: @account.id, to: "someone@remote.example", subject: "Hi",
+      body: "Hello", draft_message_id: saved.id
+    } }
+
+    assert_response :redirect
+    assert_equal 0, drafts.email_messages.count
+  end
+
+  # A send that fails validation must not take the draft with it.
+  test "a rejected send keeps the draft revision" do
+    drafts = @account.find_mailbox("Drafts")
+    draft = EmailDraft.new(email_account_id: @account.id, to: "someone@remote.example",
+                           subject: "Hi", body: "Hello")
+    saved = draft.save
+
+    post emails_url, params: { composed_email: {
+      email_account_id: @account.id, to: "not-an-address", subject: "Hi",
+      body: "Hello", draft_message_id: saved.id
+    } }
+
+    assert_response :unprocessable_entity
+    assert_equal 1, drafts.email_messages.count
+  end
+
+  test "threading headers survive the send" do
+    post emails_url, params: { composed_email: {
+      email_account_id: @account.id, to: "someone@remote.example", subject: "Re: Hi",
+      body: "Hello", in_reply_to: "orig@remote.test", references: "orig@remote.test"
+    } }
+
+    assert_match(/^In-Reply-To: <orig@remote\.test>/, SmtpOutboundMessage.sole.data)
+  end
 end

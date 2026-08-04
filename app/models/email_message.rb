@@ -85,6 +85,15 @@ class EmailMessage < ApplicationRecord
     @parsed ||= Mail.read_from_string(raw)
   end
 
+  # RFC 5322 threading ancestry, read from the raw message rather than
+  # denormalised into a column like subject and from are: it is only ever
+  # needed to build the References of a reply.
+  def references
+    Array(parsed.references).join(" ").presence
+  rescue StandardError
+    nil
+  end
+
   # Best-effort plain-text body for the web UI.
   def text_body
     mail = parsed

@@ -6,7 +6,8 @@
 class ComposedEmail
   include ActiveModel::Model
 
-  attr_accessor :email_account_id, :to, :subject, :body
+  attr_accessor :email_account_id, :to, :cc, :subject, :body,
+                :in_reply_to, :references, :message_id
 
   validates :to, :subject, presence: true
   validate :account_chosen
@@ -16,8 +17,14 @@ class ComposedEmail
     @account ||= EmailAccount.find_by(id: email_account_id)
   end
 
+  # Everyone the message is addressed to, To and Cc alike - the envelope
+  # makes no distinction, only the headers do.
   def recipients
-    to.to_s.split(/[,;]+/).map { |address| address.strip.downcase }.reject(&:empty?)
+    (addresses(to) + addresses(cc)).uniq
+  end
+
+  def addresses(field)
+    field.to_s.split(/[,;]+/).map { |address| address.strip.downcase }.reject(&:empty?)
   end
 
   def deliver
@@ -40,17 +47,26 @@ class ComposedEmail
     true
   end
 
-  private
-
+  # Public so EmailDraft can render the same bytes it will eventually send -
+  # a draft that serialises differently from its sent form is a draft of a
+  # different message.
   def build_raw
     mail = Mail.new
     mail.from    = account.name.present? ? "#{account.name} <#{account.email}>" : account.email
-    mail.to      = recipients
+    mail.to      = addresses(to)
+    mail.cc      = addresses(cc) if addresses(cc).any?
     mail.subject = subject
     mail.date    = Time.current
+    mail.message_id = message_id if message_id.present?
+    # RFC 5322 threading: In-Reply-To names the parent, References carries
+    # the whole ancestry, which is what clients group a conversation by.
+    mail.in_reply_to = in_reply_to if in_reply_to.present?
+    mail.references  = references if references.present?
     mail.body    = body.to_s
     mail.to_s
   end
+
+  private
 
   def local_inbox(recipient)
     local = EmailAccount.find_by(email: recipient) ||

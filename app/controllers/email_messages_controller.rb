@@ -6,6 +6,7 @@ class EmailMessagesController < ApplicationController
     # read. A click served from the prefetch cache never re-requests, so the
     # page POSTs to mark_read instead (see the mark-read Stimulus controller).
     @email_message.mark_seen! unless prefetch_request?
+    @draft = EmailDraft.reply_to(@email_message, account: @email_account)
   end
 
   def mark_read
