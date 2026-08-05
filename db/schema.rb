@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_04_000000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_05_150000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -79,6 +79,16 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_04_000000) do
     t.datetime "window_started_at", null: false
     t.index ["scope", "key"], name: "index_auth_throttles_on_scope_and_key", unique: true
     t.index ["window_started_at"], name: "index_auth_throttles_on_window_started_at"
+  end
+
+  create_table "banned_ips", force: :cascade do |t|
+    t.string "cidr", null: false
+    t.datetime "created_at", null: false
+    t.string "note"
+    t.string "source", default: "manual", null: false
+    t.datetime "updated_at", null: false
+    t.index ["cidr"], name: "index_banned_ips_on_cidr", unique: true
+    t.index ["source"], name: "index_banned_ips_on_source"
   end
 
   create_table "dmarc_reports", force: :cascade do |t|
@@ -210,6 +220,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_04_000000) do
   end
 
   create_table "users", force: :cascade do |t|
+    t.string "accent", default: "crimson", null: false
+    t.string "appearance", default: "system", null: false
     t.datetime "created_at", null: false
     t.string "email_address", null: false
     t.bigint "otp_last_used_at"

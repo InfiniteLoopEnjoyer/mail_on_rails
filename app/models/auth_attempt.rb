@@ -26,6 +26,9 @@ class AuthAttempt < ApplicationRecord
   SOURCES = %w[imap smtp web].freeze
   OUTCOMES = %w[unknown_account bad_credentials throttled].freeze
 
+  # One address's aggregate inside a range drill-down (range_detail).
+  RangeIp = Data.define(:ip, :attempts, :last_seen, :usernames, :sources, :real_account)
+
   scope :recent, ->(since) { where(occurred_at: since..) }
   scope :against_real_accounts, -> { where(account_exists: true) }
 
@@ -142,6 +145,37 @@ class AuthAttempt < ApplicationRecord
     def range_for(ip)
       octets = ip.to_s.split(".")
       octets.size == 4 ? "#{octets.first(3).join(".")}.0/24" : ip.to_s
+    end
+
+    # The drill-down behind top_ranges: one range's individual addresses
+    # with per-IP totals, so a specific machine can be banned on its own
+    # or the whole range once its spread is plain. Aggregated in SQL per
+    # distinct IP - the output is bounded by the range's size (and the
+    # row cap), not by how noisy each address was.
+    def range_detail(range, since: 7.days.ago)
+      scope = recent(since).where.not(ip: nil)
+      scope = if (prefix = range.to_s[%r{\A(\d{1,3}\.\d{1,3}\.\d{1,3})\.0/24\z}, 1])
+        scope.where("ip LIKE ?", "#{prefix}.%")
+      else
+        # range_for emits non-IPv4 sources verbatim, so the "range" is
+        # one address.
+        scope.where(ip: range.to_s)
+      end
+
+      sources = Hash.new { |h, k| h[k] = [] }
+      scope.distinct.pluck(:ip, :source).each { |ip, source| sources[ip] << source }
+
+      scope.group(:ip).pluck(
+        :ip,
+        Arel.sql("SUM(attempt_count)"),
+        Arel.sql("MAX(occurred_at)"),
+        Arel.sql("COUNT(DISTINCT username)"),
+        Arel.sql("MAX(CASE WHEN account_exists THEN 1 ELSE 0 END)")
+      ).map do |ip, attempts, last_seen, usernames, real|
+        RangeIp.new(ip: ip, attempts: attempts, last_seen: last_seen,
+                    usernames: usernames, sources: sources[ip].sort,
+                    real_account: real == 1)
+      end.sort_by { |row| [ -row.attempts, row.ip ] }
     end
 
     def top_usernames(since: 7.days.ago, limit: 20)

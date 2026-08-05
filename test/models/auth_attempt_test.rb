@@ -205,4 +205,30 @@ class AuthAttemptTest < ActiveSupport::TestCase
     assert_equal 1, AuthAttempt.totals(since: 7.days.ago)[:attempts]
     assert_equal 2, AuthAttempt.totals(since: 60.days.ago)[:attempts]
   end
+
+  test "range_detail aggregates one /24's addresses and nothing else" do
+    2.times { record(ip: "92.118.39.204", username: "cyrus") }
+    record(ip: "92.118.39.204", username: "postgres", source: "imap")
+    record(ip: "92.118.39.211", username: REAL, outcome: "bad_credentials")
+    record(ip: "92.118.3.9", username: "lookalike-prefix")
+    record(ip: "203.0.113.7", username: "elsewhere")
+
+    rows = AuthAttempt.range_detail("92.118.39.0/24")
+
+    assert_equal %w[92.118.39.204 92.118.39.211], rows.map(&:ip)
+    top = rows.first
+    assert_equal 3, top.attempts
+    assert_equal 2, top.usernames
+    assert_equal %w[imap smtp], top.sources
+    assert_not top.real_account
+    assert rows.last.real_account
+  end
+
+  test "range_detail treats a non-IPv4 range as a single address" do
+    record(ip: "2001:db8::5")
+    record(ip: "2001:db8::6")
+
+    rows = AuthAttempt.range_detail("2001:db8::5")
+    assert_equal [ "2001:db8::5" ], rows.map(&:ip)
+  end
 end

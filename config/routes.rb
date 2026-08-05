@@ -72,8 +72,16 @@ Rails.application.routes.draw do
   end
 
   # Failed credential checks across all three auth surfaces - see
-  # AuthAttempt / AuthAttemptsController.
-  resources :auth_attempts, only: :index
+  # AuthAttempt / AuthAttemptsController. range drills into one /24's
+  # individual addresses; its CIDR travels as a query param because of
+  # the slash.
+  resources :auth_attempts, only: :index do
+    collection { get :range }
+  end
+
+  # Permanent IP/CIDR bans, managed from the auth attempts page - see
+  # BannedIp for how they reach exim, the IMAP daemon and the web login.
+  resources :banned_ips, only: %i[create destroy]
 
   # The signed-in user's appearance/accent preference, saved from the
   # profile's Appearance card - see ThemesController.

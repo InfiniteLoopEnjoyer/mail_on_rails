@@ -41,6 +41,12 @@ production:
     command: "AuthAttempt.prune!"
     schedule: every day at 4:17am
 
+  # Keep the imported Spamhaus DROP netblocks (BannedIp) current; manual
+  # bans are untouched.
+  refresh_spamhaus_drop:
+    class: SpamhausDropRefreshJob
+    schedule: every day at 2:37am
+
   # Trash is the only folder with a retention limit (Setting
   # .trash_retention_days, adjustable on /settings); everything else is
   # kept forever.

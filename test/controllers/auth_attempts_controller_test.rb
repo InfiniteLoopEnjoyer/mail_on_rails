@@ -68,6 +68,51 @@ class AuthAttemptsControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
   end
 
+  test "range links from the index lead to the drill-down" do
+    log(username: "cyrus", ip: "92.118.39.204")
+
+    get auth_attempts_path
+    assert_select "a[href=?]", range_auth_attempts_path(cidr: "92.118.39.0/24", window: "7d"),
+                  text: "92.118.39.0/24"
+  end
+
+  test "the range drill-down lists each address with its totals" do
+    2.times { log(username: "cyrus", ip: "92.118.39.204") }
+    log(username: "postgres", ip: "92.118.39.211", source: "imap")
+    log(username: "outside", ip: "203.0.113.7")
+
+    get range_auth_attempts_path(cidr: "92.118.39.0/24")
+    assert_response :success
+    assert_match "92.118.39.204", response.body
+    assert_match "92.118.39.211", response.body
+    assert_no_match(/203\.0\.113\.7/, response.body)
+  end
+
+  test "a malformed range bounces back to the index" do
+    get range_auth_attempts_path(cidr: "../../etc")
+    assert_redirected_to auth_attempts_path(window: "7d")
+  end
+
+  test "banned rows show a badge instead of another ban button" do
+    log(username: "cyrus", ip: "92.118.39.204")
+    BannedIp.create!(cidr: "92.118.39.0/24")
+
+    get range_auth_attempts_path(cidr: "92.118.39.0/24")
+    assert_match "banned", response.body
+  end
+
+  test "the index manages manual bans and summarizes DROP imports" do
+    BannedIp.create!(cidr: "203.0.113.0/24", note: "spray campaign")
+    BannedIp.create!(cidr: "198.51.100.0/24", source: "spamhaus_drop")
+
+    get auth_attempts_path
+    assert_select "h2", text: "Banned IPs"
+    assert_match "203.0.113.0/24", response.body
+    assert_match "spray campaign", response.body
+    assert_match "1 range from the Spamhaus DROP list", response.body
+    assert_no_match(/198\.51\.100\.0/, response.body)
+  end
+
   # Collapsed noise is counted but not listed, so the page has to say so -
   # a total that silently excludes rows reads as "this is everything".
   test "discloses collapsed rows when any exist" do

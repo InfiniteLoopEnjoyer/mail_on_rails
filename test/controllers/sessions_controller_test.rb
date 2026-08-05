@@ -38,6 +38,20 @@ class SessionsControllerTest < ActionDispatch::IntegrationTest
     assert_equal 0, AuthAttempt.count
   end
 
+  # BannedIp covers the web surface too: even the right password is not
+  # looked at from a banned address.
+  test "a banned address cannot sign in with valid credentials" do
+    BannedIp.create!(cidr: "127.0.0.1")
+
+    post session_path, params: { email_address: @user.email_address, password: "password" }
+
+    assert_redirected_to new_session_path
+    assert_nil cookies[:session_id]
+    attempt = AuthAttempt.sole
+    assert_equal "web", attempt.source
+    assert_equal "throttled", attempt.outcome
+  end
+
   test "destroy" do
     sign_in_as(User.take)
 

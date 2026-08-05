@@ -22,6 +22,24 @@ class SettingsControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_select "span", text: "MAIL_ON_RAILS_EXIM_DOMAINS_FILE not set"
     assert_select "span", text: "MAIL_ON_RAILS_EXIM_RECIPIENTS_FILE not set"
+    assert_select "span", text: "MAIL_ON_RAILS_BANNED_IPS_FILE not set"
+  end
+
+  test "sync rewrites the banned_ips file from the database" do
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "banned_ips")
+      ENV["MAIL_ON_RAILS_BANNED_IPS_FILE"] = path
+      BannedIp.delete_all # bypass callbacks so the file starts stale
+      BannedIp.insert_all([ { cidr: "203.0.113.0/24", source: "manual",
+                              created_at: Time.current, updated_at: Time.current } ])
+
+      post sync_settings_url(file: "banned_ips")
+
+      assert_redirected_to settings_url
+      assert_equal %w[203.0.113.0/24], File.readlines(path, chomp: true)
+    ensure
+      ENV.delete("MAIL_ON_RAILS_BANNED_IPS_FILE")
+    end
   end
 
   test "shows file contents and in-sync/drift against the database" do

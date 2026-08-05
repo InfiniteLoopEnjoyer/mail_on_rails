@@ -71,6 +71,12 @@ servers:
         MAIL_ON_RAILS_EXIM_DOMAINS_FILE: /rails/shared/local_domains
         MAIL_ON_RAILS_EXIM_RECIPIENTS_FILE: /rails/shared/local_recipients
 
+        # Permanent IP/CIDR bans (BannedIp - auth attempts page + Spamhaus
+        # DROP import), same volume. Exim drops matches at connect time
+        # and the IMAP daemon (which also mounts the volume, read-only)
+        # before its greeting; both re-read the file live.
+        MAIL_ON_RAILS_BANNED_IPS_FILE: /rails/shared/banned_ips
+
         # App-side virus scanning (mailroom inbound scan + IMAP APPEND)
         # needs no address here: the clamav accessory (see accessories
         # below) always boots before the app, so the app defaults

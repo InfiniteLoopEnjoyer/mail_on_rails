@@ -46,7 +46,7 @@ class SettingsController < ApplicationController
       when :written then flash[:notice] = "#{file.label} file rewritten from the database."
       when :skipped then flash[:alert] = "#{file.label}: #{file.env_var} is not set, nothing was written."
       end
-    rescue EximLocalDomains::Error, EximLocalRecipients::Error => e
+    rescue EximLocalDomains::Error, EximLocalRecipients::Error, BannedIpsFile::Error => e
       flash[:alert] = "#{file.label} sync failed: #{e.message}"
     end
     redirect_to settings_path
@@ -72,6 +72,15 @@ class SettingsController < ApplicationController
                      "list): accounts and aliases. Rewritten on account or alias " \
                      "add/remove/rename; an address in a hosted domain but not " \
                      "in this file gets 550 no such user."
+      ),
+      EximFile.new(
+        key: "banned_ips",
+        label: "Banned IPs", env_var: "MAIL_ON_RAILS_BANNED_IPS_FILE",
+        writer: BannedIpsFile, db: BannedIpsFile.cidrs,
+        description: "IPs and ranges banned from the auth attempts page (plus " \
+                     "the imported Spamhaus DROP list). Read by both mail edges: " \
+                     "exim drops matches at connect time, the IMAP daemon before " \
+                     "its greeting. Rewritten on ban/unban."
       )
     ]
   end

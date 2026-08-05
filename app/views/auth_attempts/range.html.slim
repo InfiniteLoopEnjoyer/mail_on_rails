@@ -1,0 +1,47 @@
+- page_title "Auth attempts - #{@range}"
+
+header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
+  div
+    h1.text-2xl.font-bold.font-mono= @range
+    = link_to "← All auth attempts", auth_attempts_path(window: @window), class: "text-sm text-slate-500 dark:text-slate-400 hover:text-accent hover:underline"
+
+  nav.flex.items-center.gap-1
+    - AuthAttemptsController::WINDOWS.each_key do |key|
+      = link_to key, range_auth_attempts_path(cidr: @range, window: key), class: window_tab_classes(@window == key)
+
+.mb-4.flex.flex-wrap.items-center.gap-3
+  p.text-sm.text-slate-500.dark:text-slate-400
+    ' Every address in this range with failed attempts in the window - ban
+    ' the one machine that matters, or the whole range if they are just
+    ' being difficult.
+  = render "ban_button", target: @range, range: @range,
+      confirm: "Ban the whole range #{@range}? Every address in it loses SMTP, IMAP and web login access."
+
+section.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900
+  - if @ips.any?
+    .overflow-x-auto
+      table.w-full.text-sm
+        thead.text-left.text-xs.text-slate-500.dark:text-slate-400
+          tr
+            th.px-4.py-2 Address
+            th.px-4.py-2.text-right Attempts
+            th.px-4.py-2 Last seen
+            th.px-4.py-2 Surfaces
+            th.px-4.py-2.text-right Addresses tried
+            th.px-4.py-2
+        tbody
+          - @ips.each do |row|
+            tr.border-t.border-slate-100.dark:border-slate-800
+              td.px-4.py-1.5.font-mono class=(row.real_account ? "text-red-700 dark:text-red-400 font-semibold" : "")
+                = row.ip
+                - if row.real_account
+                  span.ml-1.rounded.bg-red-50.px-1.5.py-0.5.text-xs.font-medium.text-red-700.dark:bg-red-950.dark:text-red-400 title="Attempted addresses that actually exist here"
+                    | real accounts
+              td.px-4.py-1.5.text-right.tabular-nums.text-slate-600.dark:text-slate-300= number_with_delimiter(row.attempts)
+              td.px-4.py-1.5.whitespace-nowrap.text-slate-600.dark:text-slate-300= row.last_seen.strftime("%b %-d %H:%M")
+              td.px-4.py-1.5.text-slate-600.dark:text-slate-300= row.sources.join(", ")
+              td.px-4.py-1.5.text-right.tabular-nums.text-slate-600.dark:text-slate-300= number_with_delimiter(row.usernames)
+              td.px-4.py-1.5.text-right
+                = render "ban_button", target: row.ip, range: @range, confirm: "Ban #{row.ip}? It loses SMTP, IMAP and web login access."
+  - else
+    p.px-4.py-3.text-sm.text-slate-500.dark:text-slate-400 Nothing from this range in this window.
