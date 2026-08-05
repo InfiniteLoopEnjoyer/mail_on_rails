@@ -68,6 +68,15 @@ module MailOnRails
         @rate = RateLimiter.new(limit: self.class::CONN_RATE_LIMIT,
                                 window: self.class::CONN_RATE_WINDOW)
         @denylist = Denylist.new(ENV["SMTP_DENYLIST_FILE"])
+        # Lifecycle state shared between the accept threads, the connection
+        # threads, and the host's boot/shutdown calls.
+        @lifecycle = Mutex.new
+        @lifecycle_cv = ConditionVariable.new
+        @listener_sockets = []
+        @sessions = {} # raw accepted socket => connection thread
+        @expected_listeners = nil
+        @bound_listeners = 0
+        @stopping = false
       end
 
       def run
@@ -75,17 +84,85 @@ module MailOnRails
         # the first connection.
         @tls = @tls_material && TLS::ContextProvider.new(@tls_material)
 
-        threads = @listeners.map do |spec|
-          next if spec[:tls] == :implicit && @tls.nil?
-
+        active = @listeners.reject { |spec| spec[:tls] == :implicit && @tls.nil? }
+        @lifecycle.synchronize do
+          @expected_listeners = active.size
+          @lifecycle_cv.broadcast
+        end
+        threads = active.map do |spec|
           session_spec = spec.slice(:host, :port, :tls, :role, :hostname, :trace, :handshake_timeout).freeze
           Thread.new(spec) { |listener| accept_loop(listener, session_spec) }
-        end.compact
+        end
         @store.log(:info, "#{protocol_name} listening: #{@listeners.map { |s| listener_label(s) }.join(", ")}")
         threads.each(&:join)
       end
 
+      # True once every listener socket is bound - the host process must
+      # not report itself healthy before this (a deploy health check that
+      # passes with unbound mail ports would resume traffic too early).
+      def ready?
+        @lifecycle.synchronize { ready_locked? }
+      end
+
+      # Blocks up to +timeout+ seconds for every listener to bind. False on
+      # timeout or shutdown; a listener that died binding never signals, so
+      # a boot problem surfaces here rather than hanging the host.
+      def wait_ready(timeout = 15)
+        deadline = monotonic + timeout
+        @lifecycle.synchronize do
+          until ready_locked?
+            remaining = deadline - monotonic
+            return false if remaining <= 0 || @stopping
+
+            @lifecycle_cv.wait(@lifecycle, remaining)
+          end
+          true
+        end
+      end
+
+      # Graceful stop: close the listeners (no new connections), give live
+      # sessions +drain+ seconds to finish on their own, then force-close
+      # the stragglers' sockets - which raises in their blocked reads and
+      # unwinds them through their normal ensure paths. Store operations
+      # already in progress complete either way (only socket IO raises), so
+      # nothing is half-written; a sender cut mid-DATA never got its 250
+      # and retries. No goodbye line is written: sessions may be mid-TLS,
+      # and a concurrent write on their SSL socket from this thread is not
+      # safe.
+      def shutdown(drain: 5)
+        listeners = @lifecycle.synchronize do
+          @stopping = true
+          @lifecycle_cv.broadcast
+          @listener_sockets.dup
+        end
+        listeners.each { |socket| close_quietly(socket) }
+
+        deadline = monotonic + drain
+        @lifecycle.synchronize do
+          while @sessions.any? && (remaining = deadline - monotonic) > 0
+            @lifecycle_cv.wait(@lifecycle, remaining)
+          end
+        end
+
+        stragglers = @lifecycle.synchronize { @sessions.to_a }
+        @store.log(:info, "#{protocol_name} closing #{stragglers.size} sessions after #{drain}s drain") if stragglers.any?
+        stragglers.each { |socket, _thread| close_quietly(socket) }
+        stragglers.each { |_socket, thread| thread&.join(2) }
+      end
+
       private
+
+      def ready_locked?
+        !@stopping && @expected_listeners && @bound_listeners >= @expected_listeners
+      end
+
+      def stopping?
+        @lifecycle.synchronize { @stopping }
+      end
+
+      def monotonic
+        Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      end
 
       def record_auth_failure(ip)
         return unless @throttle.record(ip) == :locked
@@ -96,6 +173,11 @@ module MailOnRails
 
       def accept_loop(spec, session_spec)
         server = spec[:tcp_server] || TCPServer.new(spec[:host], spec[:port])
+        @lifecycle.synchronize do
+          @listener_sockets << server
+          @bound_listeners += 1
+          @lifecycle_cv.broadcast
+        end
         loop do
           socket = server.accept
           ip = peer_ip(socket)
@@ -117,18 +199,25 @@ module MailOnRails
           end
         end
       rescue StandardError => e
-        @store.log(:error, "#{protocol_name} listener #{spec[:port]} died: #{e.class}: #{e.message}")
+        @store.log(:error, "#{protocol_name} listener #{spec[:port]} died: #{e.class}: #{e.message}") unless stopping?
       end
 
       def spawn_session(socket, session_spec, ip, delay)
-        Thread.new { handle(socket, session_spec, ip, delay) }
+        @lifecycle.synchronize { @sessions[socket] = nil }
+        thread = Thread.new { handle(socket, session_spec, ip, delay) }
+        # The session may already have finished and deregistered itself;
+        # only record the thread while the registration is still live.
+        @lifecycle.synchronize { @sessions[socket] = thread if @sessions.key?(socket) }
       rescue StandardError # ThreadError: out of threads; keep accepting
+        @lifecycle.synchronize { @sessions.delete(socket) }
         @limiter.release(ip)
         close_quietly(socket)
       end
 
-      # Runs on the connection's own thread.
-      def handle(socket, spec, ip, delay)
+      # Runs on the connection's own thread. +raw+ stays the registry key
+      # even after a TLS upgrade swaps the working socket.
+      def handle(raw, spec, ip, delay)
+        socket = raw
         # Tarpit (RateLimiter's verdict): served before the TLS handshake
         # and banner. The sleeping connection keeps holding its ConnLimiter
         # slot - that is the cost to the flooding peer.
@@ -154,6 +243,10 @@ module MailOnRails
           nil
         end
         @limiter.release(ip)
+        @lifecycle.synchronize do
+          @sessions.delete(raw)
+          @lifecycle_cv.broadcast
+        end
       end
 
       # The peer address at accept time, threaded through to the release

@@ -14,6 +14,15 @@ module MailOnRails
     # caller injects the store - in the app that's the ActiveRecord-backed
     # MailOnRails::Store::SmtpBackend.
     module Daemon
+      # What start returns: the running server plus its thread, with the
+      # lifecycle calls the host process needs (readiness before reporting
+      # healthy, graceful shutdown from the Puma hooks).
+      Handle = Struct.new(:server, :thread, keyword_init: true) do
+        def ready? = server.ready?
+        def wait_ready(timeout = 15) = server.wait_ready(timeout)
+        def shutdown(drain: 5) = server.shutdown(drain: drain)
+      end
+
       module_function
 
       # Boot preflight: validates the same configuration start would use
@@ -52,21 +61,23 @@ module MailOnRails
         end
       end
 
-      # Starts the server on a named thread and returns it. A server that
-      # dies logs the error and its thread ends; the embedding web process
-      # carries on serving web requests.
+      # Starts the server on a named thread and returns a Handle. A server
+      # that dies logs the error and its thread ends; the embedding web
+      # process carries on serving web requests.
       def start(store:, logger: default_logger, host: nil, tls_dir: nil)
         host ||= ENV.fetch("SMTP_HOST", "0.0.0.0")
         specs = listeners(host)
         tls = tls_material(logger, tls_dir || ENV.fetch("SMTP_TLS_DIR", "storage/tls"))
 
         logger.info "[mail_on_rails] SMTP #{specs.map { |s| s[:port] }.join("/")} on #{host}"
-        Thread.new do
+        server = SmtpServer.new(store, specs, tls)
+        thread = Thread.new do
           Thread.current.name = "mail_on_rails_smtp"
-          SmtpServer.run(store, specs, tls)
+          server.run
         rescue StandardError => e
           logger.error "[mail_on_rails] mail_on_rails_smtp died: #{e.class}: #{e.message}"
         end
+        Handle.new(server: server, thread: thread)
       end
 
       def listeners(host)

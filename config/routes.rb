@@ -18,9 +18,11 @@ Rails.application.routes.draw do
   end
   # Define your application routes per the DSL in https://guides.rubyonrails.org/routing.html
 
-  # Reveal health status on /up that returns 200 if the app boots with no exceptions, otherwise 500.
-  # Can be used by load balancers and uptime monitors to verify that the app is live.
-  get "up" => "rails/health#show", as: :rails_health_check
+  # Health status on /up: 200 once the app booted with no exceptions AND
+  # (in deploys running the in-process mail servers) the SMTP/IMAP
+  # listeners are bound - kamal must not consider a container healthy
+  # while its mail ports are down. See HealthController.
+  get "up" => "health#show", as: :rails_health_check
 
   # The mail edges (exim, the IMAP daemon) reach the app over the docker
   # network - their INGRESS_URL / INTERNAL_API_URL resolve to kamal-proxy's
