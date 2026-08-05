@@ -22,7 +22,7 @@ class User < ApplicationRecord
     "emerald" => "#059669",
     "violet"  => "#7c3aed",
     "orange"  => "#ea580c",
-    "sky"     => "#0284c7",
+    "sky"     => "#0284c7"
   }.freeze
 
   validates :email_address, presence: true, uniqueness: { case_sensitive: false }
