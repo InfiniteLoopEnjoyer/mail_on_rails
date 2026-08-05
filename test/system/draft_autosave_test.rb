@@ -66,7 +66,20 @@ class DraftAutosaveTest < ApplicationSystemTestCase
     compose("body", "Sending this one.")
     wait_for_autosave
 
-    click_on "Send"
+    # On a starved runner the click can land between find and click and do
+    # nothing (the same race accept_turbo_confirm retries): the page then
+    # just sits on the composer. Re-click unless the send visibly landed;
+    # a click after a slow-but-successful submit finds no Send button on
+    # the destination page, which is itself proof the send happened.
+    3.times do
+      begin
+        click_on "Send"
+      rescue Capybara::ElementNotFound
+        break
+      end
+      break if page.has_text?("Email sent.", wait: 5)
+    end
+
     assert_text "Email sent.", wait: 10
     assert_equal 0, @drafts.email_messages.count
   end
