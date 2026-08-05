@@ -19,6 +19,19 @@ class EmailAccountsControllerTest < ActionDispatch::IntegrationTest
     assert_select "turbo-cable-stream-source", 1
   end
 
+  test "index sorts regular accounts by domain then email and splits dmarc accounts into their own list" do
+    EmailAccount.create!(email: "zed@aardvark.test", name: "Zed", password: "secret123")
+    EmailAccount.create!(email: "amy@zebra.test", name: "Amy", password: "secret123")
+    domain = Domain.create!(name: "example.com")
+
+    get root_url
+    assert_response :success
+    assert_select "ul", 2
+    emails = css_select("ul:first-of-type .primary").map(&:text)
+    assert_equal [ "zed@aardvark.test", "carol@example.com", "amy@zebra.test" ], emails
+    assert_equal [ domain.dmarc_address ], css_select("ul:last-of-type .primary").map(&:text)
+  end
+
   test "account page subscribes to live updates" do
     get email_account_url(@account)
     assert_response :success

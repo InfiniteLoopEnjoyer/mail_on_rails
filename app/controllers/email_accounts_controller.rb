@@ -2,7 +2,12 @@ class EmailAccountsController < ApplicationController
   before_action :set_email_account, only: %i[show edit update destroy generate_password]
 
   def index
-    @email_accounts = EmailAccount.order(:email).includes(:mailboxes)
+    domain_names = Domain.pluck(:name).to_set
+    @dmarc_accounts, @email_accounts = EmailAccount.order(:email).includes(:mailboxes).partition do |account|
+      local, _, domain = account.email.partition("@")
+      local == Domain::DMARC_LOCAL_PART && domain_names.include?(domain)
+    end
+    @email_accounts.sort_by! { |account| local, _, domain = account.email.partition("@"); [ domain, local ] }
     @unseen_counts = EmailMessage.joins(:mailbox)
                                  .where.not("flags LIKE ?", "%Seen%")
                                  .group("mailboxes.email_account_id")

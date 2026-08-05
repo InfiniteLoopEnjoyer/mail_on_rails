@@ -8,16 +8,13 @@ header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
     = link_to "New email", new_email_path, class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white"
     = link_to "New account", new_email_account_path, class: "inline-block cursor-pointer rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3.5 py-1 text-sm font-medium text-slate-800 dark:text-slate-100"
 
-- if @email_accounts.any?
-  ul
-    - @email_accounts.each do |account|
-      li.mb-2.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900
-        = link_to email_account_path(account), class: "flex items-baseline gap-3 px-4 py-3" do
-          span.primary.font-semibold= account.email
-          span.truncate.text-slate-500.dark:text-slate-400= account.name
-          - if (unseen = @unseen_counts[account.id].to_i).positive?
-            span.rounded-full.bg-accent.px-2.text-xs.whitespace-nowrap.text-white= "#{unseen} unread"
-          span.ml-auto.text-xs.whitespace-nowrap.text-slate-500.dark:text-slate-400= pluralize(account.mailboxes.size, "folder")
+- if @email_accounts.any? || @dmarc_accounts.any?
+  - if @email_accounts.any?
+    ul
+      = render partial: "account", collection: @email_accounts
+  - if @dmarc_accounts.any?
+    ul.mt-8
+      = render partial: "account", collection: @dmarc_accounts
 - else
   p.text-slate-500.dark:text-slate-400
     ' No email accounts yet. Create one above, or run
