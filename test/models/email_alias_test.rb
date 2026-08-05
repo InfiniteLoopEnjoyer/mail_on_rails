@@ -39,20 +39,18 @@ class EmailAliasTest < ActiveSupport::TestCase
     end
   end
 
-  test "alias create, rename, and destroy keep the exim recipients file in step" do
-    Dir.mktmpdir do |dir|
-      ENV["MAIL_ON_RAILS_EXIM_RECIPIENTS_FILE"] = File.join(dir, "local_recipients")
+  test "alias create, rename, and destroy are visible to the SMTP recipient check" do
+    require "mail_on_rails/store/smtp_backend"
+    store = MailOnRails::Store::SmtpBackend.new
 
-      email_alias = @account.email_aliases.create!(email: "info@example.test")
-      assert_equal %w[info@example.test owner@example.test], EximLocalRecipients.current
+    email_alias = @account.email_aliases.create!(email: "info@example.test")
+    assert_equal %w[info@example.test], store.local_rcpts([ "info@example.test" ])[:local]
 
-      email_alias.update!(email: "contact@example.test")
-      assert_equal %w[contact@example.test owner@example.test], EximLocalRecipients.current
+    email_alias.update!(email: "contact@example.test")
+    assert_equal %w[contact@example.test], store.local_rcpts([ "contact@example.test" ])[:local]
+    assert_empty store.local_rcpts([ "info@example.test" ])[:local]
 
-      email_alias.destroy!
-      assert_equal %w[owner@example.test], EximLocalRecipients.current
-    ensure
-      ENV.delete("MAIL_ON_RAILS_EXIM_RECIPIENTS_FILE")
-    end
+    email_alias.destroy!
+    assert_empty store.local_rcpts([ "contact@example.test" ])[:local]
   end
 end

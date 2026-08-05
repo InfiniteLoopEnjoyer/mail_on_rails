@@ -2,7 +2,7 @@ require "test_helper"
 require "mail_on_rails/clamav_scanner"
 require_relative "../test_helpers/clamav_stub_helper"
 
-# The web composer delivers local mail itself - no exim edge, no mailroom -
+# The web composer delivers local mail itself - no SMTP edge, no mailroom -
 # so it carries the clamav gate for that path: a clean verdict marks the
 # recipient's copy scanned (unlocking attachment downloads), an infected
 # message is refused outright (the sender is right there, unlike the

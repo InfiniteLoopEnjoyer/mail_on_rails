@@ -34,7 +34,7 @@ class ComposedEmail
 
     raw = build_raw
     # The web composer is its own submission edge: mail it puts straight into
-    # a local INBOX never crosses exim or the mailroom, so it must run the
+    # a local INBOX never crosses the SMTP server or the mailroom, so it must run the
     # same clamav scan itself. Unlike the mailroom (which has already
     # accepted the message and can only quarantine), the sender is right
     # here - an infected message is simply refused.

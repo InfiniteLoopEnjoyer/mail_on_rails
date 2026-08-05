@@ -1,7 +1,7 @@
 # Imports the Spamhaus DROP list ("Don't Route Or Peer": hijacked and
 # criminal-controlled netblocks, free to download and redistribute) into
 # BannedIp, so those ranges ride the same enforcement path as manual bans
-# - the shared banned_ips file for exim and the IMAP daemon, plus the web
+# - the banned_ips file the SMTP and IMAP listeners read, plus the web
 # login check. The list is small (hundreds of CIDRs) and changes slowly;
 # SpamhausDropRefreshJob runs this daily.
 #

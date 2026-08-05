@@ -1,16 +1,14 @@
-# Writes the banned_ips file (one IP or CIDR per line) on the shared
-# mailconf volume - MAIL_ON_RAILS_BANNED_IPS_FILE. Two daemons read it:
-# exim (an absolute-filename host list in its connect ACL, re-read per
-# connection because exim forks per connection) and the IMAP daemon (its
-# Denylist re-parses on mtime change) - so a ban takes effect within
-# seconds of the row committing, with no restart anywhere. With the env
-# var unset (dev/test default) syncing is a no-op.
+# Writes the banned_ips file (one IP or CIDR per line) at
+# MAIL_ON_RAILS_BANNED_IPS_FILE, on the mailconf volume so bans survive
+# container replacement. The in-process SMTP and IMAP listeners read it
+# (their Denylist re-parses on mtime change) - so a ban takes effect
+# within seconds of the row committing, with no restart. With the env var
+# unset (dev/test default) syncing is a no-op.
 #
-# Semantics that matter, and they're the inverse of the recipients file:
-# an EMPTY file means "no bans" and is the normal steady state, while a
-# MISSING file makes exim's host-list check error and the connect ACL
-# defer every connection with 4xx - which is why the exim entrypoint seeds
-# an empty file on fresh volumes and this writer runs at deploy time.
+# Semantics: an EMPTY file means "no bans" and is the normal steady
+# state; a MISSING file also just means "no bans" to the listeners, but
+# the entrypoint's banned_ips:sync writes it at boot so existing ban rows
+# are enforced from the first connection on a fresh volume.
 class BannedIpsFile
   class Error < StandardError; end
 
@@ -33,7 +31,7 @@ class BannedIpsFile
         f.write(cidrs.map { |cidr| "#{cidr}\n" }.join)
         f.fsync
       end
-      File.chmod(0o644, tmp) # the exim and imap users must be able to read it
+      File.chmod(0o644, tmp)
       File.rename(tmp, path)
     ensure
       File.unlink(tmp) if File.exist?(tmp)

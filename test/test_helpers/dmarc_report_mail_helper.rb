@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Builds an exim-stamped inbound mail carrying a minimal DMARC aggregate
+# Builds an edge-stamped inbound mail carrying a minimal DMARC aggregate
 # report for the example.test domain (4 aligned messages from one IP).
 module DmarcReportMailHelper
   REPORT_XML = <<~XML

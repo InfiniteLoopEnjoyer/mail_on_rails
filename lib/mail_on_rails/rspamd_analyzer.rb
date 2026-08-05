@@ -7,8 +7,9 @@ require "uri"
 module MailOnRails
   # Sends a raw RFC822 message to an rspamd worker's HTTP /checkv2 endpoint
   # to compute the inbound sender-authentication verdicts (SPF/DKIM/DMARC)
-  # and a spam action. The exim edge does none of this itself - it only
-  # forwards the connection facts (client IP, HELO, envelope sender) as the
+  # and a spam action. This is the verdict authority for filing - the SMTP
+  # edge's own SPF/DKIM checks are only a connection-time gate; it forwards
+  # the connection facts (client IP, HELO, envelope sender) as the
   # trusted X-MailOnRails-* / Return-Path headers, which the mailroom passes
   # here so rspamd's SPF/DMARC checks have the data the app never saw on the
   # wire.
@@ -65,7 +66,7 @@ module MailOnRails
       Integer(ENV.fetch("SMTP_RSPAMD_TIMEOUT", DEFAULT_TIMEOUT))
     end
 
-    # Analyze a message. The keyword facts come from the exim-stamped headers
+    # Analyze a message. The keyword facts come from the edge-stamped headers
     # and are passed to rspamd so SPF/DMARC (which need the live connection)
     # can run app-side. Returns a Result; :unavailable on any transport or
     # parse failure - never raises.

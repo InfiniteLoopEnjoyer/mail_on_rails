@@ -1,18 +1,18 @@
 # A domain we host mail for. Creating/destroying one takes effect live:
-# the exim edge's local_domains list is a file on a volume shared with this
-# app (see EximLocalDomains), re-read by exim per connection - no restart.
+# the in-process SMTP server consults this table at RCPT time
+# (Store::SmtpBackend#local_rcpts), so a recipient in a hosted domain with
+# no account answers "no such user" instead of "relaying denied".
 # Creation also mints the DKIM signing key, stored encrypted on this row
 # (dkim_private_key) - so no domain ever silently sends unsigned. The key
 # dies with the row: re-adding a domain mints a NEW key, so the DKIM TXT
 # must be republished then.
 #
-# A domain here only makes exim treat recipients as local and enables DKIM
-# signing; DNS (MX/SPF/DKIM TXT - shown on the domain page) and
-# EmailAccount rows are still needed before mail flows.
+# A domain here only makes the SMTP server treat recipients as local and
+# enables DKIM signing; DNS (MX/SPF/DKIM TXT - shown on the domain page)
+# and EmailAccount rows are still needed before mail flows.
 class Domain < ApplicationRecord
   encrypts :dkim_private_key
-  # Lowercase ASCII/punycode FQDN. Also keeps Exim list metacharacters
-  # (':', '!', '*', whitespace) out of the local_domains file.
+  # Lowercase ASCII/punycode FQDN.
   HOSTNAME = /\A(?=.{1,253}\z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\z/
 
   # Local part of the auto-created account DMARC aggregate reports are
@@ -30,8 +30,7 @@ class Domain < ApplicationRecord
   normalizes :name, with: ->(name) { name.to_s.strip.downcase.delete_suffix(".") }
 
   before_create :generate_dkim_key
-  after_create_commit :activate
-  after_destroy_commit :deactivate
+  after_create_commit :ensure_dmarc_account!
 
   def self.dmarc_ingestion_address?(email)
     local, _, domain_name = email.to_s.partition("@")
@@ -66,12 +65,6 @@ class Domain < ApplicationRecord
       EmailAccount.create!(email: dmarc_address, name: "DMARC reports", password: EmailAccount.generate_password)
   end
 
-  # Is the domain in the exim file right now? (The file lives on our own
-  # mount, so we can just read it.)
-  def synced_to_exim?
-    EximLocalDomains.current.include?(name)
-  end
-
   # Escalation advice for the readiness indicator, from the last 30 days
   # of aggregate reports (DmarcReport.stats) and the published record.
   # Deliberately advice, not automation: flipping to p=reject on a bad
@@ -103,16 +96,5 @@ class Domain < ApplicationRecord
   # ||= so an import (e.g. restoring a dumped row) keeps its key.
   def generate_dkim_key
     self.dkim_private_key ||= OpenSSL::PKey::RSA.new(DKIM_KEY_BITS).to_pem
-  end
-
-  def activate
-    ensure_dmarc_account!
-    EximLocalDomains.sync!
-  end
-
-  # force_empty: removing the last domain is explicit admin intent, even
-  # though an empty list makes exim 550 all inbound mail.
-  def deactivate
-    EximLocalDomains.sync!(force_empty: true)
   end
 end

@@ -4,11 +4,11 @@
 # admin's "and stay out" - rows persist until deleted from the UI.
 #
 # Enforcement is deliberately spread over every surface a banned address
-# can reach: BannedIpsFile mirrors the table onto the shared mailconf
-# volume, where exim drops matching connections at connect time and the
-# IMAP daemon drops them in its accept loop, and SessionsController checks
-# `covering` before the web login. None of those readers restart - exim
-# re-reads the file per connection, the IMAP daemon watches its mtime.
+# can reach: BannedIpsFile mirrors the table onto the mailconf volume,
+# where the in-process SMTP and IMAP listeners drop matching connections
+# in their accept loops, and SessionsController checks `covering` before
+# the web login. None of those readers restart - the listeners watch the
+# file's mtime.
 class BannedIp < ApplicationRecord
   SOURCES = %w[manual spamhaus_drop].freeze
 

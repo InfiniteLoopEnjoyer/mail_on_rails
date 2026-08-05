@@ -5,8 +5,8 @@ require "ipaddr"
 module MailOnRails
   module Imap
     # The Rails-managed banned_ips file (one IP or CIDR per line, written
-    # atomically on the shared mailconf volume - the same file exim's
-    # connect ACL reads). Checked on the accept path for every connection;
+    # atomically by BannedIpsFile - the same file the SMTP listener
+    # reads). Checked on the accept path for every connection;
     # the file is stat'd at most once per TTL seconds and re-parsed only
     # when its mtime changes, so a ban lands within seconds of the Rails
     # app writing the file, without a stat per connection under load.
@@ -47,7 +47,7 @@ module MailOnRails
             mtime = begin
               File.stat(@path).mtime
             rescue SystemCallError
-              nil # missing/unreadable = no bans (exim is the fail-closed layer)
+              nil # missing/unreadable = no bans (fail-soft by design)
             end
             if mtime != @mtime
               @networks = mtime.nil? ? [] : load_networks

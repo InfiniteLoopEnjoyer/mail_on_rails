@@ -4,7 +4,7 @@ require "mail_on_rails/rspamd_analyzer"
 require_relative "../test_helpers/clamav_stub_helper"
 require_relative "../test_helpers/rspamd_stub_helper"
 
-# Inbound routing and the trust boundary. The exim edge stamps the connection
+# Inbound routing and the trust boundary. The SMTP edge stamps the connection
 # facts (Return-Path / X-Original-To / X-MailOnRails-Authenticated / -Client-Ip
 # / -Helo) and strips forgeries; this app trusts those but recomputes every
 # *verdict* itself - it never trusts an inbound X-MailOnRails-Auth-Results /
@@ -24,7 +24,7 @@ class MailroomMailboxTest < ActionMailbox::TestCase
     @account = EmailAccount.create!(email: EMAIL, password: "pw-123456")
   end
 
-  # An exim-stamped inbound message, as bin/rails-ingress emits it. The
+  # An edge-stamped inbound message, as Store::SmtpBackend#stamp emits it. The
   # scan/virus/auth_results kwargs stamp *forged* verdict headers (what a
   # sender might smuggle past a broken edge) so tests can prove they're ignored.
   def source(scan: nil, virus: nil, auth_results: nil, authenticated: "no", ip: nil, helo: nil,
@@ -182,7 +182,7 @@ class MailroomMailboxTest < ActionMailbox::TestCase
     assert_equal 0.1, message.spam_score
     assert_equal 6.0, message.spam_threshold
     assert_equal "no action", message.spam_action
-    # The exim-stamped connection facts must reach rspamd.
+    # The edge-stamped connection facts must reach rspamd.
     assert_equal "203.0.113.9", facts[:ip]
     assert_equal "mx.remote.test", facts[:helo]
     assert_equal "sender@remote.test", facts[:mail_from]

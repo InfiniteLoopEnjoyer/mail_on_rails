@@ -22,14 +22,10 @@ RUN apt-get update -qq && \
     rm -rf /var/lib/apt/lists /var/cache/apt/archives
 
 # Set production environment variables and enable jemalloc for reduced memory usage and latency.
-# development:test must both be excluded - those groups hold the
-# mail_on_rails_* daemon gems as sibling-repo path dependencies, which
-# don't exist inside this build context (the daemons ship as their own
-# images from their own repos).
 ENV RAILS_ENV="production" \
     BUNDLE_DEPLOYMENT="1" \
     BUNDLE_PATH="/usr/local/bundle" \
-    BUNDLE_WITHOUT="development:test:daemons" \
+    BUNDLE_WITHOUT="development:test" \
     LD_PRELOAD="/usr/local/lib/libjemalloc.so"
 
 # Throw-away build stage to reduce size of final image
@@ -74,10 +70,10 @@ RUN rm /usr/local/lib/ruby/gems/*/specifications/default/json-*.gemspec && \
            /usr/local/lib/ruby/[0-9]*/*-linux*/json
 
 # Run and own only the runtime files as a non-root user for security.
-# /rails/shared is the mount point for the mailconf volume shared with the
-# exim edge, created as rails:rails so a fresh named volume inherits
-# writable ownership on first mount - see MAIL_ON_RAILS_EXIM_DOMAINS_FILE
-# in config/deploy.yml.
+# /rails/shared is the mount point for the mailconf volume (the banned_ips
+# file the in-process mail listeners read), created as rails:rails so a
+# fresh named volume inherits writable ownership on first mount - see
+# MAIL_ON_RAILS_BANNED_IPS_FILE in config/deploy.yml.
 RUN groupadd --system --gid 1000 rails && \
     useradd rails --uid 1000 --gid 1000 --create-home --shell /bin/bash && \
     mkdir -p /rails/shared && chown rails:rails /rails/shared

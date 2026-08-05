@@ -1,17 +1,6 @@
 require "test_helper"
 
 class DomainTest < ActiveSupport::TestCase
-  setup do
-    @exim_dir = Dir.mktmpdir
-    @exim_file = File.join(@exim_dir, "local_domains")
-    ENV["MAIL_ON_RAILS_EXIM_DOMAINS_FILE"] = @exim_file
-  end
-
-  teardown do
-    ENV.delete("MAIL_ON_RAILS_EXIM_DOMAINS_FILE")
-    FileUtils.remove_entry(@exim_dir)
-  end
-
   test "normalizes the name" do
     domain = Domain.create!(name: "  Example.COM.  ")
     assert_equal "example.com", domain.name
@@ -23,12 +12,10 @@ class DomainTest < ActiveSupport::TestCase
     end
   end
 
-  test "create mints an encrypted DKIM key and writes the exim file" do
+  test "create mints an encrypted DKIM key" do
     domain = Domain.create!(name: "example.com")
 
     assert_instance_of OpenSSL::PKey::RSA, OpenSSL::PKey.read(domain.dkim_private_key)
-    assert_equal "example.com\n", File.read(@exim_file)
-    assert domain.synced_to_exim?
     assert_match(/\Av=DKIM1; k=rsa; p=[A-Za-z0-9+\/]+=*\z/, domain.dkim_txt_value)
     # Stored encrypted: the raw column bytes must not contain the PEM.
     raw = Domain.connection.select_value("SELECT dkim_private_key FROM domains WHERE id = #{domain.id}")
@@ -46,28 +33,16 @@ class DomainTest < ActiveSupport::TestCase
     original = domain.dkim_private_key
 
     domain.destroy!
-    assert_equal "\n", File.read(@exim_file)
 
     recreated = Domain.create!(name: "example.com")
     assert recreated.dkim_private_key.present?
     assert_not_equal original, recreated.dkim_private_key
   end
 
-  test "sync refuses an empty list unless forced" do
-    assert_raises(EximLocalDomains::Error) { EximLocalDomains.sync! }
-    assert_equal :written, EximLocalDomains.sync!(force_empty: true)
-    assert_equal "\n", File.read(@exim_file)
-  end
+  test "create provisions the dmarc reports account" do
+    domain = Domain.create!(name: "example.com")
 
-  test "sync writes all domains sorted, world-readable" do
-    Domain.create!(name: "zeta.example.com")
-    Domain.create!(name: "alpha.example.com")
-    assert_equal "alpha.example.com\nzeta.example.com\n", File.read(@exim_file)
-    assert_equal 0o644, File.stat(@exim_file).mode & 0o777
-  end
-
-  test "sync is a no-op without the env var" do
-    ENV.delete("MAIL_ON_RAILS_EXIM_DOMAINS_FILE")
-    assert_equal :skipped, EximLocalDomains.sync!
+    assert EmailAccount.exists?(email: domain.dmarc_address)
+    assert Domain.dmarc_ingestion_address?(domain.dmarc_address)
   end
 end

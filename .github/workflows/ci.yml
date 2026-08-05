@@ -11,12 +11,6 @@ on:
   schedule:
     - cron: "17 5 * * *"
 
-# The mail_on_rails_imap path gem points at a sibling repo that doesn't
-# exist on CI runners; skipping its group keeps bundle install happy, and
-# the store-contract tests skip themselves.
-env:
-  BUNDLE_WITHOUT: daemons
-
 jobs:
   scan_ruby:
     runs-on: ubuntu-latest
@@ -136,15 +130,14 @@ jobs:
         env:
           RAILS_ENV: test
           DATABASE_HOST: 127.0.0.1
-          # Internal API auth for controller tests - CI has no RAILS_MASTER_KEY,
-          # so the credentials-stored password is unavailable (see the env
-          # fallback in MailOnRails::InternalController).
-          SMTP_INTERNAL_API_PASSWORD: test-internal-api-password
-          # Same story for the Action Mailbox relay ingress: without this,
-          # authenticate_by_password raises instead of returning 401.
-          RAILS_INBOUND_EMAIL_PASSWORD: test-inbound-email-password
           # RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
         run: bin/rails db:test:prepare test
+
+      - name: Run vendored IMAP server suite
+        run: bin/rails test:imap_server
+
+      - name: Run vendored SMTP server suite
+        run: bin/rails test:smtp_server
 
   system-test:
     if: github.event_name != 'schedule'

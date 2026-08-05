@@ -16,11 +16,7 @@ header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
               span.rounded-full.bg-green-100.dark:bg-green-950.px-2.text-xs.whitespace-nowrap.text-green-700.dark:text-green-400 DKIM key
             - else
               span.rounded-full.bg-yellow-100.dark:bg-yellow-950.px-2.text-xs.whitespace-nowrap.text-yellow-700.dark:text-yellow-400 no DKIM key
-            - if domain.synced_to_exim?
-              span.rounded-full.bg-green-100.dark:bg-green-950.px-2.text-xs.whitespace-nowrap.text-green-700.dark:text-green-400 exim: listed
-            - else
-              span.rounded-full.bg-red-100.dark:bg-red-950.px-2.text-xs.whitespace-nowrap.text-red-700.dark:text-red-400 exim: not listed
 - else
   p.text-slate-500.dark:text-slate-400
-    ' No domains yet. Add the domains you host mail for - exim picks up
-    ' changes live, and each domain gets a DKIM signing key.
+    ' No domains yet. Add the domains you host mail for - the mail server
+    ' picks up changes live, and each domain gets a DKIM signing key.

@@ -47,7 +47,7 @@ module MailOnRails
             mtime = begin
               File.stat(@path).mtime
             rescue SystemCallError
-              nil # missing/unreadable = no bans (exim is the fail-closed layer)
+              nil # missing/unreadable = no bans (fail-soft by design)
             end
             if mtime != @mtime
               @networks = mtime.nil? ? [] : load_networks

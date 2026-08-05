@@ -3,16 +3,17 @@ require "mail_on_rails/rspamd_analyzer"
 
 # Delivers inbound mail into the INBOX of every local account that appears
 # as a recipient (To/Cc/Bcc or the X-Original-To envelope headers stamped
-# by the exim edge via its bin/rails-ingress helper).
+# by the in-process SMTP server via Store::SmtpBackend#stamp).
 #
-# Trust boundary: the exim edge stamps the connection facts it alone can
+# Trust boundary: the SMTP edge stamps the connection facts it alone can
 # know - Return-Path, X-Original-To, X-MailOnRails-Authenticated / -Client-Ip
 # / -Helo - after stripping any forged copies from the submitted DATA, and
-# this app trusts those (it can't re-derive them; it never saw the wire). It
-# does NOT trust any inbound *verdict* header (X-MailOnRails-Auth-Results /
-# -Scan / -Virus): the edge never produces those, so a copy arriving on the
-# wire could only be forged and must not be allowed to skip our checks. The
-# app recomputes both verdicts itself, unconditionally:
+# this mailroom trusts those (it can't re-derive them; it never saw the
+# wire). It does NOT trust any inbound *verdict* header
+# (X-MailOnRails-Auth-Results / -Scan / -Virus): the edge never produces
+# those, so a copy arriving on the wire could only be forged and must not
+# be allowed to skip our checks. The mailroom recomputes both verdicts
+# itself, unconditionally:
 #   - Sender-auth (SPF/DKIM/DMARC) via rspamd from the stamped connection
 #     facts, when SMTP_RSPAMD_ADDR is set;
 #   - Virus scanning via clamav, on by default (SMTP_CLAMAV_ADDR defaults
@@ -67,16 +68,16 @@ class MailroomMailbox < ApplicationMailbox
     (Array(mail.recipients) + envelope).map(&:to_s).uniq
   end
 
-  # Read from the authoritative header stamped by the exim edge's
-  # bin/rails-ingress (any forged copy in the submitted DATA was stripped
-  # there). "no" / absent means the sender did not authenticate.
+  # Read from the authoritative header stamped by the SMTP edge (any
+  # forged copy in the submitted DATA was stripped there). "no" / absent
+  # means the sender did not authenticate.
   def authenticated_as
     value = header_values("X-MailOnRails-Authenticated").first.to_s.strip
     value.presence unless value.casecmp?("no")
   end
 
   # SPF/DKIM/DMARC verdicts as an Authentication-Results string, computed by
-  # the app via rspamd from the exim-stamped connection facts. Any inbound
+  # the app via rspamd from the edge-stamped connection facts. Any inbound
   # X-MailOnRails-Auth-Results header is ignored - the edge never stamps one,
   # so it could only be forged. Nil for authenticated submissions (the sender
   # is already trusted) and when rspamd is off or unreachable.
@@ -102,7 +103,7 @@ class MailroomMailbox < ApplicationMailbox
   end
 
   # Runs rspamd once per message (memoized - auth_results is read per
-  # recipient) with the connection facts exim forwarded. A verdict rspamd
+  # recipient) with the connection facts the edge forwarded. A verdict rspamd
   # can't produce (disabled or unreachable) leaves sender-auth blank rather
   # than holding up delivery; the spam action is logged for visibility.
   def rspamd_analysis

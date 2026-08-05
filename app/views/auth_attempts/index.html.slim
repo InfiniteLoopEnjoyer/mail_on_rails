@@ -95,10 +95,11 @@ section.mt-4.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.d
   header.border-b.border-slate-200.dark:border-slate-800.px-4.py-3
     h2.font-semibold Banned IPs
     p.text-sm.text-slate-500.dark:text-slate-400
-      ' Permanent bans, enforced everywhere at once: exim drops the
-      ' connection before its banner, the IMAP daemon before its greeting,
-      ' and the web login refuses to look at credentials. AuthThrottle's
-      ' automatic blocks expire; these stay until removed here.
+      ' Permanent bans, enforced everywhere at once: the SMTP listener
+      ' drops the connection before its banner, the IMAP listener before
+      ' its greeting, and the web login refuses to look at credentials.
+      ' AuthThrottle's automatic blocks expire; these stay until removed
+      ' here.
   .px-4.py-3
     = form_with url: banned_ips_path, scope: :banned_ip, method: :post do |form|
       = hidden_field_tag :window, @window

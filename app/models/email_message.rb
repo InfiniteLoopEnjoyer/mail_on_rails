@@ -57,7 +57,7 @@ class EmailMessage < ApplicationRecord
 
   # One of "pass"/"fail"/"none"/... - parsed out of the recorded
   # Authentication-Results-style string (the app computes these SPF/DKIM/DMARC
-  # verdicts via rspamd; the exim edge only forwards the connection facts).
+  # verdicts via rspamd; the SMTP edge only forwards the connection facts).
   def auth_result(mechanism)
     auth_results.to_s[/\b#{mechanism}=(\w+)/, 1]
   end
