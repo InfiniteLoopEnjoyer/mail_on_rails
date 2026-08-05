@@ -15,7 +15,7 @@ module MailOnRails
     # Starts one thread per requested protocol server and returns the
     # threads. A server that dies logs the error and its thread ends; the
     # Puma process carries on serving web requests.
-    def start_servers(protocols: [ :imap ])
+    def start_servers(protocols: [ :imap, :smtp ])
       threads = []
 
       if protocols.include?(:imap)
@@ -23,6 +23,13 @@ module MailOnRails
         require "mail_on_rails/store/with_source"
         store = MailOnRails::Store::WithSource.new(MailOnRails::Store::ImapBackend.new, "imap")
         threads << MailOnRails::Imap::Daemon.start(store: store, logger: Rails.logger, tls_dir: tls_dir)
+      end
+
+      if protocols.include?(:smtp)
+        require "mail_on_rails/smtp/daemon"
+        require "mail_on_rails/store/smtp_backend"
+        threads << MailOnRails::Smtp::Daemon.start(store: MailOnRails::Store::SmtpBackend.new,
+                                                   logger: Rails.logger, tls_dir: tls_dir)
       end
 
       threads
