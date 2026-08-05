@@ -1,8 +1,7 @@
 <% require "dotenv"; Dotenv.load(".env") %>
 
 # Generic template - real infrastructure (hosts, domains) lives in the
-# gitignored destination overlay config/deploy.prod.yml, same as the
-# mail edge repos (mail_on_rails_exim / mail_on_rails_imap). Deploy with
+# gitignored destination overlay config/deploy.prod.yml. Deploy with
 # `bin/kamal deploy -d prod`.
 
 # Name of your application. Used to uniquely configure containers.
@@ -11,41 +10,45 @@ service: mail_on_rails
 # Name of the container image (use your-user/app-name on external registries).
 image: mail_on_rails
 
-# The Rails app service: web UI + Action Mailbox ingress + Solid Queue.
-# The SMTP edge (Exim) and the IMAP daemon are their own Kamal services
-# deployed from their own repos (../mail_on_rails_exim and
-# ../mail_on_rails_imap, each with a config/deploy.yml and `bin/kamal
-# deploy`). All three share this droplet and the local registry; the
-# postgres accessory defined below belongs to this service alone.
-#
-# One role: Puma behind kamal-proxy (zero-downtime deploys, HTTPS on
-# 443), serving the web UI, the relay ingress + private API the edge
-# services POST to, and the Solid Queue supervisor in-process
+# The unified mail service: one Puma process serves everything - web UI,
+# the in-process SMTP and IMAP servers (the :mail_on_rails Puma plugin,
+# lib/puma/plugin/mail_on_rails.rb), and the Solid Queue supervisor
 # (SOLID_QUEUE_IN_PUMA - Action Mailbox routing and outbound delivery
 # need owner-level grants, and this is the only owner-privileged
 # container).
+#
+# HTTPS still rides behind stock kamal-proxy (proxy: below); the mail
+# ports publish straight off this container (options: publish), which is
+# why .kamal/hooks/pre-app-boot stops the old container before the new
+# one boots - kamal's boot-new-first order would clash on those ports.
+# Every deploy therefore has a short full outage (SMTP senders retry,
+# IMAP clients reconnect, and Server#shutdown drains sessions first).
 servers:
   web:
     hosts:
       - 192.168.0.1
-    # Stable DNS name on the kamal docker network. Kamal only gives app
-    # containers per-deploy names (versioned container name + random
-    # hostname); this alias lets the mail edges reach the private API
-    # directly over plain HTTP (http://mail_on_rails-web/mail_on_rails/
-    # internal) instead of hairpinning through kamal-proxy with TLS.
-    # Container-to-container only: the port stays unpublished, so nothing
-    # outside the host can route to it. During a deploy old and new
-    # containers briefly share the alias (docker DNS round-robins); both
-    # serve the API, so the overlap is harmless.
     options:
-      network-alias: mail_on_rails-web
+      # Host port -> in-container port (the daemons bind >1024 because
+      # the container runs as uid 1000): SMTP 25, submission 587,
+      # submissions/SMTPS 465, IMAP 143, IMAPS 993.
+      publish:
+        - "25:1025"
+        - "587:1587"
+        - "465:1465"
+        - "143:1143"
+        - "993:1993"
     env:
       clear:
         # Run the Solid Queue supervisor inside Puma (see config/puma.rb).
         SOLID_QUEUE_IN_PUMA: true
 
-        # EHLO name for outbound delivery; must match this host's public mail
-        # name (and ideally the droplet's PTR record).
+        # Run the SMTP + IMAP servers inside Puma (the :mail_on_rails
+        # plugin). /up stays down until their listeners are bound.
+        MAIL_ON_RAILS_SERVERS: true
+
+        # EHLO/banner name for the SMTP server and outbound delivery; must
+        # match this host's public mail name (and ideally the droplet's
+        # PTR record).
         # To relay through a provider instead of delivering to MXes directly,
         # also set MAIL_ON_RAILS_SMARTHOST (host:port) and
         # MAIL_ON_RAILS_SMARTHOST_USER/_PASSWORD.
@@ -55,39 +58,44 @@ servers:
         # generation in config/environments/production.rb).
         MAIL_ON_RAILS_WEB_HOST: www.example.com
 
+        # TLS for the mail listeners: the certbot accessory (below) renews
+        # into /etc/letsencrypt on the host, mounted read-only into this
+        # container. Both servers re-read the PEMs on mtime change, so a
+        # renewal needs no restart.
+        MAIL_ON_RAILS_TLS_CERT: /etc/letsencrypt/live/mail.example.com/fullchain.pem
+        MAIL_ON_RAILS_TLS_KEY: /etc/letsencrypt/live/mail.example.com/privkey.pem
+        SMTP_TLS_CERT: /etc/letsencrypt/live/mail.example.com/fullchain.pem
+        SMTP_TLS_KEY: /etc/letsencrypt/live/mail.example.com/privkey.pem
+
         # Outbound DKIM signing needs no config here: private keys live
         # encrypted in the domains table (minted by the Domains admin UI on
         # domain creation); the public halves are published as
         # <selector>._domainkey.<domain> TXT records (selector default:
         # rail, override with MAIL_ON_RAILS_DKIM_SELECTOR).
 
-        # The exim edge's hosted-domains and local-recipients lists, on the
-        # mailconf volume shared with the mail_on_rails_exim service
-        # (mounted there at /var/lib/exim4/dynamic). The Domain model
-        # rewrites the domains file on domain add/remove and EmailAccount
-        # rewrites the recipients file on account add/remove/rename; exim
-        # re-reads them per connection/RCPT - no exim redeploy, and no HTTP
-        # call at RCPT time.
-        MAIL_ON_RAILS_EXIM_DOMAINS_FILE: /rails/shared/local_domains
-        MAIL_ON_RAILS_EXIM_RECIPIENTS_FILE: /rails/shared/local_recipients
-
         # Permanent IP/CIDR bans (BannedIp - auth attempts page + Spamhaus
-        # DROP import), same volume. Exim drops matches at connect time
-        # and the IMAP daemon (which also mounts the volume, read-only)
-        # before its greeting; both re-read the file live.
+        # DROP import), written by the app onto the mailconf volume and
+        # mtime-polled by both in-process listeners, which drop matches
+        # before any banner. The entrypoint syncs it at boot.
         MAIL_ON_RAILS_BANNED_IPS_FILE: /rails/shared/banned_ips
+        MAIL_ON_RAILS_IMAP_DENYLIST_FILE: /rails/shared/banned_ips
+        SMTP_DENYLIST_FILE: /rails/shared/banned_ips
 
-        # App-side virus scanning (mailroom inbound scan + IMAP APPEND)
-        # needs no address here: the clamav accessory (see accessories
-        # below) always boots before the app, so the app defaults
-        # SMTP_CLAMAV_ADDR to mail_on_rails-clamav:3310 (its container name
-        # on the kamal docker network). Set "" to disable scanning.
-        # SMTP_CLAMAV_ADDR: ""
+        # Virus scanning: the SMTP server scans at DATA time (rejects
+        # infected mail before acceptance, fails closed with 451 when
+        # clamd is down - so keep the clamav accessory healthy), and the
+        # mailroom + IMAP APPEND rescan app-side (defense in depth; the
+        # app-side scanner defaults to this same address). The vendored
+        # server reads the address from env with no default, so name it
+        # explicitly. Set "" to disable the DATA-time scan.
+        SMTP_CLAMAV_ADDR: mail_on_rails-clamav:3310
 
         # rspamd accessory (see accessories below), reached by container name
         # over the kamal docker network. The mailroom POSTs each inbound
         # message here to compute SPF/DKIM/DMARC (+ a spam action) from the
-        # exim-stamped connection facts. Unset to disable app-side sender-auth.
+        # edge-stamped connection facts - rspamd is the verdict authority
+        # for filing; the SMTP server's own SPF/DKIM/DMARC stack is a
+        # connection-time gate. Unset to disable app-side sender-auth.
         SMTP_RSPAMD_ADDR: mail_on_rails-rspamd:11333
 
         # Set number of processes dedicated to Solid Queue (default: 1)
@@ -132,13 +140,9 @@ env:
     POSTGRES_USER: mail_on_rails
     POSTGRES_DB: mail_on_rails_production
 
-    # The web role does not run the IMAP listener (it's the mail_on_rails_imap
-    # service) - MAIL_ON_RAILS_SERVERS=true would turn it back on inside Puma
-    # (see config/puma.rb). The SMTP edge is the external mail_on_rails_exim
-    # service and never runs here.
-
-    # Set number of cores available to the application on each server (default: 1).
-    # WEB_CONCURRENCY: 2
+    # WEB_CONCURRENCY must stay unset/1: the mail listeners live in
+    # exactly one process, and the :mail_on_rails plugin refuses cluster
+    # mode outright.
 
     # Log everything from Rails
     # RAILS_LOG_LEVEL: debug
@@ -175,11 +179,12 @@ accessories:
       - data:/var/lib/postgresql/data
       - socket/:/var/run/postgresql
 
-  # ClamAV daemon scanning inbound mail. Two readers: the exim edge scans
-  # at DATA time (rejects infected mail before acceptance, fails closed
-  # with 451 when clamd is down - so keep this accessory healthy) and this
-  # app rescans on ingress + IMAP APPEND (defense in depth). Reached on TCP
-  # 3310 over the shared "kamal" docker network by container name
+  # ClamAV daemon scanning inbound mail. Two readers, both in the app
+  # container: the SMTP server scans at DATA time (rejects infected mail
+  # before acceptance, fails closed with 451 when clamd is down - so keep
+  # this accessory healthy) and the mailroom + IMAP APPEND rescan
+  # (defense in depth). Reached on TCP 3310 over the shared "kamal"
+  # docker network by container name
   # (mail_on_rails-clamav) - no host port is published. First boot
   # downloads ~300MB of signatures and takes minutes to turn healthy (the
   # image ships its own HEALTHCHECK and internal freshclam updater); the
@@ -226,9 +231,13 @@ accessories:
 volumes:
   - "mail_on_rails_storage:/rails/storage"
   - "/root/mail_on_rails-db/socket:/postgres/socket"
-  # Shared with the mail_on_rails_exim service: holds the local_domains
-  # file (MAIL_ON_RAILS_EXIM_DOMAINS_FILE) exim reads live.
+  # Holds the banned_ips file (MAIL_ON_RAILS_BANNED_IPS_FILE) so bans
+  # persist across container replacement.
   - "mail_on_rails_mailconf:/rails/shared"
+  # The mail listeners' TLS certs, renewed by the certbot accessory into
+  # this host path (its deploy-hook chmods privkey to 0644 so uid 1000
+  # can read it).
+  - "/etc/letsencrypt:/etc/letsencrypt:ro"
 
 # Bridge fingerprinted assets, like JS and CSS, between versions to avoid
 # hitting 404 on in-flight requests. Combines all files from new and old

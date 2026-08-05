@@ -1,0 +1,17 @@
+#!/bin/bash
+set -e
+
+# Kamal boots new containers before stopping old ones. This service
+# publishes host ports (25/587/465/143/993 for the in-process mail
+# listeners), so a new container can't bind while its predecessor runs -
+# stop the old one first. Costs a short full outage per deploy (Puma's
+# stop hooks drain mail sessions; SMTP senders retry, IMAP clients
+# reconnect, the web UI is back once /up turns healthy).
+
+[ "$KAMAL_SERVICE" = "mail_on_rails" ] || exit 0
+
+IFS=',' read -ra HOSTS <<< "$KAMAL_HOSTS"
+for host in "${HOSTS[@]}"; do
+  ssh "root@$host" "docker ps -q --filter label=service=$KAMAL_SERVICE | xargs -r docker stop" \
+      && echo "Stopped old $KAMAL_SERVICE container on $host (freeing its ports)"
+done
