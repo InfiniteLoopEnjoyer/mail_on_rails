@@ -14,6 +14,10 @@ class Mailbox < ApplicationRecord
   # the web UI's "Mark as spam" moves a message.
   JUNK = "Junk"
 
+  # Where the web UI's "Delete" moves a message; deleting inside Trash is
+  # permanent.
+  TRASH = "Trash"
+
   validates :name, presence: true, uniqueness: { scope: :email_account_id }
   validate :inbox_cannot_be_renamed, on: :update
 
@@ -39,6 +43,10 @@ class Mailbox < ApplicationRecord
 
   def junk?
     name == JUNK
+  end
+
+  def trash?
+    name == TRASH
   end
 
   # Reserves and returns the next UID for a new message.

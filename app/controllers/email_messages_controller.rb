@@ -54,6 +54,20 @@ class EmailMessagesController < ApplicationController
     redirect_to email_account_mailbox_path(@email_account, @mailbox), notice: "Moved to INBOX."
   end
 
+  # "Delete" from the message page: an IMAP-style move into Trash. Inside
+  # Trash there is nowhere softer left to go, so the same action deletes
+  # permanently (the view asks for confirmation there).
+  def destroy
+    if @mailbox.trash?
+      @email_message.destroy!
+      notice = "Message permanently deleted."
+    else
+      @email_message.move_to!(@email_account.trash_mailbox)
+      notice = "Moved to Trash."
+    end
+    redirect_to email_account_mailbox_path(@email_account, @mailbox), notice: notice
+  end
+
   # Serves one MIME attachment as a download. The view only links attachments
   # on messages that pass attachments_downloadable?; enforce the same rule
   # here so a pasted URL can't fetch an unscanned or infected payload.

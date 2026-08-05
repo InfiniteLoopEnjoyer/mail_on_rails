@@ -380,6 +380,56 @@ class EmailMessagesControllerTest < ActionDispatch::IntegrationTest
     assert_select "button", text: "Mark as spam", count: 0
   end
 
+  # -- deleting --------------------------------------------------------------
+
+  test "destroy moves the message to Trash with all its verdicts" do
+    message = EmailMessage.deliver_raw(@account.inbox, RAW,
+                                       auth_results: "mail.test; spf=pass; dkim=pass; dmarc=pass",
+                                       scan_status: "clean", spam_score: 2.1, spam_threshold: 6.0,
+                                       spam_action: "no action")
+    delete email_account_mailbox_email_message_url(@account, @account.inbox, message)
+
+    assert_redirected_to email_account_mailbox_url(@account, @account.inbox)
+    assert_equal "Moved to Trash.", flash[:notice]
+    assert_empty @account.inbox.email_messages
+    moved = @account.find_mailbox("Trash").email_messages.sole
+    assert_equal "mail.test; spf=pass; dkim=pass; dmarc=pass", moved.auth_results
+    assert_equal "clean", moved.scan_status
+    assert_equal message.raw, moved.raw
+  end
+
+  test "destroy inside Trash deletes permanently" do
+    trash = @account.find_mailbox("Trash")
+    message = EmailMessage.deliver_raw(trash, RAW)
+    delete email_account_mailbox_email_message_url(@account, trash, message)
+
+    assert_redirected_to email_account_mailbox_url(@account, trash)
+    assert_equal "Message permanently deleted.", flash[:notice]
+    assert_empty trash.email_messages
+    assert_not EmailMessage.exists?(message.id)
+  end
+
+  test "destroy recreates a deleted Trash folder" do
+    @account.find_mailbox("Trash").destroy!
+    message = EmailMessage.deliver_raw(@account.inbox, RAW)
+    delete email_account_mailbox_email_message_url(@account, @account.inbox, message)
+
+    assert_equal message.raw, @account.find_mailbox("Trash").email_messages.sole.raw
+  end
+
+  test "the message page offers Delete outside Trash and a confirmed Delete forever inside it" do
+    message = EmailMessage.deliver_raw(@account.inbox, RAW)
+    show(message)
+    assert_select "form[action=?] button", email_account_mailbox_email_message_path(@account, @account.inbox, message), text: "Delete"
+
+    trash = @account.find_mailbox("Trash")
+    trash_message = EmailMessage.deliver_raw(trash, RAW.sub("m1@", "m2@"))
+    get email_account_mailbox_email_message_url(@account, trash, trash_message)
+    assert_select "form[action=?][data-turbo-confirm] button",
+                  email_account_mailbox_email_message_path(@account, trash, trash_message), text: "Delete forever"
+    assert_select "button", text: "Delete", count: 0
+  end
+
   # -- reply composer --------------------------------------------------------
 
   test "the message page offers a reply composer prefilled from the message" do

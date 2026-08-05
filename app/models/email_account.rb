@@ -58,6 +58,12 @@ class EmailAccount < ApplicationRecord
     find_mailbox(Mailbox::JUNK) || mailboxes.create!(name: Mailbox::JUNK)
   end
 
+  # Same recreate-on-demand as Junk: Trash is deletable, and "Delete" must
+  # always have somewhere to move the message.
+  def trash_mailbox
+    find_mailbox(Mailbox::TRASH) || mailboxes.create!(name: Mailbox::TRASH)
+  end
+
   private
 
   # SCRAM-SHA-256 (RFC 5802/7677): StoredKey = H(HMAC(SaltedPassword,
