@@ -5,7 +5,7 @@
 - unless @email_message.seen?
   div data-controller="mark-read" data-mark-read-url-value=mark_read_email_account_mailbox_email_message_path(@email_account, @mailbox, @email_message)
 
-nav.mb-2.text-sm.text-slate-500
+nav.mb-2.text-sm.text-slate-500.dark:text-slate-400
   =<> link_to "Accounts", root_path, class: "text-accent"
   | /
   =<> link_to @email_account.email, email_account_path(@email_account), class: "text-accent"
@@ -15,72 +15,72 @@ nav.mb-2.text-sm.text-slate-500
   span<>= @email_message.subject.presence || "(no subject)"
 
 - if @email_message.scan_status == "infected"
-  .mb-4.rounded-lg.border.border-red-300.bg-red-50.px-5.py-3.text-sm.text-red-800
+  .mb-4.rounded-lg.border.border-red-300.dark:border-red-900.bg-red-50.dark:bg-red-950.px-5.py-3.text-sm.text-red-800.dark:text-red-300
     strong ☣ Virus detected:
     span<>= @email_message.virus_name
     | &mdash; this message was refused at SMTP time and is held here for review only. Do not forward its content.
 - elsif @email_message.scan_status == "unscanned"
-  .mb-4.rounded-lg.border.border-amber-300.bg-amber-50.px-5.py-3.text-sm.text-amber-800
+  .mb-4.rounded-lg.border.border-amber-300.dark:border-amber-900.bg-amber-50.dark:bg-amber-950.px-5.py-3.text-sm.text-amber-800.dark:text-amber-300
     strong Unscanned:
     | &nbsp;the virus scanner was unavailable when this message arrived; treat attachments with caution.
 
-article.rounded-lg.border.border-slate-200.bg-white.px-5.py-4
+article.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900.px-5.py-4
   header
     .mb-3.flex.flex-wrap.items-start.justify-between.gap-3
       h1.text-xl.font-bold= @email_message.subject.presence || "(no subject)"
       .flex.flex-wrap.items-center.gap-2
         - if @mailbox.junk?
           = button_to "Not spam", unmark_spam_email_account_mailbox_email_message_path(@email_account, @mailbox, @email_message),
-                      class: "cursor-pointer rounded-md border border-slate-300 px-3 py-1 text-sm whitespace-nowrap text-slate-600 hover:border-accent hover:text-accent"
+                      class: "cursor-pointer rounded-md border border-slate-300 dark:border-slate-600 px-3 py-1 text-sm whitespace-nowrap text-slate-600 dark:text-slate-300 hover:border-accent hover:text-accent"
         - elsif !@email_message.draft?
           = button_to "Mark as spam", mark_spam_email_account_mailbox_email_message_path(@email_account, @mailbox, @email_message),
-                      class: "cursor-pointer rounded-md border border-red-200 bg-white px-3 py-1 text-sm whitespace-nowrap text-red-700 hover:border-red-400"
+                      class: "cursor-pointer rounded-md border border-red-200 dark:border-red-900 bg-white dark:bg-slate-900 px-3 py-1 text-sm whitespace-nowrap text-red-700 dark:text-red-400 hover:border-red-400 dark:hover:border-red-700"
         - if @mailbox.trash?
           = button_to "Delete forever", email_account_mailbox_email_message_path(@email_account, @mailbox, @email_message), method: :delete,
-                      class: "cursor-pointer rounded-md border border-red-200 bg-white px-3 py-1 text-sm whitespace-nowrap text-red-700 hover:border-red-400",
+                      class: "cursor-pointer rounded-md border border-red-200 dark:border-red-900 bg-white dark:bg-slate-900 px-3 py-1 text-sm whitespace-nowrap text-red-700 dark:text-red-400 hover:border-red-400 dark:hover:border-red-700",
                       form: { data: { turbo_confirm: "Permanently delete this message? This cannot be undone." } }
         - else
           = button_to "Delete", email_account_mailbox_email_message_path(@email_account, @mailbox, @email_message), method: :delete,
-                      class: "cursor-pointer rounded-md border border-red-200 bg-white px-3 py-1 text-sm whitespace-nowrap text-red-700 hover:border-red-400"
+                      class: "cursor-pointer rounded-md border border-red-200 dark:border-red-900 bg-white dark:bg-slate-900 px-3 py-1 text-sm whitespace-nowrap text-red-700 dark:text-red-400 hover:border-red-400 dark:hover:border-red-700"
     dl class="mb-4 grid grid-cols-[4rem_1fr] gap-x-3 gap-y-0.5 text-sm"
-      dt.text-slate-500 From
+      dt.text-slate-500.dark:text-slate-400 From
       dd
         => @email_message.from_address
         - if @email_message.authenticated?
-          span.rounded-full.bg-green-100.px-2.text-xs.whitespace-nowrap.text-green-700 title="Sender authenticated as #{@email_message.authenticated_as}" ✓ verified
+          span.rounded-full.bg-green-100.dark:bg-green-950.px-2.text-xs.whitespace-nowrap.text-green-700.dark:text-green-400 title="Sender authenticated as #{@email_message.authenticated_as}" ✓ verified
         - elsif @email_message.sender_verified?
-          span.rounded-full.bg-green-100.px-2.text-xs.whitespace-nowrap.text-green-700 title="Sender domain verified (#{@email_message.auth_results})" ✓ DMARC
+          span.rounded-full.bg-green-100.dark:bg-green-950.px-2.text-xs.whitespace-nowrap.text-green-700.dark:text-green-400 title="Sender domain verified (#{@email_message.auth_results})" ✓ DMARC
         - else
-          span.rounded-full.bg-red-100.px-2.text-xs.whitespace-nowrap.text-red-700 title="Sender not verified - may be spoofed#{@email_message.auth_results.present? ? " (#{@email_message.auth_results})" : ""}" ⚠ unverified
-      dt.text-slate-500 To
+          span.rounded-full.bg-red-100.dark:bg-red-950.px-2.text-xs.whitespace-nowrap.text-red-700.dark:text-red-400 title="Sender not verified - may be spoofed#{@email_message.auth_results.present? ? " (#{@email_message.auth_results})" : ""}" ⚠ unverified
+      dt.text-slate-500.dark:text-slate-400 To
       dd= @email_message.to_addresses
-      dt.text-slate-500 Date
+      dt.text-slate-500.dark:text-slate-400 Date
       dd= @email_message.internal_date.strftime("%B %-d, %Y at %H:%M")
-      dt.text-slate-500 Flags
+      dt.text-slate-500.dark:text-slate-400 Flags
       dd= @email_message.flags.join(" ").presence || "-"
 
-  pre.border-t.border-slate-200.pt-4.font-sans.break-words.whitespace-pre-wrap= @email_message.text_body
+  pre.border-t.border-slate-200.dark:border-slate-800.pt-4.font-sans.break-words.whitespace-pre-wrap= @email_message.text_body
 
   - if @email_message.attachments.any?
-    section.mt-4.border-t.border-slate-200.pt-3
-      h2.mb-2.text-xs.font-semibold.tracking-wide.text-slate-500.uppercase Attachments
+    section.mt-4.border-t.border-slate-200.dark:border-slate-800.pt-3
+      h2.mb-2.text-xs.font-semibold.tracking-wide.text-slate-500.dark:text-slate-400.uppercase Attachments
       ul.flex.flex-wrap.gap-2
         - @email_message.attachments.each do |attachment|
           li
             - if @email_message.attachments_downloadable?
-              = link_to attachment_email_account_mailbox_email_message_path(@email_account, @mailbox, @email_message, index: attachment.index), class: "flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm hover:border-accent" do
+              = link_to attachment_email_account_mailbox_email_message_path(@email_account, @mailbox, @email_message, index: attachment.index), class: "flex items-center gap-2 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 px-3 py-1.5 text-sm hover:border-accent" do
                 span.font-medium.text-accent= attachment.filename
-                span.text-xs.whitespace-nowrap.text-slate-500= "#{attachment.content_type} · #{number_to_human_size(attachment.size)}"
+                span.text-xs.whitespace-nowrap.text-slate-500.dark:text-slate-400= "#{attachment.content_type} · #{number_to_human_size(attachment.size)}"
             - else
               - reason = @email_message.scan_status == "infected" ? "Virus detected" : "Not yet scanned for viruses"
-              .flex.items-center.gap-2.rounded-md.border.border-slate-200.bg-slate-50.px-3.py-1.5.text-sm.opacity-60 title="#{reason} - download disabled"
-                span.font-medium.text-slate-600= attachment.filename
-                span.text-xs.whitespace-nowrap.text-slate-500= "#{attachment.content_type} · #{number_to_human_size(attachment.size)}"
+              .flex.items-center.gap-2.rounded-md.border.border-slate-200.dark:border-slate-800.bg-slate-50.dark:bg-slate-800.px-3.py-1.5.text-sm.opacity-60 title="#{reason} - download disabled"
+                span.font-medium.text-slate-600.dark:text-slate-300= attachment.filename
+                span.text-xs.whitespace-nowrap.text-slate-500.dark:text-slate-400= "#{attachment.content_type} · #{number_to_human_size(attachment.size)}"
 
   / Also rendered for a never-analyzed message the scanner could still
   / vouch for - it then carries just the "Not scanned" badge and the button.
   - if @email_message.analyzed? || @email_message.rescannable?
-    footer.mt-4.flex.flex-wrap.items-center.gap-x-2.gap-y-1.border-t.border-slate-200.pt-3.text-xs.text-slate-500
+    footer.mt-4.flex.flex-wrap.items-center.gap-x-2.gap-y-1.border-t.border-slate-200.dark:border-slate-800.pt-3.text-xs.text-slate-500.dark:text-slate-400
       - if @email_message.auth_results.present?
         - %w[spf dkim dmarc].each do
           - verdict = @email_message.auth_result it
@@ -89,19 +89,19 @@ article.rounded-lg.border.border-slate-200.bg-white.px-5.py-4
 
       - case @email_message.scan_status
       - when "infected"
-        span.rounded-full.bg-red-100.px-2.whitespace-nowrap.text-red-700 title="ClamAV: #{@email_message.virus_name}"
+        span.rounded-full.bg-red-100.dark:bg-red-950.px-2.whitespace-nowrap.text-red-700.dark:text-red-400 title="ClamAV: #{@email_message.virus_name}"
           | ☣ #{@email_message.virus_name}
       - when "unscanned"
-        span.rounded-full.bg-amber-100.px-2.whitespace-nowrap.text-amber-700 title="The virus scanner was unavailable when this message arrived" ⚠ Unscanned
+        span.rounded-full.bg-amber-100.dark:bg-amber-950.px-2.whitespace-nowrap.text-amber-700.dark:text-amber-400 title="The virus scanner was unavailable when this message arrived" ⚠ Unscanned
       - when "clean"
-        span.rounded-full.bg-green-100.px-2.whitespace-nowrap.text-green-700 ✓ No virus
+        span.rounded-full.bg-green-100.dark:bg-green-950.px-2.whitespace-nowrap.text-green-700.dark:text-green-400 ✓ No virus
       - else
-        span.rounded-full.bg-slate-100.px-2.whitespace-nowrap.text-slate-600 ⚠ Not scanned
+        span.rounded-full.bg-slate-100.dark:bg-slate-800.px-2.whitespace-nowrap.text-slate-600.dark:text-slate-300 ⚠ Not scanned
 
       - if @email_message.rescannable?
         = button_to @email_message.scan_status.in?(%w[clean infected]) ? "Rescan" : "Scan now",
                     rescan_email_account_mailbox_email_message_path(@email_account, @mailbox, @email_message),
-                    class: "cursor-pointer rounded-full border border-slate-300 px-2 text-xs text-slate-600 hover:border-accent hover:text-accent"
+                    class: "cursor-pointer rounded-full border border-slate-300 dark:border-slate-600 px-2 text-xs text-slate-600 dark:text-slate-300 hover:border-accent hover:text-accent"
 
       - if @email_message.spam_score.present?
         span.rounded-full.px-2.whitespace-nowrap class=spam_badge_classes(@email_message)
@@ -110,8 +110,8 @@ article.rounded-lg.border.border-slate-200.bg-white.px-5.py-4
 
 - if @email_message.draft?
   / An unsent draft: offer to carry on writing rather than to reply to it.
-  .mt-4.flex.flex-wrap.items-center.gap-3.rounded-lg.border.border-slate-200.bg-white.px-4.py-3
-    p.text-sm.text-slate-500 This is an unsent draft.
+  .mt-4.flex.flex-wrap.items-center.gap-3.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900.px-4.py-3
+    p.text-sm.text-slate-500.dark:text-slate-400 This is an unsent draft.
     = link_to "Continue writing", edit_draft_path(@email_message), class: "cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1.5 text-sm font-medium text-white"
 - else
   = render "reply"

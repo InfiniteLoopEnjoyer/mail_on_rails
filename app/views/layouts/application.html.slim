@@ -1,5 +1,8 @@
 doctype html
-html
+/ The theme is a user preference (users.appearance/accent), painted here so
+/ dark pages are dark from the first byte; "crimson" matches no [data-accent]
+/ CSS rule and falls through to the default accent.
+html class=("dark" if current_appearance == "dark") data-appearance=current_appearance data-accent=current_accent
   head
     title= content_for(:title) || "Mail on Rails"
     meta name="viewport" content="width=device-width,initial-scale=1"
@@ -10,6 +13,16 @@ html
     = csp_meta_tag
 
     = yield :head
+
+    / "System" appearance can only be resolved where the OS preference lives;
+    / do it before first paint so a dark reload never flashes white. Explicit
+    / light/dark came server-rendered on <html> and are left alone.
+    javascript:
+      (function () {
+        var html = document.documentElement
+        if (html.dataset.appearance === "system" && matchMedia("(prefers-color-scheme: dark)").matches)
+          html.classList.add("dark")
+      })()
 
     / Enable PWA manifest for installable apps (make sure to enable in config/routes.rb too!)
     / = tag.link rel: "manifest", href: pwa_manifest_path(format: :json)
@@ -25,18 +38,21 @@ html
     / Broadcast-triggered refreshes morph the page in place instead of replacing it
     = turbo_refreshes_with method: :morph, scroll: :preserve
 
-  body.min-h-screen.bg-slate-100.text-slate-800
+  / The theme values ride on <body> as well: Turbo visits swap only the
+  / body, so after sign-in/sign-out the <html> paint above is stale - the
+  / theme controller re-stamps it from these on every (re)connect.
+  body.min-h-screen.bg-slate-100.text-slate-800.dark:bg-slate-950.dark:text-slate-100 data-controller="theme" data-theme-url-value=theme_path data-theme-appearance-value=current_appearance data-theme-accent-value=current_accent
     - if authenticated?
       div data-controller="drawer" data-action="keydown.esc@window->drawer#close"
         / Permanent top bar - hamburger (mobile), brand, sign out on the right
-        header.sticky.top-0.z-50.flex.h-14.items-center.gap-3.border-b.border-slate-200.bg-white.px-4
-          button.cursor-pointer.rounded-md.p-1.text-slate-600.hover:bg-slate-200.lg:hidden type="button" aria-label="Toggle navigation" data-action="drawer#toggle"
+        header.sticky.top-0.z-50.flex.h-14.items-center.gap-3.border-b.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900.px-4
+          button.cursor-pointer.rounded-md.p-1.text-slate-600.dark:text-slate-300.hover:bg-slate-200.dark:hover:bg-slate-700.lg:hidden type="button" aria-label="Toggle navigation" data-action="drawer#toggle"
             svg.h-6.w-6 xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"
               path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"
           = link_to "Mail on Rails", root_path, class: "font-bold text-accent"
           .ml-auto.flex.items-center.gap-2
-            = link_to "Profile", edit_user_path(Current.user), class: "rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-500 hover:bg-slate-50"
-            = button_to "Sign out", session_path, method: :delete, class: "cursor-pointer rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-500 hover:bg-slate-50"
+            = link_to "Profile", edit_user_path(Current.user), class: "rounded-md border border-slate-200 dark:border-slate-800 px-3 py-1.5 text-sm text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800"
+            = button_to "Sign out", session_path, method: :delete, class: "cursor-pointer rounded-md border border-slate-200 dark:border-slate-800 px-3 py-1.5 text-sm text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800"
         / Backdrop for the mobile drawer
         .fixed.inset-0.top-14.z-30.hidden.bg-slate-900/50 data-drawer-target="backdrop" data-action="click->drawer#close"
         = render "layouts/sidebar"

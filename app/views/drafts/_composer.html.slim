@@ -7,14 +7,14 @@
 / accounts (a From select instead of a fixed sender), errors.
 - accounts = local_assigns[:accounts]
 - errors = local_assigns[:errors]
-section.rounded-lg.border.border-slate-200.bg-white data-controller="draft-autosave" data-draft-autosave-url-value=drafts_path
+section.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900 data-controller="draft-autosave" data-draft-autosave-url-value=drafts_path
   = form_with url: emails_path, method: :post, class: "contents" do |form|
-    header.flex.flex-wrap.items-center.gap-2.border-b.border-slate-200.px-4.py-3
+    header.flex.flex-wrap.items-center.gap-2.border-b.border-slate-200.dark:border-slate-800.px-4.py-3
       h2.font-semibold= title
-      span.ml-auto.text-xs.text-slate-500 data-draft-autosave-target="status"
+      span.ml-auto.text-xs.text-slate-500.dark:text-slate-400 data-draft-autosave-target="status"
 
     - if errors&.any?
-      .border-b.border-red-200.bg-red-50.px-4.py-3.text-sm.text-red-700
+      .border-b.border-red-200.dark:border-red-900.bg-red-50.dark:bg-red-950.px-4.py-3.text-sm.text-red-700.dark:text-red-400
         ul.list-disc.pl-4
           - errors.full_messages.each do |message|
             li= message
@@ -39,34 +39,34 @@ section.rounded-lg.border.border-slate-200.bg-white data-controller="draft-autos
       / an autosave field like any other.
       - if accounts
         .grid class="grid-cols-[3rem_1fr] items-center gap-3"
-          = label_tag "composed_email_email_account_id", "From", class: "text-sm text-slate-500"
+          = label_tag "composed_email_email_account_id", "From", class: "text-sm text-slate-500 dark:text-slate-400"
           = select_tag "composed_email[email_account_id]",
             options_from_collection_for_select(accounts, :id, :email, draft.email_account_id),
             id: "composed_email_email_account_id",
-            class: "w-full rounded-md border border-slate-200 px-3 py-1.5 text-sm focus:border-accent focus:outline-none",
+            class: "w-full rounded-md border border-slate-200 dark:border-slate-800 px-3 py-1.5 text-sm focus:border-accent focus:outline-none",
             data: { draft_autosave_target: "field", draft_field: "email_account_id", action: "change->draft-autosave#schedule" }
 
       - [["to", "To", draft.to], ["cc", "Cc", draft.cc], ["subject", "Subject", draft.subject]].each do |field, label, value|
         .grid class="grid-cols-[3rem_1fr] items-center gap-3"
-          = label_tag "composed_email_#{field}", label, class: "text-sm text-slate-500"
+          = label_tag "composed_email_#{field}", label, class: "text-sm text-slate-500 dark:text-slate-400"
           = text_field_tag "composed_email[#{field}]", value,
             id: "composed_email_#{field}",
-            class: "w-full rounded-md border border-slate-200 px-3 py-1.5 text-sm focus:border-accent focus:outline-none",
+            class: "w-full rounded-md border border-slate-200 dark:border-slate-800 px-3 py-1.5 text-sm focus:border-accent focus:outline-none",
             data: { draft_autosave_target: "field", draft_field: field, action: "input->draft-autosave#schedule" }
 
       = text_area_tag "composed_email[body]", draft.body, rows: 12,
-        class: "w-full rounded-md border border-slate-200 px-3 py-2 font-sans text-sm focus:border-accent focus:outline-none",
+        class: "w-full rounded-md border border-slate-200 dark:border-slate-800 px-3 py-2 font-sans text-sm focus:border-accent focus:outline-none",
         data: { draft_autosave_target: "field", draft_field: "body", action: "input->draft-autosave#schedule" }
 
-    footer.flex.flex-wrap.items-center.gap-2.border-t.border-slate-200.px-4.py-3
+    footer.flex.flex-wrap.items-center.gap-2.border-t.border-slate-200.dark:border-slate-800.px-4.py-3
       = form.submit "Send", class: "cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1.5 text-sm font-medium text-white"
-      p.text-xs.text-slate-500
+      p.text-xs.text-slate-500.dark:text-slate-400
         ' Saved to Drafts as you type, so you can pick this up on another
         ' device.
 
   - if discard_id
     / Outside the send form: a nested form would not be valid HTML.
-    .flex.justify-end.border-t.border-slate-200.px-4.py-2
+    .flex.justify-end.border-t.border-slate-200.dark:border-slate-800.px-4.py-2
       = button_to "Discard draft", draft_path(discard_id), method: :delete,
-        class: "cursor-pointer rounded-md border border-red-200 bg-white px-3 py-1 text-xs font-medium text-red-700",
+        class: "cursor-pointer rounded-md border border-red-200 dark:border-red-900 bg-white dark:bg-slate-900 px-3 py-1 text-xs font-medium text-red-700 dark:text-red-400",
         form: { data: { turbo_confirm: "Discard this draft? It will disappear from every device." } }

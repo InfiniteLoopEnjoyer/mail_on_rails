@@ -2,7 +2,7 @@
 
 = turbo_stream_from @email_account
 
-nav.mb-2.text-sm.text-slate-500
+nav.mb-2.text-sm.text-slate-500.dark:text-slate-400
   =<> link_to "Accounts", root_path, class: "text-accent"
   | /
   span<>= @email_account.email
@@ -11,23 +11,23 @@ header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
   h1.text-2xl.font-bold= @email_account.email
   .flex.items-center.gap-2
     = link_to "New email", new_email_path(from: @email_account.id), class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white"
-    = link_to "New folder", new_email_account_mailbox_path(@email_account), class: "inline-block cursor-pointer rounded-md border border-slate-200 bg-white px-3.5 py-1 text-sm font-medium text-slate-800"
-    = link_to "Edit", edit_email_account_path(@email_account), class: "inline-block cursor-pointer rounded-md border border-slate-200 bg-white px-3.5 py-1 text-sm font-medium text-slate-800"
-    = button_to "Delete", email_account_path(@email_account), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 bg-white px-3.5 py-1 text-sm font-medium text-red-700", form: { data: { turbo_confirm: "Delete #{@email_account.email} and all of its mail?" } }
+    = link_to "New folder", new_email_account_mailbox_path(@email_account), class: "inline-block cursor-pointer rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3.5 py-1 text-sm font-medium text-slate-800 dark:text-slate-100"
+    = link_to "Edit", edit_email_account_path(@email_account), class: "inline-block cursor-pointer rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3.5 py-1 text-sm font-medium text-slate-800 dark:text-slate-100"
+    = button_to "Delete", email_account_path(@email_account), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 dark:border-red-900 bg-white dark:bg-slate-900 px-3.5 py-1 text-sm font-medium text-red-700 dark:text-red-400", form: { data: { turbo_confirm: "Delete #{@email_account.email} and all of its mail?" } }
 
 / data-turbo-permanent: a broadcast-triggered morph re-renders without the
 / flash - keep the once-only password on screen until the user navigates away.
 - if flash[:generated_password].present?
-  .mb-4.rounded-lg.border.border-amber-200.bg-amber-50.p-4 id="generated-password-#{@email_account.id}" data-turbo-permanent=true
+  .mb-4.rounded-lg.border.border-amber-200.dark:border-amber-900.bg-amber-50.dark:bg-amber-950.p-4 id="generated-password-#{@email_account.id}" data-turbo-permanent=true
     h2.mb-2.text-sm.font-semibold Account password — save it now
     = render "shared/generated_password", password: flash[:generated_password]
 
 ul
   - @mailboxes.each do |mailbox|
-    li.mb-2.rounded-lg.border.border-slate-200.bg-white
+    li.mb-2.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900
       = link_to email_account_mailbox_path(@email_account, mailbox), class: "flex items-baseline gap-3 px-4 py-3" do
         span.primary.font-semibold= mailbox.name
-        span.ml-auto.text-xs.whitespace-nowrap.text-slate-500
+        span.ml-auto.text-xs.whitespace-nowrap.text-slate-500.dark:text-slate-400
           - total = mailbox.email_messages.count
           - if (unseen = mailbox.unseen_count).positive?
             = "#{unseen} new / #{total}"
@@ -36,13 +36,13 @@ ul
 
 section.mt-8
   h2.text-lg.font-bold Aliases
-  p.mb-3.text-sm.text-slate-500 Mail sent to an alias is delivered to this account's inbox. An alias has no inbox or password of its own and cannot send mail.
+  p.mb-3.text-sm.text-slate-500.dark:text-slate-400 Mail sent to an alias is delivered to this account's inbox. An alias has no inbox or password of its own and cannot send mail.
   ul
     - @email_account.email_aliases.order(:email).each do |email_alias|
-      li.mb-2.flex.items-center.gap-3.rounded-lg.border.border-slate-200.bg-white.px-4.py-2
+      li.mb-2.flex.items-center.gap-3.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900.px-4.py-2
         span.text-sm.font-medium= email_alias.email
         span.ml-auto
-          = button_to "Remove", email_account_email_alias_path(@email_account, email_alias), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 bg-white px-3.5 py-1 text-sm font-medium text-red-700", form: { data: { turbo_confirm: "Remove alias #{email_alias.email}? Mail sent to it will be refused." } }
+          = button_to "Remove", email_account_email_alias_path(@email_account, email_alias), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 dark:border-red-900 bg-white dark:bg-slate-900 px-3.5 py-1 text-sm font-medium text-red-700 dark:text-red-400", form: { data: { turbo_confirm: "Remove alias #{email_alias.email}? Mail sent to it will be refused." } }
   = form_with model: [ @email_account, EmailAlias.new ], class: "flex max-w-lg items-center gap-2" do |form|
-    = form.email_field :email, required: true, placeholder: "alias@#{@email_account.email.split("@").last}", class: "w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
+    = form.email_field :email, required: true, placeholder: "alias@#{@email_account.email.split("@").last}", class: "w-full rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-sm"
     = form.submit "Add alias", class: "inline-block cursor-pointer whitespace-nowrap rounded-md border border-accent bg-accent px-3.5 py-1.5 text-sm font-medium text-white"

@@ -9,9 +9,9 @@ header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
 
 ul
   - @users.each do |user|
-    li.mb-2.rounded-lg.border.border-slate-200.bg-white
+    li.mb-2.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900
       = link_to edit_user_path(user), class: "flex items-baseline gap-3 px-4 py-3" do
         span.primary.font-semibold= user.email_address
         - if user == Current.user
           span.rounded-full.bg-accent.px-2.text-xs.text-white you
-        span.ml-auto.text-xs.whitespace-nowrap.text-slate-500= "since #{user.created_at.strftime("%b %-d, %Y")}"
+        span.ml-auto.text-xs.whitespace-nowrap.text-slate-500.dark:text-slate-400= "since #{user.created_at.strftime("%b %-d, %Y")}"

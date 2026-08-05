@@ -10,7 +10,24 @@ class User < ApplicationRecord
   OTP_DRIFT = 30
   OTP_ISSUER = "Mail on Rails"
 
+  # Theme preferences, edited from the profile's Appearance card and painted
+  # onto <html> by the layout. Accent names map to their light-mode swatch
+  # colour; the CSS holding both modes lives with the [data-accent] rules in
+  # app/assets/tailwind/application.css - keep the two lists in sync.
+  # "system" resolves to the OS preference client-side.
+  APPEARANCES = %w[light dark system].freeze
+  ACCENT_THEMES = {
+    "crimson" => "#c8102e",
+    "blue"    => "#2563eb",
+    "emerald" => "#059669",
+    "violet"  => "#7c3aed",
+    "orange"  => "#ea580c",
+    "sky"     => "#0284c7",
+  }.freeze
+
   validates :email_address, presence: true, uniqueness: { case_sensitive: false }
+  validates :appearance, inclusion: { in: APPEARANCES }
+  validates :accent, inclusion: { in: ACCENT_THEMES.keys }
 
   # Live-refresh the users index (subscribed via turbo_stream_from :users).
   after_commit -> { broadcast_refresh_later_to :users }

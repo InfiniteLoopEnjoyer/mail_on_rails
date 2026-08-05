@@ -1,4 +1,10 @@
 module ApplicationHelper
+  # The signed-in user's theme, defaults for the login/reset pages. Painted
+  # onto <html> so dark pages render dark from the first byte; "system" is
+  # resolved client-side by the inline script in the layout head.
+  def current_appearance = (authenticated? ? Current.user.appearance : "system")
+  def current_accent     = (authenticated? ? Current.user.accent : "crimson")
+
   # Sets the <title> as "Mail on Rails - <subtitle>".
   def page_title(subtitle)
     content_for :title, "Mail on Rails - #{subtitle}"
@@ -17,7 +23,7 @@ module ApplicationHelper
   def window_tab_classes(active)
     base = "rounded-md px-2.5 py-1 text-sm"
     active ? "#{base} bg-accent/10 font-medium text-accent"
-           : "#{base} text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+           : "#{base} text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-800 dark:hover:text-slate-100"
   end
 
   # Sidebar link classes; child items are indented + a shade lighter to read
@@ -29,9 +35,9 @@ module ApplicationHelper
       if active
         "bg-accent/10 font-medium text-accent"
       elsif child
-        "text-slate-400 hover:bg-slate-50 hover:text-slate-600"
+        "text-slate-400 dark:text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-600 dark:hover:text-slate-300"
       else
-        "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+        "text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-800 dark:hover:text-slate-100"
       end
     "#{base} #{state}"
   end
@@ -41,10 +47,10 @@ module ApplicationHelper
   # analysis footer.
   def auth_badge_classes(verdict)
     case verdict
-    when "pass"                             then "bg-green-100 text-green-700"
-    when "fail", "permerror", "temperror"   then "bg-red-100 text-red-700"
-    when "softfail", "neutral"              then "bg-amber-100 text-amber-700"
-    else                                         "bg-slate-100 text-slate-600"
+    when "pass"                             then "bg-green-100 dark:bg-green-950 text-green-700 dark:text-green-400"
+    when "fail", "permerror", "temperror"   then "bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-400"
+    when "softfail", "neutral"              then "bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-400"
+    else                                         "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
     end
   end
 
@@ -70,7 +76,7 @@ module ApplicationHelper
   # Green like a passing auth badge when rspamd decided "no action";
   # the neutral slate pill otherwise.
   def spam_badge_classes(message)
-    spam_clean?(message) ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-600"
+    spam_clean?(message) ? "bg-green-100 dark:bg-green-950 text-green-700 dark:text-green-400" : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
   end
 
   def spam_clean?(message) = message.spam_action == "no action"

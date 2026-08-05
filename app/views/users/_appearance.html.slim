@@ -1,0 +1,15 @@
+/ The user's theme preference (users.appearance/accent), saved by the theme
+/ Stimulus controller on <body> as each button is clicked. aria-pressed is
+/ both the accessible state and the styling hook, so it's rendered here and
+/ kept current client-side.
+.mt-6.max-w-lg.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900.p-5
+  h2.mb-1.text-sm.font-semibold Appearance
+  p.mb-3.text-xs.text-slate-500.dark:text-slate-400 Saved to your account, on every device you sign in from.
+  .flex.flex-wrap.gap-2
+    - { "light" => "Light", "dark" => "Dark", "system" => "System" }.each do |value, label|
+      button.cursor-pointer.rounded-md.border.border-slate-200.dark:border-slate-800.px-3.py-1.5.text-sm.text-slate-500.dark:text-slate-400.aria-pressed:border-accent.aria-pressed:font-medium.aria-pressed:text-accent type="button" aria-pressed=(value == Current.user.appearance).to_s data-theme-target="appearance" data-action="theme#setAppearance" data-theme-value-param=value
+        = label
+  h3.mt-4.mb-2.text-xs.font-semibold.tracking-wide.text-slate-500.dark:text-slate-400.uppercase Accent
+  .flex.flex-wrap.gap-3
+    - User::ACCENT_THEMES.each do |name, hex|
+      button.h-7.w-7.cursor-pointer.rounded-full.ring-accent.ring-offset-2.ring-offset-white.aria-pressed:ring-2.dark:ring-offset-slate-900 type="button" title=name.capitalize aria-label="#{name.capitalize} accent" aria-pressed=(name == Current.user.accent).to_s style="background-color: #{hex}" data-theme-target="accent" data-action="theme#setAccent" data-theme-value-param=name

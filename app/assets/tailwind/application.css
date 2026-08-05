@@ -1,5 +1,36 @@
 @import "tailwindcss";
 
+/* Dark mode is opt-in via a .dark class on <html> (set from localStorage
+   before first paint), not the OS media query - "System" resolves to the
+   class client-side so all three appearance choices share one mechanism. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-accent: #c8102e;
 }
+
+/* Native widgets (inputs, scrollbars, selects) follow the app theme. */
+:root {
+  color-scheme: light;
+}
+.dark {
+  color-scheme: dark;
+}
+
+/* Accent themes, picked on the profile page and stamped on <html> as
+   data-accent. Hex pairs are Tailwind palette values (600 on light, 500 on
+   dark for contrast against slate-950) - hardcoded because Tailwind only
+   emits palette variables that compiled utilities actually use.
+   Keep this list in sync with User::ACCENT_THEMES. */
+[data-accent="blue"]    { --color-accent: #2563eb; }
+[data-accent="emerald"] { --color-accent: #059669; }
+[data-accent="violet"]  { --color-accent: #7c3aed; }
+[data-accent="orange"]  { --color-accent: #ea580c; }
+[data-accent="sky"]     { --color-accent: #0284c7; }
+
+.dark                   { --color-accent: #ef4444; }
+.dark[data-accent="blue"]    { --color-accent: #3b82f6; }
+.dark[data-accent="emerald"] { --color-accent: #10b981; }
+.dark[data-accent="violet"]  { --color-accent: #8b5cf6; }
+.dark[data-accent="orange"]  { --color-accent: #f97316; }
+.dark[data-accent="sky"]     { --color-accent: #0ea5e9; }

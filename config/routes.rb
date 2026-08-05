@@ -75,6 +75,10 @@ Rails.application.routes.draw do
   # AuthAttempt / AuthAttemptsController.
   resources :auth_attempts, only: :index
 
+  # The signed-in user's appearance/accent preference, saved from the
+  # profile's Appearance card - see ThemesController.
+  resource :theme, only: :update
+
 
 
   resources :users, except: %i[show] do
