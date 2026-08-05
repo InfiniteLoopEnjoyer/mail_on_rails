@@ -86,11 +86,20 @@ class ApplicationSystemTestCase < ActionDispatch::SystemTestCase
     attempts = 0
     begin
       accept_confirm(wait: 5) { click_on locator }
-    rescue Capybara::ModalNotFound
+    rescue Capybara::ModalNotFound => no_modal
+      # A dialog that opened just after the wait expired is accepted here and
+      # never clicked into a second time. `retry` must sit in THIS rescue
+      # clause, not the alert-accept's: a retry down there re-polls the
+      # absent alert without ever re-clicking.
+      missed_click = false
       begin
         page.driver.browser.switch_to.alert.accept
       rescue Selenium::WebDriver::Error::NoSuchAlertError
-        (attempts += 1) < 3 ? retry : raise
+        missed_click = true
+      end
+      if missed_click
+        raise no_modal if (attempts += 1) >= 3
+        retry
       end
     end
   end
