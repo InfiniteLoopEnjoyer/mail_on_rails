@@ -3,6 +3,19 @@
 header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
   h1.text-2xl.font-bold Settings
 
+h2.mb-2.text-lg.font-semibold Trash retention
+section.mb-6.rounded-lg.border.border-slate-200.bg-white.px-4.py-3
+  p.mb-3.text-sm.text-slate-500
+    ' Messages in Trash are deleted permanently after this many days,
+    ' counted from the day they were moved to Trash (not the day they were
+    ' received). Mail in every other folder is kept forever.
+  = form_with url: settings_path, method: :patch do |form|
+    .flex.flex-wrap.items-center.gap-2
+      = form.number_field :trash_retention_days, value: @trash_retention_days, min: 1, step: 1, required: true,
+                          class: "w-24 rounded-md border border-slate-300 px-2 py-1 text-sm"
+      span.text-sm.text-slate-500 days
+      = form.submit "Save", class: "cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white"
+
 h2.mb-2.text-lg.font-semibold Exim edge files
 p.mb-3.text-sm.text-slate-500
   ' These are the files this app writes on the mailconf volume shared with

@@ -1,8 +1,9 @@
-# Operational internals with no other natural home in the UI. Today that
-# is the two files this app maintains for the exim edge on the shared
-# mailconf volume (hosted domains + local recipients), shown verbatim with
-# a live comparison against the database tables they mirror - the point is
-# seeing exactly what exim is acting on right now, drift included.
+# Operational internals with no other natural home in the UI: app-wide
+# knobs (Setting) and the two files this app maintains for the exim edge
+# on the shared mailconf volume (hosted domains + local recipients), shown
+# verbatim with a live comparison against the database tables they mirror
+# - the point is seeing exactly what exim is acting on right now, drift
+# included.
 class SettingsController < ApplicationController
   # One exim-owned file: what's on disk (lines/mtime via the model that
   # writes it) next to what the DB says should be there. missing = rows
@@ -20,6 +21,16 @@ class SettingsController < ApplicationController
 
   def show
     @exim_files = exim_files
+    @trash_retention_days = Setting.trash_retention_days
+  end
+
+  # The page's one writable knob so far: how many days mail sits in Trash
+  # before PurgeTrashJob deletes it permanently.
+  def update
+    Setting.trash_retention_days = params[:trash_retention_days]
+    redirect_to settings_path, notice: "Trash retention set to #{Setting.trash_retention_days} days."
+  rescue ArgumentError, TypeError
+    redirect_to settings_path, alert: "Trash retention must be a whole number of days, at least 1."
   end
 
   # Rewrite one of the files from the database on demand - the button-shaped

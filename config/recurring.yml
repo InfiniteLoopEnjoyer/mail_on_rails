@@ -40,3 +40,10 @@ production:
   prune_auth_attempts:
     command: "AuthAttempt.prune!"
     schedule: every day at 4:17am
+
+  # Trash is the only folder with a retention limit (Setting
+  # .trash_retention_days, adjustable on /settings); everything else is
+  # kept forever.
+  purge_trash:
+    class: PurgeTrashJob
+    schedule: every day at 3:07am

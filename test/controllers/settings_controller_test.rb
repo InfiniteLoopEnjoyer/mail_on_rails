@@ -85,4 +85,31 @@ class SettingsControllerTest < ActionDispatch::IntegrationTest
     post sync_settings_url(file: "nope")
     assert_response :not_found
   end
+
+  # -- trash retention -------------------------------------------------------
+
+  test "shows the trash retention form with the current value" do
+    get settings_url
+    assert_select "input[name='trash_retention_days'][value='30']"
+
+    Setting.trash_retention_days = 7
+    get settings_url
+    assert_select "input[name='trash_retention_days'][value='7']"
+  end
+
+  test "update saves the trash retention" do
+    patch settings_url, params: { trash_retention_days: "45" }
+    assert_redirected_to settings_url
+    assert_equal "Trash retention set to 45 days.", flash[:notice]
+    assert_equal 45, Setting.trash_retention_days
+  end
+
+  test "update rejects junk and non-positive retention values" do
+    [ "soon", "0", "-3", "" ].each do |bad|
+      patch settings_url, params: { trash_retention_days: bad }
+      assert_redirected_to settings_url
+      assert_match(/whole number of days/, flash[:alert])
+      assert_equal 30, Setting.trash_retention_days
+    end
+  end
 end
