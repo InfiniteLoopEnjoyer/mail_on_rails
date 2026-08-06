@@ -46,6 +46,11 @@ Rails.application.routes.draw do
     post :sync
   end
 
+  # Live connections on the in-process mail listeners, one page per
+  # protocol - see LiveConnectionsController.
+  get "smtp", to: "smtp#show"
+  get "imap", to: "imap#show"
+
   # Failed credential checks across all three auth surfaces - see
   # AuthAttempt / AuthAttemptsController. range drills into one /24's
   # individual addresses; its CIDR travels as a query param because of

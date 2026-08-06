@@ -18,21 +18,21 @@ module MailOnRails
     # server that dies logs the error and its thread ends; the Puma
     # process carries on serving web requests.
     def start_servers(protocols: [ :imap, :smtp ])
-      @handles = []
+      @handles = {}
 
       if protocols.include?(:imap)
         require "mail_on_rails/imap/daemon"
         require "mail_on_rails/store/with_source"
         store = MailOnRails::Store::WithSource.new(MailOnRails::Store::ImapBackend.new, "imap")
-        @handles << MailOnRails::Imap::Daemon.start(store: store, logger: Rails.logger, tls_dir: tls_dir)
+        @handles[:imap] = MailOnRails::Imap::Daemon.start(store: store, logger: Rails.logger, tls_dir: tls_dir)
       end
 
       if protocols.include?(:smtp)
         require "mail_on_rails/smtp/daemon"
         require "mail_on_rails/store/smtp_backend"
-        @handles << MailOnRails::Smtp::Daemon.start(store: MailOnRails::Store::SmtpBackend.new,
-                                                    logger: Rails.logger, tls_dir: tls_dir,
-                                                    hostname: method(:smtp_hostname))
+        @handles[:smtp] = MailOnRails::Smtp::Daemon.start(store: MailOnRails::Store::SmtpBackend.new,
+                                                          logger: Rails.logger, tls_dir: tls_dir,
+                                                          hostname: method(:smtp_hostname))
       end
 
       @handles
@@ -42,7 +42,7 @@ module MailOnRails
     # before start_servers and after stop_servers - a health check must
     # not pass while the mail ports are down.
     def ready?
-      handles = Array(@handles)
+      handles = (@handles || {}).values
       handles.any? && handles.all?(&:ready?)
     end
 
@@ -50,7 +50,7 @@ module MailOnRails
     # that failed to bind fails the boot (and with it the deploy's health
     # check) instead of leaving a web-only process that looks healthy.
     def wait_ready!(timeout = 15)
-      Array(@handles).each do |handle|
+      (@handles || {}).each_value do |handle|
         next if handle.wait_ready(timeout)
 
         raise "mail server listeners failed to bind within #{timeout}s"
@@ -60,9 +60,25 @@ module MailOnRails
     # Graceful shutdown for Puma's stop/restart hooks; see Server#shutdown
     # for the drain semantics.
     def stop_servers(drain: 5)
-      handles = Array(@handles)
+      handles = (@handles || {}).values
       @handles = nil
       handles.each { |handle| handle.shutdown(drain: drain) }
+    end
+
+    # The running server for :imap or :smtp - the live-connection pages
+    # read #connections (and MAX_CONNECTIONS) off it. nil when that server
+    # isn't running in this process (a boot without the Puma plugin, e.g.
+    # tests or a plain `rails server` with MAIL_ON_RAILS_SERVERS unset).
+    def server(protocol)
+      (@handles || {})[protocol]&.server
+    end
+
+    # Drops live connections whose peer IP the caller's test matches, on
+    # every running server (see Server#kick). Used when an admin bans an
+    # address: the denylists only silence future connections. Returns how
+    # many connections were closed.
+    def kick_connections(&matcher)
+      (@handles || {}).values.sum { |handle| handle.server.kick(&matcher) }
     end
 
     # The servers read/generate their self-signed dev certs here.

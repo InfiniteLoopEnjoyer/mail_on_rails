@@ -107,6 +107,8 @@ module MailOnRails
         @tls_ctx = tls_ctx
         @tls = spec[:tls] == :implicit
         @account_id = nil
+        @username = nil
+        @idling = false
         @auth_attempts = 0
         @selected = nil
         @uids = []
@@ -139,6 +141,19 @@ module MailOnRails
           caps << " LOGINDISABLED"
         end
         caps
+      end
+
+      # Live-state snapshot for the ops UI (Server#connections). Read from
+      # the web thread while the session thread runs, so plain values
+      # only; a stale read costs nothing worse than a momentarily
+      # out-of-date dashboard row.
+      def live_info
+        state = if @account_id.nil? then "pre-auth"
+        elsif @idling then "IDLE #{@selected&.dig(:name)}".strip
+        elsif @selected then "SELECT #{@selected[:name]}"
+        else "authenticated"
+        end
+        { user: @username, state: state, tls: @tls }
       end
 
       def run
@@ -355,6 +370,7 @@ module MailOnRails
         set_timeout(1800)
         # Discard pre-TLS session state; the client re-authenticates.
         @account_id = nil
+        @username = nil
         @selected = nil
       rescue OpenSSL::SSL::SSLError => e
         @store.log(:error, "IMAP STARTTLS failed: #{e.message}")
@@ -474,6 +490,7 @@ module MailOnRails
         return tagged(tag, "BAD Unexpected final client response") unless empty.empty?
 
         @account_id = creds[:account_id]
+        @username = creds[:email]
         @store.log(:info, "IMAP login #{creds[:email]} (#{peer_ip}, SCRAM)")
         tagged tag, "OK [CAPABILITY #{capabilities}] AUTHENTICATE completed"
       end
@@ -544,6 +561,7 @@ module MailOnRails
         result = @store.authenticate(user.to_s, pass.to_s, ip: throttle_ip)
         if result[:account_id]
           @account_id = result[:account_id]
+          @username = result[:email]
           @store.log(:info, "IMAP login #{result[:email]} (#{peer_ip})")
           tagged tag, "OK [CAPABILITY #{capabilities}] #{verb} completed"
         elsif result[:throttled]
@@ -1885,6 +1903,7 @@ module MailOnRails
       # RFC 2177. The session blocks here pushing untagged updates (found
       # by polling resync) until the client sends DONE.
       def idle(tag)
+        @idling = true
         @socket.write("+ idling\r\n")
         loop do
           if wait_readable(IDLE_POLL_SECONDS)
@@ -1896,6 +1915,8 @@ module MailOnRails
           end
           resync
         end
+      ensure
+        @idling = false
       end
 
       # True when input is waiting, false on timeout. TLS can hold

@@ -84,6 +84,7 @@ module MailOnRails
         @tls_ctx = tls_ctx
         @tls = spec[:tls] == :implicit
         @trace = spec.fetch(:trace, TRACE_DEFAULT)
+        @helo_name = nil
         @authenticated_as = nil
         @auth_attempts = 0
         @protocol_errors = 0
@@ -91,6 +92,15 @@ module MailOnRails
         @message_count = 0
         @continuation = nil
         reset
+      end
+
+      # Live-state snapshot for the ops UI (Server#connections). Read from
+      # the web thread while the session thread runs, so plain values
+      # only; a stale read costs nothing worse than a momentarily
+      # out-of-date dashboard row.
+      def live_info
+        { user: @authenticated_as, helo: @helo_name,
+          messages: @message_count, tls: @tls }
       end
 
       def run

@@ -1,0 +1,57 @@
+/ Everything the poll frame refreshes: stat tiles plus the connection
+/ table. The controller snapshotted all state; this renders plain values.
+- if @server.nil?
+  section.rounded-lg.border.border-amber-200.dark:border-amber-900.bg-amber-50.dark:bg-amber-950.px-4.py-3
+    p.text-sm.text-amber-800.dark:text-amber-300
+      | The #{controller_name.upcase} server is not running in this process.
+      '  It boots with Puma in development, and in deploys with
+      '  MAIL_ON_RAILS_SERVERS=true (the production web role).
+- else
+  - authenticated = @connections.count { |conn| conn[:user] }
+  - sources = @connections.map { |conn| conn[:peer_ip] }.compact.uniq.size
+  - third = controller_name == "imap" ? ["Idling", @connections.count { |conn| conn[:state].to_s.start_with?("IDLE") }] : ["TLS", @connections.count { |conn| conn[:tls] }]
+  section.mb-5.grid.gap-3 class="sm:grid-cols-2 lg:grid-cols-4"
+    - [["Connections", "#{@connections.size} / #{@server.class::MAX_CONNECTIONS}"], ["Authenticated", authenticated], third, ["Source addresses", sources]].each do |label, value|
+      .rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900.px-4.py-3
+        .text-xs.text-slate-500.dark:text-slate-400= label
+        .text-2xl.font-bold= value
+
+  section.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900
+    - if @connections.any?
+      .overflow-x-auto
+        table.w-full.text-sm
+          thead.text-left.text-xs.text-slate-500.dark:text-slate-400
+            tr
+              th.px-4.py-2 Address
+              th.px-4.py-2 Listener
+              th.px-4.py-2 TLS
+              th.px-4.py-2 User
+              - if controller_name == "smtp"
+                th.px-4.py-2 HELO
+                th.px-4.py-2.text-right Messages
+              - else
+                th.px-4.py-2 State
+              th.px-4.py-2 Connected
+              th.px-4.py-2
+          tbody
+            - @connections.each do |conn|
+              tr.border-t.border-slate-100.dark:border-slate-800
+                td.px-4.py-1.5.font-mono= conn[:peer_ip] || "?"
+                td.px-4.py-1.5.whitespace-nowrap.text-slate-600.dark:text-slate-300
+                  = conn[:port]
+                  - if conn[:role]
+                    span.ml-1.text-xs.text-slate-500.dark:text-slate-400= conn[:role]
+                td.px-4.py-1.5.text-slate-600.dark:text-slate-300= conn[:tls] ? "✓" : "—"
+                td.px-4.py-1.5.font-mono= conn[:user] || "—"
+                - if controller_name == "smtp"
+                  td.px-4.py-1.5.font-mono.text-slate-600.dark:text-slate-300= conn[:helo] || "—"
+                  td.px-4.py-1.5.text-right.tabular-nums.text-slate-600.dark:text-slate-300= conn[:messages] || "—"
+                - else
+                  td.px-4.py-1.5.text-slate-600.dark:text-slate-300= conn[:state] || "connecting"
+                td.px-4.py-1.5.whitespace-nowrap.text-slate-600.dark:text-slate-300 title=conn[:connected_at].strftime("%H:%M:%S")
+                  = time_ago_in_words(conn[:connected_at])
+                td.px-4.py-1.5.text-right
+                  - if conn[:peer_ip]
+                    = render "auth_attempts/ban_button", target: conn[:peer_ip], origin: controller_name, confirm: "Ban #{conn[:peer_ip]}? Its live connections are dropped and it loses SMTP, IMAP and web login access."
+    - else
+      p.px-4.py-3.text-sm.text-slate-500.dark:text-slate-400 No live connections.

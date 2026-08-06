@@ -54,6 +54,13 @@ module MailOnRails
       # spec[:handshake_timeout].
       HANDSHAKE_TIMEOUT = 30
 
+      # One live connection's registry entry. peer_ip/spec/connected_at are
+      # fixed at accept time; thread and session are filled in as the
+      # connection comes up (spawn_session / handle). The session reference
+      # is what lets #connections report protocol-level state (user, HELO,
+      # ...) without the registry having to track it.
+      Conn = Struct.new(:thread, :session, :peer_ip, :spec, :connected_at)
+
       def self.run(store, listeners, tls_material)
         new(store, listeners, tls_material).run
       end
@@ -73,7 +80,7 @@ module MailOnRails
         @lifecycle = Mutex.new
         @lifecycle_cv = ConditionVariable.new
         @listener_sockets = []
-        @sessions = {} # raw accepted socket => connection thread
+        @sessions = {} # raw accepted socket => Conn
         @expected_listeners = nil
         @bound_listeners = 0
         @stopping = false
@@ -146,8 +153,36 @@ module MailOnRails
 
         stragglers = @lifecycle.synchronize { @sessions.to_a }
         @store.log(:info, "#{protocol_name} closing #{stragglers.size} sessions after #{drain}s drain") if stragglers.any?
-        stragglers.each { |socket, _thread| close_quietly(socket) }
-        stragglers.each { |_socket, thread| thread&.join(2) }
+        stragglers.each { |socket, _conn| close_quietly(socket) }
+        stragglers.each { |_socket, conn| conn.thread&.join(2) }
+      end
+
+      # Snapshot of the live connections for the ops UI: an array of
+      # plain-value Hashes - no sockets or threads escape. Registry fields
+      # are copied under the lifecycle lock; the session-side fields (user,
+      # protocol state) come from Session#live_info, which reads the
+      # session thread's own ivars - racy by design, and a momentarily
+      # stale row costs a dashboard nothing.
+      def connections
+        entries = @lifecycle.synchronize { @sessions.values.map { |conn| [ conn.dup, conn.session ] } }
+        entries.map do |conn, session|
+          { protocol: protocol_name, peer_ip: conn.peer_ip,
+            port: conn.spec[:port], role: conn.spec[:role],
+            connected_at: conn.connected_at }.merge(session ? session.live_info : {})
+        end
+      end
+
+      # Force-closes live connections whose peer IP the caller's test
+      # matches (an admin ban: the accept-side denylist only stops future
+      # connections). Closing the raw socket raises in the session's
+      # blocked read and unwinds it through handle's ensure, releasing its
+      # limiter slot. Returns how many connections were closed.
+      def kick(&matcher)
+        victims = @lifecycle.synchronize do
+          @sessions.filter_map { |socket, conn| socket if conn.peer_ip && matcher.call(conn.peer_ip) }
+        end
+        victims.each { |socket| close_quietly(socket) }
+        victims.size
       end
 
       private
@@ -203,11 +238,11 @@ module MailOnRails
       end
 
       def spawn_session(socket, session_spec, ip, delay)
-        @lifecycle.synchronize { @sessions[socket] = nil }
+        @lifecycle.synchronize { @sessions[socket] = Conn.new(nil, nil, ip, session_spec, Time.now) }
         thread = Thread.new { handle(socket, session_spec, ip, delay) }
         # The session may already have finished and deregistered itself;
         # only record the thread while the registration is still live.
-        @lifecycle.synchronize { @sessions[socket] = thread if @sessions.key?(socket) }
+        @lifecycle.synchronize { @sessions[socket]&.thread = thread }
       rescue StandardError # ThreadError: out of threads; keep accepting
         @lifecycle.synchronize { @sessions.delete(socket) }
         @limiter.release(ip)
@@ -233,6 +268,7 @@ module MailOnRails
         if ip && session.respond_to?(:on_auth_failure=)
           session.on_auth_failure = -> { record_auth_failure(ip) }
         end
+        @lifecycle.synchronize { @sessions[raw]&.session = session }
         session.run
       rescue OpenSSL::SSL::SSLError, IOError, SystemCallError
         nil # session logs its own protocol-level errors; this is connection debris

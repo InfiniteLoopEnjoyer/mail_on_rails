@@ -16,7 +16,9 @@ module ApplicationHelper
   def users_section?     = controller_name == "users" || controller_path.start_with?("two_factor/")
   def settings_section?  = controller_name == "settings"
   def mailboxes_section? = %w[email_accounts mailboxes email_messages].include?(controller_name)
-  def auth_attempts_section? = controller_name == "auth_attempts"
+  def smtp_section?      = controller_name == "smtp"
+  def imap_section?      = controller_name == "imap"
+  def security_section?  = controller_name == "auth_attempts"
 
   # Window selector on the auth attempts page. Class literals again, so
   # Tailwind's scanner sees them.
