@@ -16,7 +16,8 @@ export DEBIAN_FRONTEND=noninteractive
 
 # --- Swap --------------------------------------------------------------------
 # The droplet has 2 GB of RAM and runs the whole stack (postgres, puma +
-# solid queue, rspamd, exim, imap, and eventually clamd, which alone wants
+# solid queue with the in-process SMTP/IMAP servers, rspamd, and clamd,
+# which alone wants
 # ~1.5 GB resident). A 6 GB swapfile keeps deploy-time and signature-reload
 # spikes from OOM-killing anything. swappiness is kept low so hot pages
 # (clamd's signature database in particular) stay in RAM.

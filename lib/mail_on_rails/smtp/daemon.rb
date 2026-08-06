@@ -64,9 +64,9 @@ module MailOnRails
       # Starts the server on a named thread and returns a Handle. A server
       # that dies logs the error and its thread ends; the embedding web
       # process carries on serving web requests.
-      def start(store:, logger: default_logger, host: nil, tls_dir: nil)
+      def start(store:, logger: default_logger, host: nil, tls_dir: nil, hostname: nil)
         host ||= ENV.fetch("SMTP_HOST", "0.0.0.0")
-        specs = listeners(host)
+        specs = listeners(host, hostname: hostname)
         tls = tls_material(logger, tls_dir || ENV.fetch("SMTP_TLS_DIR", "storage/tls"))
 
         logger.info "[mail_on_rails] SMTP #{specs.map { |s| s[:port] }.join("/")} on #{host}"
@@ -80,10 +80,12 @@ module MailOnRails
         Handle.new(server: server, thread: thread)
       end
 
-      def listeners(host)
+      def listeners(host, hostname: nil)
         # Announced in the SMTP banner/EHLO (RFC 5321 wants our FQDN; spam
-        # filters compare it to the PTR).
-        hostname = ENV.fetch("SMTP_HELO_HOST") { Socket.gethostname }
+        # filters compare it to the PTR). The host app may pass a callable
+        # instead of a string - sessions resolve it per connection, so a
+        # changed name applies without a restart.
+        hostname ||= ENV.fetch("SMTP_HELO_HOST") { Socket.gethostname }
         specs = [
           { host: host, port: env_port("SMTP_PORT", 1025), tls: :starttls, role: :mx, hostname: hostname },
           { host: host, port: env_port("SMTP_SUBMISSION_PORT", 1587), tls: :starttls, role: :submission, hostname: hostname },

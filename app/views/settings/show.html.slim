@@ -3,6 +3,26 @@
 header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
   h1.text-2xl.font-bold Settings
 
+h2.mb-2.text-lg.font-semibold SMTP hostname
+section.mb-6.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900.px-4.py-3
+  p.mb-3.text-sm.text-slate-500.dark:text-slate-400
+    ' The name this server announces on SMTP connections (the 220 banner
+    ' and HELO/EHLO replies) and sends as its own HELO when delivering
+    ' outbound mail. Receiving servers compare it against this machine's
+    ' public DNS, so it should be the mail host's FQDN. Applies to new
+    ' connections immediately. Leave blank to fall back to
+    code.rounded.bg-slate-100.dark:bg-slate-800.px-1 SMTP_HELO_HOST
+    ' , then the system hostname.
+  = form_with url: settings_path, method: :patch do |form|
+    .flex.flex-wrap.items-center.gap-2
+      = form.text_field :smtp_helo_hostname, value: @smtp_helo_hostname, placeholder: @effective_smtp_helo_hostname,
+                        class: "w-72 rounded-md border border-slate-300 dark:border-slate-600 px-2 py-1 text-sm font-mono"
+      = form.submit "Save", class: "cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white"
+  p.mt-2.text-xs.text-slate-500.dark:text-slate-400
+    ' Currently announcing
+    code.rounded.bg-slate-100.dark:bg-slate-800.px-1<>= @effective_smtp_helo_hostname
+    = "(from #{@smtp_helo_hostname_source})."
+
 h2.mb-2.text-lg.font-semibold Trash retention
 section.mb-6.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900.px-4.py-3
   p.mb-3.text-sm.text-slate-500.dark:text-slate-400

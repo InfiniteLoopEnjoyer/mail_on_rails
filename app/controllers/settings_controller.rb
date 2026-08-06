@@ -22,15 +22,23 @@ class SettingsController < ApplicationController
   def show
     @synced_files = synced_files
     @trash_retention_days = Setting.trash_retention_days
+    @smtp_helo_hostname = Setting.smtp_helo_hostname_override
+    @effective_smtp_helo_hostname = Setting.effective_smtp_helo_hostname
+    @smtp_helo_hostname_source =
+      if @smtp_helo_hostname then "this setting"
+      elsif Setting.smtp_helo_hostname then "the SMTP_HELO_HOST env var"
+      else "the system hostname"
+      end
   end
 
-  # The page's one writable knob so far: how many days mail sits in Trash
-  # before PurgeTrashJob deletes it permanently.
+  # Each knob posts its own form to this one action; the params present
+  # say which knob is being saved.
   def update
-    Setting.trash_retention_days = params[:trash_retention_days]
-    redirect_to settings_path, notice: "Trash retention set to #{Setting.trash_retention_days} days."
-  rescue ArgumentError, TypeError
-    redirect_to settings_path, alert: "Trash retention must be a whole number of days, at least 1."
+    if params.key?(:smtp_helo_hostname)
+      update_smtp_helo_hostname
+    else
+      update_trash_retention
+    end
   end
 
   # Rewrite one of the files from the database on demand - the
@@ -52,6 +60,27 @@ class SettingsController < ApplicationController
   end
 
   private
+
+  def update_trash_retention
+    Setting.trash_retention_days = params[:trash_retention_days]
+    redirect_to settings_path, notice: "Trash retention set to #{Setting.trash_retention_days} days."
+  rescue ArgumentError, TypeError
+    redirect_to settings_path, alert: "Trash retention must be a whole number of days, at least 1."
+  end
+
+  # Blank clears the override (back to SMTP_HELO_HOST / system hostname).
+  # New SMTP connections pick the change up immediately; no restart.
+  def update_smtp_helo_hostname
+    Setting.smtp_helo_hostname = params[:smtp_helo_hostname]
+    if (name = Setting.smtp_helo_hostname_override)
+      redirect_to settings_path, notice: "SMTP hostname set to #{name}."
+    else
+      redirect_to settings_path,
+                  notice: "SMTP hostname override cleared - announcing #{Setting.effective_smtp_helo_hostname}."
+    end
+  rescue ArgumentError
+    redirect_to settings_path, alert: "SMTP hostname must be a hostname like mail.example.com."
+  end
 
   def synced_files
     [

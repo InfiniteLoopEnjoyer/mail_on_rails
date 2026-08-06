@@ -7,9 +7,6 @@
 			"path": "../mail_on_rails_imap"
 		},
 		{
-			"path": "../mail_on_rails_exim"
-		},
-		{
 			"path": "../kamal-proxy"
 		}
 	]

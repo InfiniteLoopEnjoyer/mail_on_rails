@@ -12,14 +12,15 @@ module MailOnRails
     #     source: "smtp" so AUTH attempts land in AuthAttempt and the
     #     shared AuthThrottle budget.
     #   - local_rcpts: RCPT-time recipient verification straight from the
-    #     EmailAccount/EmailAlias/Domain tables (what exim answered from
-    #     the app-written local_recipients/local_domains files).
+    #     EmailAccount/EmailAlias/Domain tables (what the retired edge
+    #     answered from the app-written local_recipients/local_domains
+    #     files).
     #   - smtp_store/quarantine: accepted mail. Authenticated submission to
     #     remote recipients rows into SmtpOutboundMessage (drained by
     #     DeliverSmtpOutboundJob); local inbound becomes an
     #     ActionMailbox::InboundEmail routed to MailroomMailbox, with the
     #     connection facts the mailroom trusts stamped as headers first -
-    #     exactly the contract the exim edge's rails-ingress helper
+    #     exactly the contract the retired HTTP edge's ingress helper
     #     honored. Infected/unscanned mail is filed into Quarantine
     #     mailboxes directly at the model layer.
     #

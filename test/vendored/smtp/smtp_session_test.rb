@@ -123,6 +123,18 @@ class SmtpSessionTest < Minitest::Test
     assert_nil message[:auth_results], "a skipped verification must not stamp a verdict"
   end
 
+  # spec[:hostname] as a callable: the unified app passes a proc that
+  # reads the Settings-page value, so each connection announces the
+  # current name without a server restart.
+  def test_callable_hostname_is_resolved_per_session
+    with_session(spec_extra: { hostname: -> { "renamed.test" } }) do |client|
+      assert_match(/\A220 renamed\.test ESMTP /, read_reply(client))
+      reply = command(client, "EHLO client.test")
+      assert_match(/\A250-renamed\.test greets client\.test/, reply)
+      assert_match(/\A221/, command(client, "QUIT"))
+    end
+  end
+
   def test_mx_session_accepts_local_mail_end_to_end
     without_sender_verification do
       with_session do |client|
@@ -166,8 +178,8 @@ class SmtpSessionTest < Minitest::Test
     assert_empty @store.outbound_messages
   end
 
-  # An unknown user in a domain we host is a 5.1.1 (exim's "no such
-  # user"), not the relaying refusal a foreign domain gets.
+  # An unknown user in a domain we host is a 5.1.1 "no such user", not
+  # the relaying refusal a foreign domain gets.
   def test_mx_session_distinguishes_unknown_local_user_from_relay
     with_session do |client|
       read_reply(client)
@@ -304,6 +316,21 @@ class SmtpSessionTest < Minitest::Test
       assert_match(/\A334 UGFzc3dvcmQ6/, command(client, [ EMAIL ].pack("m0")))
       assert_match(/\A235/, command(client, [ PASSWORD ].pack("m0")))
       assert_match(/\A250/, command(client, "MAIL FROM:<#{EMAIL}>"))
+      command(client, "QUIT")
+    end
+  end
+
+  # Spaces and specials must survive the SASL PLAIN base64 encoding end
+  # to end - a password is arbitrary bytes, not a command token.
+  def test_auth_plain_password_with_spaces_and_specials_round_trips
+    special = "p@ss word+with=specials/&?"
+    @store.add_account(email: "specials@example.test", password: special)
+    with_session(role: :submission, spec_extra: { tls: :implicit }) do |client|
+      read_reply(client)
+      command(client, "EHLO client.test")
+      token = [ "\0specials@example.test\0#{special}" ].pack("m0")
+      assert_match(/\A235/, command(client, "AUTH PLAIN #{token}"))
+      assert_match(/\A250/, command(client, "MAIL FROM:<specials@example.test>"))
       command(client, "QUIT")
     end
   end

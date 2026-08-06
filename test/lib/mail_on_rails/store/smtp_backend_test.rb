@@ -90,6 +90,36 @@ class SmtpBackendTest < ActiveSupport::TestCase
     assert_predicate row, :pending?
   end
 
+  # Outbound mail is queued as the AUTHENTICATED identity, never the
+  # client-supplied envelope sender - the session also enforces
+  # MAIL FROM == authenticated account, but the store must not rely on
+  # its caller for that.
+  test "outbound rows carry the authenticated identity, not the envelope sender" do
+    account_id
+
+    store.smtp_store("spoofed@evil.test", [ "friend@elsewhere.test" ], RAW_MESSAGE, EMAIL,
+                     client_ip: "198.51.100.7", helo: "client.test")
+
+    assert_equal EMAIL, SmtpOutboundMessage.last.mail_from
+  end
+
+  # A throttled attempt must never be mistaken for a success, even when
+  # the password is right - the session grants AUTH iff account_id is
+  # present.
+  test "a throttled attempt is denied even with the correct password" do
+    account_id
+    ENV["MAIL_ON_RAILS_AUTH_MAX_ACCOUNT_FAILURES"] = "2"
+    2.times { |i| AuthThrottle.record_failure(ip: "198.51.100.#{i}", email: EMAIL) }
+
+    result = store.authenticate(EMAIL, PASSWORD, ip: "198.51.100.99")
+
+    assert result[:throttled]
+    assert_nil result[:account_id], "a throttle must read as a denial"
+    assert_operator result[:retry_after], :>, 0
+  ensure
+    ENV.delete("MAIL_ON_RAILS_AUTH_MAX_ACCOUNT_FAILURES")
+  end
+
   test "quarantine files into the recipient's Quarantine mailbox and dedupes by message id" do
     account = EmailAccount.find(account_id)
 

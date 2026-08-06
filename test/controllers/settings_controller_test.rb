@@ -101,4 +101,38 @@ class SettingsControllerTest < ActionDispatch::IntegrationTest
       assert_equal 30, Setting.trash_retention_days
     end
   end
+
+  # -- SMTP hostname ---------------------------------------------------------
+
+  test "shows the smtp hostname form with the effective name as placeholder" do
+    get settings_url
+    assert_select "input[name='smtp_helo_hostname'][placeholder='#{Socket.gethostname}']"
+
+    Setting.smtp_helo_hostname = "mail.example.test"
+    get settings_url
+    assert_select "input[name='smtp_helo_hostname'][value='mail.example.test']"
+    assert_select "p", text: /Currently announcing\s+mail\.example\.test\s+\(from this setting\)/
+  end
+
+  test "update saves the smtp hostname" do
+    patch settings_url, params: { smtp_helo_hostname: "MX.Example.Test" }
+    assert_redirected_to settings_url
+    assert_equal "SMTP hostname set to mx.example.test.", flash[:notice]
+    assert_equal "mx.example.test", Setting.smtp_helo_hostname
+  end
+
+  test "update with a blank smtp hostname clears the override" do
+    Setting.smtp_helo_hostname = "mail.example.test"
+    patch settings_url, params: { smtp_helo_hostname: "" }
+    assert_redirected_to settings_url
+    assert_match(/override cleared/, flash[:notice])
+    assert_nil Setting.smtp_helo_hostname_override
+  end
+
+  test "update rejects a junk smtp hostname" do
+    patch settings_url, params: { smtp_helo_hostname: "not a hostname" }
+    assert_redirected_to settings_url
+    assert_match(/must be a hostname/, flash[:alert])
+    assert_nil Setting.smtp_helo_hostname_override
+  end
 end

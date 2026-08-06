@@ -1,8 +1,8 @@
 # Unified cutover runbook
 
-The `unified` branch replaces the three-container stack (web + exim +
-standalone IMAP) with one container: Puma runs the web UI, Solid Queue,
-and the in-process SMTP/IMAP servers. The cutover is a teardown and
+The `unified` branch replaces the three-container stack (web + the
+standalone SMTP edge + standalone IMAP) with one container: Puma runs the
+web UI, Solid Queue, and the in-process SMTP/IMAP servers. The cutover is a teardown and
 rebuild with a database dump/restore - not an in-place migration.
 
 ## Before
@@ -23,9 +23,9 @@ rebuild with a database dump/restore - not an in-place migration.
 
 From each repo's main-era checkout:
 
-    (mail_on_rails, old branch)  bin/kamal remove -d prod
-    (../mail_on_rails_exim)      bin/kamal remove -d prod
-    (../mail_on_rails_imap)      bin/kamal remove -d prod
+    (mail_on_rails, old branch)   bin/kamal remove -d prod
+    (../<the SMTP edge repo>)     bin/kamal remove -d prod
+    (../mail_on_rails_imap)       bin/kamal remove -d prod
 
 `kamal remove` stops/deletes containers and the proxy but leaves named
 volumes in place.

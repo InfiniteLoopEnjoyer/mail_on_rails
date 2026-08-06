@@ -31,7 +31,8 @@ module MailOnRails
         require "mail_on_rails/smtp/daemon"
         require "mail_on_rails/store/smtp_backend"
         @handles << MailOnRails::Smtp::Daemon.start(store: MailOnRails::Store::SmtpBackend.new,
-                                                    logger: Rails.logger, tls_dir: tls_dir)
+                                                    logger: Rails.logger, tls_dir: tls_dir,
+                                                    hostname: method(:smtp_hostname))
       end
 
       @handles
@@ -67,6 +68,16 @@ module MailOnRails
     # The servers read/generate their self-signed dev certs here.
     def tls_dir
       Rails.root.join("storage", "tls").to_s
+    end
+
+    # The name SMTP sessions announce, resolved per connection so a
+    # Settings-page change applies without a restart. Falls back to the
+    # env/system name if the database is unreachable - the banner must
+    # still go out.
+    def smtp_hostname
+      Rails.application.executor.wrap { Setting.effective_smtp_helo_hostname }
+    rescue StandardError
+      ENV["SMTP_HELO_HOST"].presence || Socket.gethostname
     end
   end
 end

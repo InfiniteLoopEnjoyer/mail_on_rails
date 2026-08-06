@@ -35,6 +35,9 @@ module MailOnRails
     MAX_RECIPIENTS = 100
     MAX_MESSAGES_PER_SESSION = 100
     MAX_AUTH_ATTEMPTS = 3
+    # Per-session budget for 5xx syntax/state errors: a legitimate client
+    # never accumulates these, a fuzzer or spam cannon does.
+    MAX_PROTOCOL_ERRORS = 8
     MAX_CONNECTIONS = Smtp::Config.int("SMTP_MAX_CONN", 100, min: 1)
     # Per-IP anti-abuse, enforced on the accept side (ConnLimiter /
     # AuthThrottle): concurrent-connection cap per peer IP, and a lockout
@@ -83,6 +86,7 @@ module MailOnRails
         @trace = spec.fetch(:trace, TRACE_DEFAULT)
         @authenticated_as = nil
         @auth_attempts = 0
+        @protocol_errors = 0
         @on_auth_failure = nil
         @message_count = 0
         @continuation = nil
@@ -90,14 +94,22 @@ module MailOnRails
       end
 
       def run
-        set_timeout(300)
-        reply 220, "#{server_name} ESMTP mail_on_rails service ready"
+        set_timeout(read_timeout)
+        reply 220, "#{server_name} ESMTP service ready"
         while (chunk = @socket.gets("\r\n", MAX_LINE))
           break if handle_chunk(chunk) == :quit
         end
         # EOF with a continuation active means the peer vanished mid-DATA
         # or mid-AUTH; nothing has been stored, so ending here aborts it.
-      rescue IOError, SystemCallError, IO::TimeoutError, OpenSSL::SSL::SSLError
+      rescue IO::TimeoutError
+        # An idle peer is told why before the close (best effort - it may
+        # already be gone).
+        begin
+          reply 421, "SMTP command timeout - closing connection"
+        rescue StandardError
+          nil
+        end
+      rescue IOError, SystemCallError, OpenSSL::SSL::SSLError
         # client went away
       rescue StandardError => e
         @store.log(:error, "SMTP session error: #{e.class}: #{e.message}")
@@ -165,9 +177,8 @@ module MailOnRails
       def handle_command(line)
         verb, arg = line.split(" ", 2)
         case verb&.upcase
-        when "HELO" then @helo_name = arg.to_s.strip; reply 250, "#{server_name} greets #{arg}"
-        when "EHLO" then @helo_name = arg.to_s.strip; ehlo(arg)
-        when "STARTTLS" then starttls
+        when "HELO", "EHLO" then helo(verb, arg)
+        when "STARTTLS" then starttls(arg)
         when "AUTH" then auth(arg)
         when "MAIL" then mail_from(arg)
         when "RCPT" then rcpt_to(arg)
@@ -176,19 +187,62 @@ module MailOnRails
         when "NOOP" then reply 250, "OK"
         when "VRFY" then reply 252, "Cannot verify, but will accept and try"
         when "QUIT" then reply 221, "Bye"; return :quit
-        else reply 502, "Command not implemented"
+        else error_reply 502, "Command not implemented"
         end
         nil
       end
 
+      # RFC 5321 wants a domain or address literal as the argument;
+      # validating it also keeps raw junk bytes out of the echoed
+      # greeting. A repeated HELO/EHLO is legal and aborts any transaction
+      # in progress (RFC 5321 4.1.4).
+      def helo(verb, arg)
+        name = arg.to_s.strip
+        unless name.match?(/\A[A-Za-z0-9\[\].:_-]+\z/)
+          return error_reply 501, "Syntactically invalid #{verb.upcase} argument"
+        end
+
+        @helo_name = name
+        reset
+        verb.casecmp?("HELO") ? reply(250, "#{server_name} greets #{name}") : ehlo(name)
+      end
+
+      # Counts toward the session's error budget; past it the peer gets one
+      # final reply and the connection drops (the run loop's rescue).
+      def error_reply(code, message)
+        @protocol_errors += 1
+        if @protocol_errors >= MAX_PROTOCOL_ERRORS
+          reply code, "Too many syntax or protocol errors"
+          raise IOError, "protocol error abuse"
+        end
+        reply code, message
+      end
+
+      # spec[:hostname] may be a callable (the Rails host passes one so a
+      # Settings-page change reaches new connections without a restart);
+      # resolved once per session, before the banner.
       def server_name
-        @spec[:hostname] || "mail_on_rails"
+        return @server_name if defined?(@server_name)
+
+        name = @spec[:hostname]
+        name = name.call if name.respond_to?(:call)
+        @server_name = name || "mail_on_rails"
       end
 
       # Overridable via spec so tests can exercise size handling without
       # shoveling 25 MB through a loopback socket.
       def max_message_bytes
         @spec[:max_message_bytes] || MAX_MESSAGE_BYTES
+      end
+
+      # Same seam for the per-session message cap.
+      def max_messages_per_session
+        @spec[:max_messages] || MAX_MESSAGES_PER_SESSION
+      end
+
+      # And for the command-read timeout.
+      def read_timeout
+        @spec[:timeout] || 300
       end
 
       def ehlo(arg)
@@ -204,15 +258,20 @@ module MailOnRails
         @tls
       end
 
-      def starttls
+      def starttls(arg)
+        # RFC 3207: STARTTLS takes no parameter.
+        return error_reply 501, "Syntax error (no parameters allowed)" if arg
+        return error_reply 503, "TLS already active" if @tls
         return reply 454, "TLS not available" unless @tls_ctx
-        return reply 503, "TLS already active" if @tls
 
         reply 220, "Ready to start TLS"
         @socket = Smtp::TLS.accept(io_for(@socket), @tls_ctx)
         @tls = true
-        set_timeout(300)
-        reset # RFC 3207: discard all state learned before STARTTLS
+        set_timeout(read_timeout)
+        # RFC 3207: discard all state learned before STARTTLS, the
+        # pre-handshake HELO included.
+        @helo_name = nil
+        reset
       rescue OpenSSL::SSL::SSLError => e
         @store.log(:error, "SMTP STARTTLS failed: #{e.message}")
         raise IOError, "TLS handshake failed"
@@ -222,7 +281,9 @@ module MailOnRails
 
       def auth(arg)
         return reply 538, "Encryption required for authentication" unless @tls
-        return reply 503, "Already authenticated" if @authenticated_as
+        return error_reply 503, "Already authenticated" if @authenticated_as
+        # RFC 4954: AUTH is illegal once a mail transaction is open.
+        return error_reply 503, "AUTH not permitted in mail transaction" if @mail_from
 
         mechanism, initial = arg.to_s.split(" ", 2)
         case mechanism&.upcase
@@ -237,7 +298,7 @@ module MailOnRails
             end
           end
         else
-          reply 504, "Unrecognized authentication type"
+          error_reply 504, "Unrecognized authentication type"
         end
       end
 
@@ -272,6 +333,14 @@ module MailOnRails
           @authenticated_as = result[:email]
           @store.log(:info, "SMTP auth success for #{@authenticated_as} (#{peer_ip})")
           reply 235, "Authentication successful"
+        elsif result[:throttled]
+          # The store refused to adjudicate (brute-force throttle): RFC
+          # 4954's 454, so a legitimate client with a stale password backs
+          # off and retries instead of treating its password as wrong. Not
+          # counted as a failure anywhere - the throttle already has this
+          # peer blocked.
+          @store.log(:warn, "SMTP auth throttled for #{user.to_s.empty? ? "(empty)" : user} (#{peer_ip})")
+          reply 454, "Temporary authentication failure, try again later"
         else
           @auth_attempts += 1
           @on_auth_failure&.call # recorded before the reply so the throttle can't lag the client
@@ -287,15 +356,18 @@ module MailOnRails
       # -- envelope ----------------------------------------------------------
 
       def mail_from(arg)
+        return error_reply 503, "Sender already given" if @mail_from
         if @spec[:role] == :submission && !@authenticated_as
           return reply 530, "Authentication required"
         end
 
-        unless arg =~ /\AFROM:\s*<([^>]*)>/i
-          return reply 501, "Syntax: MAIL FROM:<address>"
+        unless arg =~ /\AFROM:\s*<([^>]*)>\s*(.*)\z/im
+          return error_reply 501, "Syntax: MAIL FROM:<address>"
         end
 
         from = Regexp.last_match(1)
+        return unless accept_mail_parameters(Regexp.last_match(2))
+
         if (zone = rbl_listing)
           @store.log(:info, "SMTP rejected MAIL FROM:<#{from}> from #{peer_ip}: listed by DNSBL #{zone}")
           return reply 554, "5.7.1 Service unavailable; #{peer_ip} is listed by #{zone}"
@@ -310,21 +382,61 @@ module MailOnRails
         reply 250, "OK"
       end
 
+      # ESMTP MAIL parameters (RFC 5321 4.1.1.2). We advertise SIZE and
+      # 8BITMIME, so honor them: an oversize SIZE declaration is refused
+      # before the client wastes the transfer (RFC 1870), BODY must be a
+      # value we advertised, and AUTH= (RFC 4954) is accepted and ignored -
+      # the session's own AUTH is the only identity we trust. Anything
+      # else was never advertised, so it earns RFC 5321's 555. Replies and
+      # returns false on rejection.
+      def accept_mail_parameters(params)
+        params.to_s.split(/\s+/).each do |param|
+          key, value = param.split("=", 2)
+          case key.upcase
+          when "SIZE"
+            unless value.to_s.match?(/\A\d+\z/)
+              error_reply 501, "Invalid SIZE value"
+              return false
+            end
+            if value.to_i > max_message_bytes
+              reply 552, "Message size exceeds maximum permitted"
+              return false
+            end
+          when "BODY"
+            unless value.to_s.match?(/\A(7BIT|8BITMIME)\z/i)
+              error_reply 501, "Invalid BODY value"
+              return false
+            end
+          when "AUTH" # accepted, ignored
+          else
+            error_reply 555, "MAIL parameter not recognized"
+            return false
+          end
+        end
+        true
+      end
+
       def rcpt_to(arg)
-        return reply 503, "Need MAIL command first" unless @mail_from
+        return error_reply 503, "Need MAIL command first" unless @mail_from
         return reply 452, "Too many recipients" if @rcpt_to.size >= MAX_RECIPIENTS
 
-        unless arg =~ /\ATO:\s*<([^>]+)>/i
-          return reply 501, "Syntax: RCPT TO:<address>"
+        unless arg =~ /\ATO:\s*<([^>]+)>\s*(.*)\z/im
+          return error_reply 501, "Syntax: RCPT TO:<address>"
+        end
+
+        # No RCPT extension (DSN etc.) is advertised, so no parameter is
+        # legal here.
+        unless Regexp.last_match(2).to_s.strip.empty?
+          return error_reply 555, "RCPT parameter not recognized"
         end
 
         recipient = Regexp.last_match(1)
         # Local recipients (accounts and aliases) are accepted everywhere.
         # Remote recipients are accepted only from authenticated submission
         # (queued for outbound delivery) - the MX port stays local-only, so
-        # we never open relay. A miss splits two ways, like exim's ACLs
-        # did: an unknown user in a domain we host is a 5.1.1, anything
-        # else is refused as relaying.
+        # we never open relay. A miss splits two ways: an unknown user in
+        # a domain we host is a 5.1.1, anything else is refused as
+        # relaying.
         lookup = @store.local_rcpts([ recipient ])
         unless Array(lookup[:local]).any? || relay_allowed?(recipient)
           @store.log(:info, "SMTP rejected recipient <#{recipient}> from <#{@mail_from}> (#{@spec[:role]}, #{peer_ip})")
@@ -347,8 +459,8 @@ module MailOnRails
       # -- data --------------------------------------------------------------
 
       def data
-        return reply 503, "Need RCPT command first" if @rcpt_to.empty?
-        if @message_count >= MAX_MESSAGES_PER_SESSION
+        return error_reply 503, "Need RCPT command first" if @rcpt_to.empty?
+        if @message_count >= max_messages_per_session
           return reply 421, "Too many messages this session"
         end
 

@@ -56,11 +56,11 @@ class DnsCheck
   private
 
   def mail_host
-    ENV["SMTP_HELO_HOST"].to_s.strip.downcase.presence
+    Setting.smtp_helo_hostname
   end
 
   def mx_check
-    return check("MX", :unknown, nil, "SMTP_HELO_HOST is not set") unless mail_host
+    return check("MX", :unknown, nil, "SMTP hostname is not set (Settings page or SMTP_HELO_HOST)") unless mail_host
 
     records = @resolver.mx(@domain.name)
     return check("MX", :unknown, nil, "DNS lookup failed") if records.nil?

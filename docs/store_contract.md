@@ -10,15 +10,14 @@ holds no database credentials), this app's Active Record adapter behind the
 imap endpoints (`MailOnRails::Store::ImapBackend`), and the gem's
 dependency-free reference implementation (`MailOnRails::Imap::Store::Memory`).
 
-> **The SMTP edge does not use a store.** It is the external
-> [`mail_on_rails_exim`](https://github.com/InfiniteLoopEnjoyer/mail_on_rails_exim)
-> service — an Exim MTA that terminates SMTP and reaches this app over
-> plain HTTP, not through a store object. Its contract with the app is the
-> **[HTTP edge contract](#the-http-edge-contract-exim)** below, and the
-> trust-boundary details (header stamping, forged-header stripping) live in
-> that repo's README. The store abstraction remains only for IMAP, where the
-> daemon runs in-process (dev) or as its own service and genuinely needs a
-> database-free seam.
+> **The in-process SMTP server has a store contract of its own**
+> (`MailOnRails::Smtp::Store::Contracts::Smtp`, in
+> `lib/mail_on_rails/smtp/store/contracts.rb`), honored by the Active
+> Record implementation `MailOnRails::Store::SmtpBackend` and the
+> dependency-free `MailOnRails::Smtp::Store::Memory`. The trust-boundary
+> details (header stamping, forged-header stripping) live with the
+> backend and its tests
+> (`test/lib/mail_on_rails/store/smtp_stamping_test.rb`).
 
 ## Ground rules
 
@@ -105,8 +104,9 @@ Requirements, in the order they matter:
 Limits, windows and block durations are the implementation's to choose;
 the contract suite discovers them rather than assuming any. The app's
 implementation is `AuthThrottle` (counters in the database, so the IMAP
-daemon's worker Ractors and the exim edge share one budget and it
-survives a restart); `Store::Memory` mirrors the semantics in a Hash.
+daemon's worker Ractors and the in-process SMTP server share one budget
+and it survives a restart); `Store::Memory` mirrors the semantics in a
+Hash.
 
 ### `record_auth_failure(email, ip: nil, source: nil)`
 
@@ -244,42 +244,17 @@ Minitest class, provide `build_store(**limits)` and
 `create_account(email:, password:)`, and the suite asserts everything
 above that is observable through the interface.
 
-## The HTTP edge contract (exim)
+## The SMTP trust boundary
 
-The `mail_on_rails_exim` service does not use a store — it POSTs directly
-to three app endpoints. This is the app's side of that contract; the
-`mail_on_rails_exim` README is authoritative for what exim sends and the
-trust boundary it enforces.
-
-- **Relay ingress** (`config.action_mailbox.ingress = :relay`,
-  authenticated with `action_mailbox.ingress_password`). Every inbound
-  message exim accepts is POSTed here as raw RFC822. Exim has already
-  **stripped any forged `X-Original-To` / `Return-Path` / `X-MailOnRails-*`
-  headers and stamped the authoritative values** the live SMTP connection
-  knows (`Return-Path`, one `X-Original-To` per envelope recipient,
-  `X-MailOnRails-Authenticated`, `X-MailOnRails-Client-Ip`,
-  `X-MailOnRails-Helo`). `MailroomMailbox` trusts exactly those headers to
-  route recipients and to feed the app-side checks — SPF/DKIM/DMARC via the
-  rspamd accessory (`MailOnRails::RspamdAnalyzer`, using the stamped IP /
-  HELO / envelope sender) and virus scanning via ClamAV
-  (`MailOnRails::ClamavScanner`). Exim does no SPF/DKIM/DMARC itself; it
-  does virus-scan at DATA time against the same clamav accessory
-  (rejecting infected mail before acceptance), but stamps no verdict — the
-  app's rescan here is unconditional.
-
-- **`POST mail_on_rails/internal/authenticate`** (basic-auth'd with
-  `mail_on_rails.internal_api_password`, or the `SMTP_INTERNAL_API_PASSWORD`
-  env fallback). Exim's AUTH check calls this; a 2xx with a non-null
-  `account_id` grants the login. Backed by the same account base as the
-  IMAP store's `authenticate`. Send the client address as `ip` so SMTP
-  AUTH and IMAP LOGIN share one brute-force budget; a throttled attempt
-  answers `account_id: null` with `throttled: true`, which an edge that
-  only reads `account_id` correctly treats as a denial.
-
-- **`POST mail_on_rails/internal/outbound_messages`** (same auth). Remote
-  recipients of an authenticated submission are queued here for the app to
-  DKIM-sign and deliver; the sender is forced to the authenticated
-  identity. A `507` tells exim its outbound queue is full so it retries;
-  a `4xx` bounces.
-
-See `MailOnRails::InternalController` for the endpoint implementations.
+Inbound mail enters Action Mailbox through `SmtpBackend#smtp_store`, which
+**strips any forged `X-Original-To` / `Return-Path` / `X-MailOnRails-*`
+headers and stamps the authoritative values** the live SMTP connection
+knows (`Return-Path`, one `X-Original-To` per envelope recipient,
+`X-MailOnRails-Authenticated`, `X-MailOnRails-Client-Ip`,
+`X-MailOnRails-Helo`). `MailroomMailbox` trusts exactly those headers to
+route recipients and to feed the app-side checks — SPF/DKIM/DMARC via the
+rspamd accessory (`MailOnRails::RspamdAnalyzer`, using the stamped IP /
+HELO / envelope sender) and virus scanning via ClamAV
+(`MailOnRails::ClamavScanner`). The SMTP session's own connection-time
+SPF/DKIM/DMARC results stay a connection-time gate and are deliberately
+not forwarded as headers; the mailroom recomputes every verdict itself.

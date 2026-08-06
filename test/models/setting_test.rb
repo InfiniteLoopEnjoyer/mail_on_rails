@@ -22,4 +22,38 @@ class SettingTest < ActiveSupport::TestCase
     assert_raises(TypeError) { Setting.trash_retention_days = nil }
     assert_equal 30, Setting.trash_retention_days
   end
+
+  # -- SMTP HELO hostname ----------------------------------------------------
+
+  teardown do
+    ENV.delete("SMTP_HELO_HOST")
+  end
+
+  test "smtp helo hostname precedence: setting, then env, then system hostname" do
+    assert_nil Setting.smtp_helo_hostname
+    assert_equal Socket.gethostname, Setting.effective_smtp_helo_hostname
+
+    ENV["SMTP_HELO_HOST"] = "Env.Example.Test"
+    assert_equal "env.example.test", Setting.smtp_helo_hostname
+
+    Setting.smtp_helo_hostname = "mail.example.test"
+    assert_equal "mail.example.test", Setting.smtp_helo_hostname
+    assert_equal "mail.example.test", Setting.effective_smtp_helo_hostname
+  end
+
+  test "smtp helo hostname setter normalizes and blank clears the override" do
+    Setting.smtp_helo_hostname = "  MX.Example.Test "
+    assert_equal "mx.example.test", Setting.smtp_helo_hostname_override
+
+    Setting.smtp_helo_hostname = ""
+    assert_nil Setting.smtp_helo_hostname_override
+    assert_empty Setting.where(key: "smtp_helo_hostname")
+  end
+
+  test "smtp helo hostname rejects non-hostnames" do
+    [ "mail host", "-bad.example", "bad-.example", "mail..example", "mail.example/25", "a" * 256 ].each do |bad|
+      assert_raises(ArgumentError, bad) { Setting.smtp_helo_hostname = bad }
+    end
+    assert_nil Setting.smtp_helo_hostname_override
+  end
 end

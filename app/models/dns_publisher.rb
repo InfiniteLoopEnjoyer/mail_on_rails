@@ -25,7 +25,7 @@ class DnsPublisher
   end
 
   def publish!
-    raise CloudflareDns::Error, "SMTP_HELO_HOST is not set" if mail_host.blank?
+    raise CloudflareDns::Error, "SMTP hostname is not set (Settings page or SMTP_HELO_HOST)" if mail_host.blank?
 
     @zone = @client.zone_id(@domain.name)
     @actions = []
@@ -40,7 +40,7 @@ class DnsPublisher
   private
 
   def mail_host
-    ENV["SMTP_HELO_HOST"].to_s.strip.downcase.presence
+    Setting.smtp_helo_hostname
   end
 
   def publish_mx

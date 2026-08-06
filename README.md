@@ -5,67 +5,40 @@ submission), IMAP, and a web UI, with mail stored in PostgreSQL.
 
 ## Architecture
 
-The mail edges live in sibling repos and deploy as their own Kamal
-services:
+One container runs everything: Puma serves the web UI and Solid Queue,
+and the `:mail_on_rails` Puma plugin boots the SMTP server (MX +
+authenticated submission, STARTTLS/implicit TLS, AUTH, DoS caps) and the
+IMAP server on background threads in the same process.
 
-- **[mail_on_rails_exim](https://github.com/InfiniteLoopEnjoyer/mail_on_rails_exim)**
-  — the SMTP edge: an [Exim](https://www.exim.org/) MTA (MX + authenticated
-  submission on 25/587/465) with STARTTLS/AUTH and DoS caps. It terminates
-  SMTP and hands mail to this app over HTTP — it holds no Rails code, no
-  database, and no master key. It virus-scans each message at DATA time
-  against this app's clamav accessory (infected → 550 before acceptance,
-  scanner down → 451, fail closed); this app rescans on ingress as defense
-  in depth. It does no SPF/DKIM/DMARC of its own — it forwards the
-  connection facts and this app runs those checks. The list of domains it
-  accepts mail for is managed live from this app's Domains admin UI (a
-  shared-volume file exim re-reads per connection — no edge redeploy to
-  add or remove a domain).
-- **[mail_on_rails_imap](https://github.com/InfiniteLoopEnjoyer/mail_on_rails_imap)**
-  — the IMAP server.
+The protocol servers are Rails-free and vendored under
+`lib/mail_on_rails/smtp*` and `lib/mail_on_rails/imap`; each speaks to a
+**store** (interface in `docs/store_contract.md`) whose Active
+Record-backed implementations are this app's. Inbound mail is
+SPF/DKIM/DMARC-verified and virus-scanned at SMTP DATA time (infected →
+550 before acceptance, scanner down → 451, fail closed), then routed
+through Action Mailbox; messages carry verified/unverified badges in the
+UI. Hosted domains are managed live from the Domains admin UI — no
+restart to add or remove one.
 
-This app is the persistence and UI side. It exposes the Action Mailbox
-relay ingress and the private internal API the edges talk to, stores mail
-in Postgres, and serves the web UI. The IMAP daemon speaks to a **store**
-(interface in `docs/store_contract.md`); the exim edge uses no store and
-POSTs straight to the ingress + internal API (its HTTP contract is in the
-same doc, authoritative details in the exim repo). Inbound messages carry
-verified/unverified badges in the UI.
-
-In development the IMAP daemon is a path dependency (the `:daemons` Gemfile
-group) and runs in-process on a background thread via the `:mail_on_rails`
-Puma plugin, so `bin/dev` brings up web + IMAP in one process. A second
+In development `bin/dev` brings up web + SMTP + IMAP in one process. A
 dev-only Puma plugin (`:clamav_dev`) keeps a local `clamav-dev` docker
 container running so virus scanning works too — with no docker it logs a
-note and leaves scanning off. The SMTP edge is a Docker/Exim service and
-runs on its own (see the exim repo).
+note and leaves scanning off.
 
 ## Running the test suite
 
     bin/rails test
 
-The suite includes the IMAP gem's store-contract tests, run against this
-app's Active Record and HTTP implementations. When the sibling path gem
-isn't installed (e.g. CI sets `BUNDLE_WITHOUT=daemons`), those tests skip
-with a note. Each edge repo also carries its own Rails-free suite
-(`bin/test`).
+The suite includes the protocol servers' store-contract tests, run
+against this app's Active Record implementations. The vendored servers'
+own Rails-free suites run with `bin/rails test:smtp_server` and
+`bin/rails test:imap_server` (CI runs both).
 
 Virus-scanning tests run against a scripted fake clamd, so no ClamAV
 install is needed; the real-engine EICAR smoke procedure and the scanning
 policy live in [docs/virus_scanning.md](docs/virus_scanning.md).
 
 ## Roadmap
-
-Planned work, tracked here across the app and the edge repos.
-
-### [mail_on_rails_exim](https://github.com/InfiniteLoopEnjoyer/mail_on_rails_exim)
-
-Edge-level hardening (connection/volume caps, per-IP recipient and AUTH
-throttles, TLS floor, RBL/DNSBL) lives in the exim service and is tuned in
-its `config/exim4.conf.template` — see that repo's README. Exim replaces
-the retired Ruby SMTP daemon, so its own equivalents supersede the DNS /
-parser / connection-limiter work that used to be tracked here.
-
-### mail_on_rails (this app)
 
 - [ ] **Spam-action routing** — the mailroom already gets an rspamd spam
   action/score per message (currently logged only); act on it, e.g. file a
@@ -75,17 +48,16 @@ parser / connection-limiter work that used to be tracked here.
   (behind a flag, log-only first) rather than only badging. (Distinct from
   the outbound-side DMARC *monitoring* already in place — see below.)
 - [ ] **Rate limiting beyond auth endpoints** — Rails-native
-  `rate_limit` covers login/password-reset only; consider coverage for
-  the internal API endpoints the edges call.
+  `rate_limit` covers login/password-reset only.
 
 Already in place (not TODO): PostgreSQL-backed queuing (Solid Queue plus
-the `smtp_outbound_messages` retry/backoff table), app-side SPF/DKIM/DMARC
-of inbound mail (rspamd) and virus scanning (ClamAV — also consulted by
-the exim edge at DATA time, so infected mail is rejected before
+the `smtp_outbound_messages` retry/backoff table), SPF/DKIM/DMARC
+verification of inbound mail (rspamd) and virus scanning (ClamAV,
+consulted at SMTP DATA time so infected mail is rejected before
 acceptance), outbound DKIM signing, **dynamic domain management** (the
-Domains admin UI creates/removes hosted domains live: exim picks the list
-up per connection, a DKIM key is generated per domain, and the page shows
-the DNS records to publish), and **DMARC monitoring** (aggregate reports
+Domains admin UI creates/removes hosted domains live: a DKIM key is
+generated per domain and the page shows the DNS records to publish), and
+**DMARC monitoring** (aggregate reports
 mailed to each domain's auto-created `dmarc@` account are virus-scanned,
 sender-verified, parsed, and summarized into per-domain alignment stats
 with advice on when it is safe to tighten the published policy).
