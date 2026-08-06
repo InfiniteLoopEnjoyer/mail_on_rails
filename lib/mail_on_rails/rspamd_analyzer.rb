@@ -29,6 +29,10 @@ module MailOnRails
       def unavailable? = status == :unavailable
       # Any action past plain acceptance/greylisting is rspamd calling it spam.
       def spam? = ok? && ![ nil, "no action", "greylist" ].include?(action)
+      # rspamd's two refusal actions, split by SMTP semantics: "reject"
+      # deserves a permanent 5xx, "soft reject" a retryable 4xx.
+      def reject? = ok? && action == "reject"
+      def soft_reject? = ok? && action == "soft reject"
     end
 
     DEFAULT_PORT = 11333
@@ -68,10 +72,13 @@ module MailOnRails
 
     # Analyze a message. The keyword facts come from the edge-stamped headers
     # and are passed to rspamd so SPF/DMARC (which need the live connection)
-    # can run app-side. Returns a Result; :unavailable on any transport or
-    # parse failure - never raises.
-    def analyze(raw, ip: nil, helo: nil, mail_from: nil, rcpt: nil, authenticated_as: nil)
-      uri = endpoint
+    # can run app-side. addr/timeout default to the env config and exist for
+    # callers that carry their own (the SMTP session's per-listener spec).
+    # Returns a Result; :unavailable on any transport or parse failure -
+    # never raises.
+    def analyze(raw, ip: nil, helo: nil, mail_from: nil, rcpt: nil, authenticated_as: nil,
+                addr: self.addr, timeout: self.timeout)
+      uri = endpoint(addr)
       http = Net::HTTP.new(uri.host, uri.port || DEFAULT_PORT)
       http.open_timeout = timeout
       http.read_timeout = timeout
@@ -131,7 +138,7 @@ module MailOnRails
       ENV["SMTP_RSPAMD_PASSWORD"].to_s.strip
     end
 
-    def endpoint
+    def endpoint(addr = self.addr)
       base = addr.include?("://") ? addr : "http://#{addr}"
       URI.parse(base)
     end

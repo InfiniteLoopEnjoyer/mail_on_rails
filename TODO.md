@@ -1,4 +1,16 @@
 # TODO
+## Web composer bypasses the outbound abuse gates (noted 2026-08-06)
+
+The SMTP submission path now has a per-account send quota
+(`Smtp::SendQuota`, RCPT-time 452) and an rspamd spam gate at DATA
+(550/451 on rspamd's reject actions) - the tripwires for a stolen SMTP
+password. The web composer does not go through them: `ComposedEmail#deliver`
+queues `SmtpOutboundMessage` rows directly, so a stolen *web* password can
+still pump outbound mail unmetered (subject only to web-session auth and
+the composer's own virus scan). If that becomes a concern, count composer
+recipients against the same `SendQuota.shared` budget and score the built
+message with `RspamdAnalyzer` before queueing.
+
 ## If the composer ever grows rich-text/HTML sending (noted 2026-08-06)
 
 The web composer is immune to the email-HTML-injection class today only

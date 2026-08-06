@@ -91,12 +91,25 @@ servers:
         SMTP_CLAMAV_ADDR: mail_on_rails-clamav:3310
 
         # rspamd accessory (see accessories below), reached by container name
-        # over the kamal docker network. The mailroom POSTs each inbound
-        # message here to compute SPF/DKIM/DMARC (+ a spam action) from the
-        # edge-stamped connection facts - rspamd is the verdict authority
-        # for filing; the SMTP server's own SPF/DKIM/DMARC stack is a
-        # connection-time gate. Unset to disable app-side sender-auth.
+        # over the kamal docker network. Two consumers: the mailroom POSTs
+        # each inbound message here to compute SPF/DKIM/DMARC (+ a spam
+        # action) from the edge-stamped connection facts - rspamd is the
+        # verdict authority for filing; the SMTP server's own
+        # SPF/DKIM/DMARC stack is a connection-time gate - and the SMTP
+        # server scores authenticated submissions at DATA, refusing
+        # rspamd's "reject"/"soft reject" actions (the tripwire for a
+        # compromised account pumping spam; fails open when rspamd is
+        # down). Unset to disable both.
         SMTP_RSPAMD_ADDR: mail_on_rails-rspamd:11333
+
+        # Per-account outbound quota: recipients accepted from an
+        # authenticated sender per sliding window (seconds), answered with
+        # a retryable 452 once exhausted. Bounds what a stolen password is
+        # worth to a botnet - per-IP limits never see one credential
+        # worked from many IPs. Defaults shown; SMTP_SEND_QUOTA: 0
+        # disables.
+        # SMTP_SEND_QUOTA: 200
+        # SMTP_SEND_QUOTA_WINDOW: 3600
 
         # Set number of processes dedicated to Solid Queue (default: 1)
         # JOB_CONCURRENCY: 3

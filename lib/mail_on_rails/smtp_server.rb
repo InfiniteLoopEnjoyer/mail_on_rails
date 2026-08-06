@@ -7,6 +7,8 @@ require "mail_on_rails/smtp/session_helpers"
 require "mail_on_rails/smtp/sender_auth"
 require "mail_on_rails/smtp/dnsbl"
 require "mail_on_rails/smtp/clamav_client"
+require "mail_on_rails/smtp/send_quota"
+require "mail_on_rails/rspamd_analyzer"
 
 module MailOnRails
   # SMTP server (RFC 5321 subset), run on a thread by Smtp::Daemon -
@@ -43,7 +45,10 @@ module MailOnRails
     # AuthThrottle): concurrent-connection cap per peer IP, and a lockout
     # after repeated failed AUTHs (which otherwise cost the host app an HTTP
     # credential check each, MAX_AUTH_ATTEMPTS per connection, fresh on
-    # every reconnect). 0 disables either.
+    # every reconnect). 0 disables either. The per-ACCOUNT budget for
+    # authenticated senders lives session-side instead (Smtp::SendQuota,
+    # consumed at RCPT) - the abuse it bounds, one stolen credential worked
+    # from many IPs, is invisible to everything keyed by peer address.
     MAX_CONNECTIONS_PER_IP = Smtp::Config.int("SMTP_MAX_CONN_PER_IP", 10)
     AUTH_LOCKOUT_FAILURES = Smtp::Config.int("SMTP_AUTH_LOCKOUT_FAILURES", 10)
     AUTH_LOCKOUT_SECONDS = Smtp::Config.int("SMTP_AUTH_LOCKOUT_SECONDS", 900, min: 1)
@@ -457,6 +462,15 @@ module MailOnRails
           return reply 550, "5.7.1 Relaying denied"
         end
 
+        # The per-account send quota, consumed per accepted recipient. The
+        # per-IP limits upstream never see one stolen credential worked
+        # from many botnet IPs; this does. Tempfail (not 5xx) so a
+        # legitimate client that merely burst retries later.
+        if @authenticated_as && !consume_send_quota
+          @store.log(:warn, "SMTP recipient refused for #{@authenticated_as}: send quota exhausted (#{peer_ip})")
+          return reply 452, "4.7.1 Sending quota exceeded, try again later"
+        end
+
         @rcpt_to << recipient
         reply 250, "OK"
       end
@@ -587,6 +601,28 @@ module MailOnRails
           return
         end
 
+        # Outbound spam gate for authenticated senders - the only content
+        # check that path gets (the mailroom's rspamd pass deliberately
+        # skips authenticated mail as trusted), and the tripwire for a
+        # compromised account pumping phishing text that clamav has no
+        # signature for. Only rspamd's own refusal actions refuse here;
+        # milder verdicts pass, and an unreachable rspamd fails open
+        # (contrast clamav's fail-closed 451): spam scoring is advisory,
+        # and blocking every outbound message on a scorer outage punishes
+        # the user, not the bot.
+        spam = @authenticated_as ? submission_spam_verdict(body) : nil
+        if spam&.reject? || spam&.soft_reject?
+          @store.log(:warn, "SMTP refused submission from #{@authenticated_as}: rspamd action=#{spam.action} " \
+                            "score=#{spam.score}/#{spam.required_score} (#{peer_ip})")
+          if spam.reject?
+            reply 550, "5.7.1 Message rejected as spam"
+          else
+            reply 451, "4.7.1 Message deferred by content filter, try again later"
+          end
+          reset
+          return
+        end
+
         result = @store.smtp_store(@mail_from, @rcpt_to, body, @authenticated_as,
                                    client_ip: peer_ip, helo: @helo_name,
                                    auth_results: auth_results, scan_status: scan && "clean")
@@ -654,6 +690,40 @@ module MailOnRails
 
         timeout = @spec[:clamav_timeout] || Smtp::ClamavClient::TIMEOUT
         Smtp::ClamavClient.new(addr: addr, timeout: timeout).scan(body)
+      end
+
+      # One recipient slot from the authenticated account's send quota;
+      # true when consumed (or no quota is active). spec[:send_quota] is
+      # the test seam - an instance overrides, nil disables - else the
+      # process-wide default built from load-time env.
+      def consume_send_quota
+        quota = @spec.fetch(:send_quota) { Smtp::SendQuota.shared }
+        return true unless quota
+
+        quota.consume(@authenticated_as)
+      end
+
+      # rspamd's verdict for an authenticated submission, nil when rspamd
+      # is not configured. Per-listener spec keys override the env-derived
+      # defaults, mirroring clamav_addr - and doubling as the test seam.
+      # The authenticated user is forwarded so rspamd applies its
+      # authenticated-sender policy; transport failure comes back as an
+      # :unavailable Result (never raises), which the caller passes.
+      def submission_spam_verdict(body)
+        addr = @spec.fetch(:rspamd_addr) { RspamdAnalyzer.addr }.to_s
+        return nil if addr.empty?
+
+        timeout = @spec[:rspamd_timeout] || RspamdAnalyzer.timeout
+        verdict = RspamdAnalyzer.analyze(body, addr: addr, timeout: timeout,
+                                         ip: peer_ip, helo: @helo_name, mail_from: @mail_from,
+                                         rcpt: @rcpt_to.first, authenticated_as: @authenticated_as)
+        if verdict.unavailable?
+          @store.log(:warn, "SMTP submission from #{@authenticated_as} accepted unscored: rspamd unavailable (#{peer_ip})")
+        else
+          @store.log(:info, "SMTP rspamd action=#{verdict.action} score=#{verdict.score} " \
+                            "for submission from #{@authenticated_as} (#{peer_ip})")
+        end
+        verdict
       end
 
       def recipient_summary

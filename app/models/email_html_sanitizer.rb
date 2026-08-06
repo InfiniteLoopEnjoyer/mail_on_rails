@@ -165,8 +165,8 @@ class EmailHtmlSanitizer
 
       @deceptive_links += 1
       marker = Nokogiri::XML::Node.new("span", body.document)
-      marker["style"] = "color:#b91c1c;font-weight:bold;"
-      marker.content = " [actually links to #{actual || link["href"]}]"
+      marker["style"] = "color:#b91c1c;font-weight:bold;overflow-wrap:anywhere;"
+      marker.content = " [actually links to #{link["href"].truncate(200)}]"
       link.add_next_sibling(marker)
     end
   end

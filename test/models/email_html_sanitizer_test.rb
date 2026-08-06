@@ -135,21 +135,31 @@ class EmailHtmlSanitizerTest < ActiveSupport::TestCase
 
     assert_equal 1, result.deceptive_links
     assert_includes result.html, ">https://innocent.website.com</a>"
-    assert_includes result.html, "[actually links to evil.guy.com]"
+    assert_includes result.html, "[actually links to https://evil.guy.com/some_path?some_param=poo]"
   end
 
   test "bare-domain link text is held to the same claim" do
     result = sanitize('<a href="https://evil.test/login">paypal.com/security</a>')
 
     assert_equal 1, result.deceptive_links
-    assert_includes result.html, "[actually links to evil.test]"
+    assert_includes result.html, "[actually links to https://evil.test/login]"
   end
 
   test "an @ in the link text cannot smuggle a matching host past the check" do
     result = sanitize('<a href="https://evil.test/x">https://innocent.test@evil.test</a>')
 
     assert_equal 1, result.deceptive_links
-    assert_includes result.html, "[actually links to evil.test]"
+    assert_includes result.html, "[actually links to https://evil.test/x]"
+  end
+
+  test "very long deceptive URLs are truncated in the marker" do
+    href = "https://evil.test/#{"a" * 300}"
+    result = sanitize(%(<a href="#{href}">https://innocent.test</a>))
+
+    assert_equal 1, result.deceptive_links
+    marker = Nokogiri::HTML5.fragment(result.html).css("span").first.text
+    assert marker.end_with?("...]")
+    assert_operator marker.length, :<=, 225
   end
 
   test "matching, www-variant, and same-site subdomain links stay unmarked" do

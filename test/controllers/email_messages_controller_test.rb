@@ -541,7 +541,7 @@ class EmailMessagesControllerTest < ActionDispatch::IntegrationTest
     show(message)
 
     assert_select "article strong", text: /Deceptive links/
-    assert_includes iframe_srcdoc, "[actually links to evil.test]"
+    assert_includes iframe_srcdoc, "[actually links to https://evil.test/login]"
 
     show(EmailMessage.deliver_raw(@account.inbox, HTML_RAW))
     assert_select "article strong", text: /Deceptive links/, count: 0
