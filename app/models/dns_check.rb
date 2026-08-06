@@ -15,8 +15,13 @@ class DnsCheck
   Check = Struct.new(:record, :status, :found, :note, keyword_init: true)
 
   # Thin Resolv wrapper: nil on DNS failure (=> :unknown), lists otherwise.
+  # Queries public resolvers directly rather than the system resolver: the
+  # page promises "checked live against public DNS", and infrastructure
+  # resolvers (e.g. a cloud host's internal DNS) have served stale negative
+  # answers for freshly published records.
   class Resolver
     TIMEOUT = 3
+    NAMESERVERS = ENV.fetch("MAIL_ON_RAILS_DNS_CHECK_NAMESERVERS", "1.1.1.1,8.8.8.8").split(",").map(&:strip)
 
     def txt(name)
       query { |dns| dns.getresources(name, Resolv::DNS::Resource::IN::TXT).map { |r| r.strings.join } }
@@ -29,7 +34,7 @@ class DnsCheck
     private
 
     def query
-      Resolv::DNS.open do |dns|
+      Resolv::DNS.open(nameserver: NAMESERVERS) do |dns|
         dns.timeouts = TIMEOUT
         yield dns
       end
