@@ -81,6 +81,7 @@ Rails.application.routes.draw do
   resources :domains, only: %i[index new create show destroy] do
     member do
       post :publish_dns
+      post :recheck_dns
     end
   end
 

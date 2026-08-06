@@ -1,5 +1,5 @@
 class DomainsController < ApplicationController
-  before_action :set_domain, only: %i[show destroy publish_dns]
+  before_action :set_domain, only: %i[show destroy publish_dns recheck_dns]
 
   def index
     @domains = Domain.order(:name)
@@ -39,6 +39,11 @@ class DomainsController < ApplicationController
     redirect_to @domain, notice: notice
   rescue CloudflareDns::Error => e
     redirect_to @domain, alert: "Cloudflare publish failed: #{e.message}"
+  end
+
+  # Explicit recheck button; show itself re-runs the live check on render.
+  def recheck_dns
+    redirect_to @domain, notice: "DNS rechecked against public DNS."
   end
 
   def destroy

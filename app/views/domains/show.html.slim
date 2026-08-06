@@ -9,6 +9,7 @@ nav.mb-2.text-sm.text-slate-500.dark:text-slate-400
 header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
   h1.text-2xl.font-bold= @domain.name
   .flex.items-center.gap-2
+    = button_to "Recheck DNS", recheck_dns_domain_path(@domain), class: "inline-block cursor-pointer rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3.5 py-1 text-sm font-medium text-slate-700 dark:text-slate-300"
     - if CloudflareDns.enabled?
       = button_to "Publish DNS to Cloudflare", publish_dns_domain_path(@domain), class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white", form: { data: { turbo_confirm: "Create #{@domain.name}'s missing DNS records in Cloudflare? Existing MX/SPF/DMARC records are never overwritten; only a mismatched DKIM TXT is updated." } }
     = button_to "Delete", domain_path(@domain), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 dark:border-red-900 bg-white dark:bg-slate-900 px-3.5 py-1 text-sm font-medium text-red-700 dark:text-red-400", form: { data: { turbo_confirm: "Remove #{@domain.name}? Inbound mail for it is immediately refused and outbound mail stops being DKIM-signed." } }
