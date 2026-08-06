@@ -3,10 +3,19 @@ class EmailAccountsController < ApplicationController
 
   def index
     domain_names = Domain.pluck(:name).to_set
-    @dmarc_accounts, @email_accounts = EmailAccount.order(:email).includes(:mailboxes).partition do |account|
+    groups = EmailAccount.order(:email).includes(:mailboxes).group_by do |account|
       local, _, domain = account.email.partition("@")
-      local == Domain::DMARC_LOCAL_PART && domain_names.include?(domain)
+      if domain_names.include?(domain) && local == Domain::DMARC_LOCAL_PART
+        :dmarc
+      elsif domain_names.include?(domain) && local == Domain::TLS_RPT_LOCAL_PART
+        :tls_rpt
+      else
+        :regular
+      end
     end
+    @dmarc_accounts = groups.fetch(:dmarc, [])
+    @tls_rpt_accounts = groups.fetch(:tls_rpt, [])
+    @email_accounts = groups.fetch(:regular, [])
     @email_accounts.sort_by! { |account| local, _, domain = account.email.partition("@"); [ domain, local ] }
     @unseen_counts = EmailMessage.joins(:mailbox)
                                  .where.not("flags LIKE ?", "%Seen%")
