@@ -11,11 +11,14 @@ header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
       li.mb-2.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900
         = link_to domain_path(domain), class: "flex items-baseline gap-3 px-4 py-3" do
           span.primary.font-semibold= domain.name
-          .ml-auto.flex.gap-2
-            - if domain.dkim_private_key.present?
-              span.rounded-full.bg-green-100.dark:bg-green-950.px-2.text-xs.whitespace-nowrap.text-green-700.dark:text-green-400 DKIM key
-            - else
-              span.rounded-full.bg-yellow-100.dark:bg-yellow-950.px-2.text-xs.whitespace-nowrap.text-yellow-700.dark:text-yellow-400 no DKIM key
+          / MX/SPF/DKIM/DMARC from the cached DnsCheck results (refreshed
+          / hourly and on each domain-page view) - no live DNS on this page.
+          - if (checks = domain.cached_dns_checks).any?
+            .ml-auto.flex.gap-2 title="DNS checked #{time_ago_in_words(domain.dns_checked_at)} ago"
+              = render "dns_pills", checks: checks
+          - else
+            .ml-auto.flex.gap-2
+              span.rounded-full.bg-slate-100.dark:bg-slate-800.px-2.text-xs.whitespace-nowrap.text-slate-400.dark:text-slate-500 DNS not checked yet
 - else
   p.text-slate-500.dark:text-slate-400
     ' No domains yet. Add the domains you host mail for - the mail server

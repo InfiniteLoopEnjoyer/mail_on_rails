@@ -78,6 +78,22 @@ module ApplicationHelper
     "#{icon} #{mechanism.upcase} #{(verdict || "none").capitalize}"
   end
 
+  # Pill classes/icon for a DnsCheck status on the domains index. Same
+  # palette as auth_badge_classes; :warn/:unknown diverge (amber "verify
+  # yourself" vs slate "couldn't tell").
+  def dns_pill_classes(status)
+    case status
+    when :pass then "bg-green-100 dark:bg-green-950 text-green-700 dark:text-green-400"
+    when :warn then "bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-400"
+    when :fail then "bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-400"
+    else            "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+    end
+  end
+
+  def dns_pill_icon(status)
+    { pass: "✓", warn: "⚠", fail: "✗" }.fetch(status, "?")
+  end
+
   # Human labels for IMAP flags on the message page ("\Seen" reads like a
   # protocol dump). Standard system flags and the common client keywords
   # get proper names; anything else shows minus its \ or $ sigil. The raw

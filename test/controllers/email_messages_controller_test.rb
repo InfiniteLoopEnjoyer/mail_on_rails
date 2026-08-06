@@ -532,4 +532,18 @@ class EmailMessagesControllerTest < ActionDispatch::IntegrationTest
     assert_includes iframe_srcdoc, "https://tracker.test/p.png"
     assert_select "a", text: "Load remote images", count: 0
   end
+
+  test "a link disguising its destination gets a warning banner and an inline marker" do
+    raw = "From: sender@remote.test\r\nTo: carol@example.com\r\nSubject: urgent\r\n" \
+          "Content-Type: text/html; charset=UTF-8\r\n\r\n" \
+          '<a href="https://evil.test/login">https://innocent.test</a>' + "\r\n"
+    message = EmailMessage.deliver_raw(@account.inbox, raw)
+    show(message)
+
+    assert_select "article strong", text: /Deceptive links/
+    assert_includes iframe_srcdoc, "[actually links to evil.test]"
+
+    show(EmailMessage.deliver_raw(@account.inbox, HTML_RAW))
+    assert_select "article strong", text: /Deceptive links/, count: 0
+  end
 end

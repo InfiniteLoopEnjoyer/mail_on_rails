@@ -42,6 +42,15 @@ class DnsCheck
     new(domain, resolver)
   end
 
+  # Run the live checks and persist them onto the domain row - the cache
+  # behind the index pills (Domain#cached_dns_checks). Refreshed hourly
+  # for every domain by DnsCheckRefreshJob, and by each domain-page view.
+  def self.refresh!(domain, resolver: Resolver.new)
+    dns = new(domain, resolver)
+    domain.update!(dns_checks: dns.checks.map(&:to_h), dns_checked_at: Time.current)
+    dns
+  end
+
   attr_reader :checks
 
   def initialize(domain, resolver)

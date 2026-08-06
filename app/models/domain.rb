@@ -31,6 +31,9 @@ class Domain < ApplicationRecord
 
   before_create :generate_dkim_key
   after_create_commit :ensure_dmarc_account!
+  # Fill the DNS pill cache without waiting for the hourly refresh (the
+  # records won't exist yet, but "all red" beats "not checked").
+  after_create_commit -> { DnsCheckRefreshJob.perform_later(self) }
 
   def self.dmarc_ingestion_address?(email)
     local, _, domain_name = email.to_s.partition("@")
@@ -55,6 +58,15 @@ class Domain < ApplicationRecord
 
   def dmarc_address
     "#{DMARC_LOCAL_PART}@#{name}"
+  end
+
+  # The cached DnsCheck results (jsonb; see DnsCheck.refresh! for when it
+  # refreshes), rehydrated into Check structs for the index pills. Empty
+  # until the first check runs.
+  def cached_dns_checks
+    Array(dns_checks).map do |c|
+      DnsCheck::Check.new(record: c["record"], status: c["status"].to_sym, found: c["found"], note: c["note"])
+    end
   end
 
   # The reports account. Auto-created on domain creation with a random

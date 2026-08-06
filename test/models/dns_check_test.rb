@@ -72,6 +72,18 @@ class DnsCheckTest < ActiveSupport::TestCase
     assert_equal :fail, run_checks["DMARC"].status # and absent => fail, no record
   end
 
+  test "refresh! persists the checks as the domain's cached pills" do
+    DnsCheck.refresh!(@domain, resolver: FakeResolver.new({ "example.com" => [ "v=spf1 mx -all" ] },
+                                                          { "example.com" => [ [ 10, "mail.host.test" ] ] }))
+    @domain.reload
+    assert @domain.dns_checked_at.present?
+    cached = @domain.cached_dns_checks.index_by(&:record)
+    assert_equal :pass, cached["MX"].status
+    assert_equal :pass, cached["SPF"].status
+    assert_equal :fail, cached["DMARC"].status
+    assert_includes cached["DMARC"].note, "no _dmarc record"
+  end
+
   test "DNS failures surface as unknown, not fail" do
     failing = Struct.new(:x) do
       def txt(_name) = nil

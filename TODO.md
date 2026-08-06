@@ -1,4 +1,19 @@
 # TODO
+## If the composer ever grows rich-text/HTML sending (noted 2026-08-06)
+
+The web composer is immune to the email-HTML-injection class today only
+because it sends text/plain exclusively (`ComposedEmail#build_raw` sets a
+bare `mail.body`, no HTML part is ever assembled from user input). Adding
+rich-text sending makes that class live:
+
+- Build the HTML part with a templating layer or an editor that emits
+  constrained markup - never by concatenating user strings.
+- Run the outbound HTML through `EmailHtmlSanitizer` as well,
+  belt-and-suspenders on our own output.
+- Keep relying on the Mail gem for header encoding (verified 2026-08-06:
+  CRLF in subject/display name serializes as =0D=0A, no header injection),
+  and keep the whitespace-rejecting recipient validation.
+
 ## HTML mail rendering follow-up (2026-08-06)
 
 - **Sanitize `<style>` blocks instead of dropping them** —

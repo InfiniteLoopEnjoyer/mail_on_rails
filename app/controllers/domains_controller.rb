@@ -6,7 +6,9 @@ class DomainsController < ApplicationController
   end
 
   def show
-    @dns = DnsCheck.for(@domain)
+    # refresh! rather than for: the live check doubles as a write-through
+    # refresh of the index-pill cache.
+    @dns = DnsCheck.refresh!(@domain)
     @dmarc_stats = DmarcReport.stats(@domain)
     @dmarc_advice = @domain.dmarc_advice(@dmarc_stats, @dns.dmarc_record)
   end

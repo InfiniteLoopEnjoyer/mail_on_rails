@@ -130,6 +130,50 @@ class EmailHtmlSanitizerTest < ActiveSupport::TestCase
     assert_not_includes result.html, "data:text/html"
   end
 
+  test "a link whose text claims a different host gets the real destination stamped on it" do
+    result = sanitize('<a href="https://evil.guy.com/some_path?some_param=poo">https://innocent.website.com</a>')
+
+    assert_equal 1, result.deceptive_links
+    assert_includes result.html, ">https://innocent.website.com</a>"
+    assert_includes result.html, "[actually links to evil.guy.com]"
+  end
+
+  test "bare-domain link text is held to the same claim" do
+    result = sanitize('<a href="https://evil.test/login">paypal.com/security</a>')
+
+    assert_equal 1, result.deceptive_links
+    assert_includes result.html, "[actually links to evil.test]"
+  end
+
+  test "an @ in the link text cannot smuggle a matching host past the check" do
+    result = sanitize('<a href="https://evil.test/x">https://innocent.test@evil.test</a>')
+
+    assert_equal 1, result.deceptive_links
+    assert_includes result.html, "[actually links to evil.test]"
+  end
+
+  test "matching, www-variant, and same-site subdomain links stay unmarked" do
+    html = '<a href="https://example.test/page">https://example.test/page</a>' \
+           '<a href="https://www.example.test/">example.test</a>' \
+           '<a href="https://click.example.test/track?u=1">https://example.test/article</a>'
+    result = sanitize(html)
+
+    assert_equal 0, result.deceptive_links
+    assert_not_includes result.html, "actually links to"
+  end
+
+  test "non-URL link text makes no claim to check" do
+    result = sanitize('<a href="https://anywhere.test/x">Click here to view your document</a>')
+
+    assert_equal 0, result.deceptive_links
+  end
+
+  test "mailto links are not checked for host claims" do
+    result = sanitize('<a href="mailto:bob@example.test">https://example.test</a>')
+
+    assert_equal 0, result.deceptive_links
+  end
+
   test "a full document is reduced to its body content" do
     html = "<html><head><title>t</title><style>p{color:blue}</style></head><body><p>content</p></body></html>"
     result = sanitize(html)

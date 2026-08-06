@@ -47,6 +47,13 @@ production:
     command: "ClosedConnection.prune!"
     schedule: every day at 4:43am
 
+  # Refresh the cached MX/SPF/DKIM/DMARC statuses behind the domains
+  # index pills (Domain#dns_checks). The domain page still checks live on
+  # every view and writes through to the same cache.
+  refresh_dns_checks:
+    class: DnsCheckRefreshJob
+    schedule: every hour at minute 52
+
   # Keep the imported Spamhaus DROP netblocks (BannedIp) current; manual
   # bans are untouched.
   refresh_spamhaus_drop:

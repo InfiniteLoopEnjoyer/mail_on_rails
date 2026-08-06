@@ -12,13 +12,15 @@ require "base64"
 #   - allowlisted attributes survive; inline style is scrubbed through
 #     Loofah's CSS safelist (kills url(), expression(), position, behavior)
 #   - links keep only absolute http/https/mailto/tel targets and always open
-#     in a new tab
+#     in a new tab; a link whose visible text reads like a URL on a different
+#     host than its href gets the real destination stamped next to it (the
+#     classic phishing tell: text says innocent.example, href says otherwise)
 #   - cid: images are inlined as data: URIs from the message's own parts (no
 #     extra requests, works inside the opaque-origin iframe); remote images
 #     are swapped for a transparent pixel unless the reader opted in, since
 #     loading them tells the sender when and where the mail was read
 class EmailHtmlSanitizer
-  Result = Data.define(:html, :remote_images)
+  Result = Data.define(:html, :remote_images, :deceptive_links)
   InlineImage = Data.define(:content_type, :data)
 
   ALLOWED_TAGS = %w[
@@ -59,14 +61,16 @@ class EmailHtmlSanitizer
     @inline_images = inline_images
     @allow_remote_images = allow_remote_images
     @remote_images = 0
+    @deceptive_links = 0
   end
 
   def sanitize(html)
     body = Loofah.html5_document(html.to_s).at_xpath("//body")
-    return Result.new(html: "", remote_images: 0) unless body
+    return Result.new(html: "", remote_images: 0, deceptive_links: 0) unless body
 
     scrub(body)
-    Result.new(html: body.inner_html, remote_images: @remote_images)
+    expose_deceptive_links(body)
+    Result.new(html: body.inner_html, remote_images: @remote_images, deceptive_links: @deceptive_links)
   end
 
   private
@@ -144,5 +148,47 @@ class EmailHtmlSanitizer
 
   def data_uri(image)
     "data:#{image.content_type};base64,#{Base64.strict_encode64(image.data)}"
+  end
+
+  # A link whose visible text reads like a URL is a claim about where it
+  # goes; when the claimed host isn't the href's host (allowing www./
+  # subdomain variance, so newsletter click-tracking on the same site stays
+  # quiet), stamp the real destination right next to the text. Runs after
+  # scrubbing so the text judged is the text the reader will actually see.
+  def expose_deceptive_links(body)
+    body.css("a[href]").each do |link|
+      next unless link["href"].to_s.match?(/\Ahttps?:/i)
+
+      claimed = claimed_host(link.text)
+      actual = URI.parse(link["href"]).host rescue nil
+      next if claimed.nil? || hosts_match?(claimed, actual)
+
+      @deceptive_links += 1
+      marker = Nokogiri::XML::Node.new("span", body.document)
+      marker["style"] = "color:#b91c1c;font-weight:bold;"
+      marker.content = " [actually links to #{actual || link["href"]}]"
+      link.add_next_sibling(marker)
+    end
+  end
+
+  URL_LIKE_TEXT = %r{\A(?:https?://|www\.)\S+\z|\A[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:[/?#]\S*)?\z}i
+
+  # The host a reader would take the text to mean, nil when the text doesn't
+  # read as a URL at all. Everything up to the first path/query/port stops
+  # the host; anything from an @ on is cut because the eye reads what comes
+  # before it ("https://innocent.test@evil.test" claims innocent.test).
+  def claimed_host(text)
+    text = text.strip.sub(/[.,;:!)]+\z/, "")
+    return nil unless text.match?(URL_LIKE_TEXT)
+
+    text.sub(%r{\Ahttps?://}i, "")[%r{\A[^/?\#:@]+}]&.downcase
+  end
+
+  def hosts_match?(claimed, actual)
+    return false if actual.nil?
+
+    claimed = claimed.delete_prefix("www.")
+    actual = actual.downcase.delete_prefix("www.")
+    claimed == actual || actual.end_with?(".#{claimed}") || claimed.end_with?(".#{actual}")
   end
 end
