@@ -61,6 +61,30 @@ module ApplicationHelper
     "#{icon} #{mechanism.upcase} #{(verdict || "none").capitalize}"
   end
 
+  # Human labels for IMAP flags on the message page ("\Seen" reads like a
+  # protocol dump). Standard system flags and the common client keywords
+  # get proper names; anything else shows minus its \ or $ sigil. The raw
+  # flag stays in the pill's title.
+  FLAG_LABELS = {
+    "\\Seen" => "Read", "\\Answered" => "Replied", "\\Flagged" => "★ Flagged",
+    "\\Deleted" => "Deleted", "\\Draft" => "Draft", "\\Recent" => "Recent",
+    "$Forwarded" => "Forwarded", "$Junk" => "Junk", "$NotJunk" => "Not junk"
+  }.freeze
+
+  def flag_pill_label(flag)
+    FLAG_LABELS.fetch(flag) { flag.delete_prefix("\\").delete_prefix("$") }
+  end
+
+  # Same pill palette as the other badges: amber for the attention-seeker,
+  # red for the doomed, neutral slate for the rest.
+  def flag_pill_classes(flag)
+    case flag
+    when "\\Flagged"          then "bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-400"
+    when "\\Deleted", "$Junk" then "bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-400"
+    else                           "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+    end
+  end
+
   # rspamd score for the footer: "score / threshold — action", degrading to
   # just the score when the threshold or action weren't recorded.
   def spam_score_label(message)
