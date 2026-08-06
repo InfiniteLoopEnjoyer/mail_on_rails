@@ -1,0 +1,147 @@
+require "test_helper"
+
+# The sanitizer is the first layer of the HTML-mail defense (the sandboxed
+# iframe in the view is the second), so these tests pin the classic webmail
+# attack payloads: script injection in its many syntactic disguises, CSS
+# tricks, and image sources that would leak or execute.
+class EmailHtmlSanitizerTest < ActiveSupport::TestCase
+  def sanitize(html, **options)
+    EmailHtmlSanitizer.sanitize(html, **options)
+  end
+
+  test "keeps formatting markup" do
+    result = sanitize("<p>Hello <b>world</b></p><table><tr><td bgcolor=\"#eee\" width=\"100\">cell</td></tr></table>")
+
+    assert_includes result.html, "<b>world</b>"
+    assert_includes result.html, '<td bgcolor="#eee" width="100">cell</td>'
+  end
+
+  test "prunes script elements with their contents" do
+    result = sanitize("<p>hi</p><script>alert(1)</script>")
+
+    assert_includes result.html, "<p>hi</p>"
+    assert_not_includes result.html, "alert"
+  end
+
+  test "prunes svg, forms, frames, and metadata elements" do
+    html = "<svg><script>alert(1)</script></svg>" \
+           '<form action="https://evil.test"><input name="password"></form>' \
+           '<iframe src="https://evil.test"></iframe>' \
+           '<base href="https://evil.test/">' \
+           "<p>survivor</p>"
+    result = sanitize(html)
+
+    assert_equal "<p>survivor</p>", result.html
+  end
+
+  test "drops style elements but keeps scrubbed inline styles" do
+    html = "<style>body { background: url(https://evil.test/x) }</style>" \
+           '<div style="color: red; position: fixed; background-image: url(https://t.test/p); width: expression(alert(1))">x</div>'
+    result = sanitize(html)
+
+    assert_not_includes result.html, "evil.test"
+    assert_not_includes result.html, "position"
+    assert_not_includes result.html, "url("
+    assert_not_includes result.html, "expression"
+    assert_includes result.html, 'style="color:red;"'
+  end
+
+  test "unwraps unknown tags keeping their text" do
+    result = sanitize("<blink>deal <marquee>expires</marquee> soon</blink>")
+
+    assert_equal "deal expires soon", result.html
+  end
+
+  test "removes comments" do
+    result = sanitize("<p>a</p><!-- if lt IE 9 --><p>b</p>")
+
+    assert_not_includes result.html, "IE 9"
+  end
+
+  test "strips event handler attributes" do
+    result = sanitize('<img src="https://x.test/a.png" onerror="alert(1)" onload="alert(2)">')
+
+    assert_not_includes result.html, "onerror"
+    assert_not_includes result.html, "onload"
+  end
+
+  test "links keep http/https/mailto and open in a new tab" do
+    result = sanitize('<a href="https://example.test/x">a</a><a href="mailto:bob@example.test">b</a>')
+
+    assert_select_html result.html, 'a[href="https://example.test/x"][target="_blank"][rel="noopener noreferrer"]'
+    assert_select_html result.html, 'a[href="mailto:bob@example.test"]'
+  end
+
+  test "javascript and relative hrefs are removed, obfuscated or not" do
+    html = '<a href="javascript:alert(1)">a</a>' \
+           "<a href=\" jAvAsCrIpT:alert(1)\">b</a>" \
+           "<a href=\"java\nscript:alert(1)\">c</a>" \
+           '<a href="/accounts">d</a>' \
+           '<a href="data:text/html,<script>alert(1)</script>">e</a>'
+    result = sanitize(html)
+
+    assert_not_includes result.html, "href"
+    assert_not_includes result.html, "script"
+  end
+
+  test "remote images are replaced with a placeholder and counted" do
+    result = sanitize('<img src="https://tracker.test/pixel.png" width="1">')
+
+    assert_equal 1, result.remote_images
+    assert_not_includes result.html, "tracker.test"
+    assert_includes result.html, EmailHtmlSanitizer::BLOCKED_PIXEL
+    assert_includes result.html, 'width="1"'
+  end
+
+  test "remote images load when the reader opted in" do
+    result = sanitize('<img src="https://cdn.test/logo.png">', allow_remote_images: true)
+
+    assert_equal 1, result.remote_images
+    assert_includes result.html, "https://cdn.test/logo.png"
+  end
+
+  test "scheme-relative image URLs count as remote" do
+    result = sanitize('<img src="//tracker.test/pixel.png">')
+
+    assert_equal 1, result.remote_images
+    assert_not_includes result.html, "tracker.test"
+  end
+
+  test "cid images are inlined as data URIs from the message's own parts" do
+    images = { "pic1" => EmailHtmlSanitizer::InlineImage.new(content_type: "image/png", data: "PNGBYTES") }
+    result = sanitize('<img src="cid:pic1" alt="chart">', inline_images: images)
+
+    assert_includes result.html, "data:image/png;base64,#{Base64.strict_encode64("PNGBYTES")}"
+    assert_equal 0, result.remote_images
+  end
+
+  test "cid images without a matching part are dropped" do
+    result = sanitize('<p>x</p><img src="cid:missing">')
+
+    assert_equal "<p>x</p>", result.html
+  end
+
+  test "data URIs survive only for image types" do
+    html = '<img src="data:image/gif;base64,R0lGODlhAQABAA==">' \
+           '<img src="data:text/html;base64,PHNjcmlwdD4=">'
+    result = sanitize(html)
+
+    assert_includes result.html, "data:image/gif"
+    assert_not_includes result.html, "data:text/html"
+  end
+
+  test "a full document is reduced to its body content" do
+    html = "<html><head><title>t</title><style>p{color:blue}</style></head><body><p>content</p></body></html>"
+    result = sanitize(html)
+
+    assert_equal "<p>content</p>", result.html
+  end
+
+  private
+
+  # assert_select against a detached fragment.
+  def assert_select_html(html, selector)
+    assert_not_empty Nokogiri::HTML5.fragment(html).css(selector),
+                     "expected #{selector.inspect} in #{html.inspect}"
+  end
+end

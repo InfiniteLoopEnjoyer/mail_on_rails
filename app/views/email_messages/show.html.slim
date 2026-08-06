@@ -64,7 +64,28 @@ article.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:b
         - else
           | -
 
-  pre.border-t.border-slate-200.dark:border-slate-800.pt-4.font-sans.break-words.whitespace-pre-wrap= @email_message.text_body
+  - if @html
+    .border-t.border-slate-200.dark:border-slate-800.pt-4
+      - if @html.remote_images.positive? && !@remote_images_allowed
+        .mb-3.flex.flex-wrap.items-center.gap-x-3.gap-y-1.rounded-md.bg-slate-100.dark:bg-slate-800.px-3.py-2.text-sm.text-slate-600.dark:text-slate-300
+          span Remote images are blocked for your privacy - loading them tells the sender you read this.
+          = link_to "Load remote images", email_account_mailbox_email_message_path(@email_account, @mailbox, @email_message, images: 1), class: "font-medium text-accent"
+      / Untrusted markup only ever renders in here. The sandbox (no scripts,
+      / no same-origin) contains anything the sanitizer might have missed;
+      / popups are allowed solely so links can open in a fresh, unsandboxed tab.
+      iframe.w-full.rounded-md.border.border-slate-200.dark:border-slate-800.bg-white[
+        sandbox="allow-popups allow-popups-to-escape-sandbox"
+        srcdoc=email_html_document(@html.html)
+        title="Message content"
+        style="height: 65vh; resize: vertical"
+      ]
+      .mt-1.text-right
+        = link_to "View plain text", email_account_mailbox_email_message_path(@email_account, @mailbox, @email_message, view: "text"), class: "text-xs text-slate-500 dark:text-slate-400 hover:text-accent"
+  - else
+    pre.border-t.border-slate-200.dark:border-slate-800.pt-4.font-sans.break-words.whitespace-pre-wrap= @email_message.text_body
+    - if @plain_view && @email_message.html_part?
+      .mt-1.text-right
+        = link_to "View HTML", email_account_mailbox_email_message_path(@email_account, @mailbox, @email_message), class: "text-xs text-slate-500 dark:text-slate-400 hover:text-accent"
 
   - if @email_message.attachments.any?
     section.mt-4.border-t.border-slate-200.dark:border-slate-800.pt-3

@@ -11,6 +11,13 @@ class EmailMessagesController < ApplicationController
     # Replying to your own unsent draft is nonsense; that page offers to
     # carry on writing it instead (see the view).
     @draft = EmailDraft.reply_to(@email_message, account: @email_account) unless @email_message.draft?
+
+    # HTML rendering is opt-out (?view=text) and remote images are opt-in
+    # (?images=1) - both are per-visit URL state, so nothing sticky can keep
+    # a tracking pixel loading behind the reader's back.
+    @plain_view = params[:view] == "text"
+    @remote_images_allowed = params[:images] == "1"
+    @html = @email_message.html_body(allow_remote_images: @remote_images_allowed) unless @plain_view
   end
 
   def mark_read

@@ -1,4 +1,16 @@
 # TODO
+## HTML mail rendering follow-up (2026-08-06)
+
+- **Sanitize `<style>` blocks instead of dropping them** —
+  `EmailHtmlSanitizer` currently prunes `<style>` elements entirely, so
+  newsletters that rely on stylesheet rules (rather than inline styles)
+  render degraded. Follow-up: parse the stylesheet with Crass (already a
+  transitive dependency via Loofah), keep qualified rules whose
+  declarations pass `Loofah::HTML5::Scrub.scrub_css`, recurse into
+  `@media`, drop everything else (`@import`, `url()`, unknown at-rules),
+  and re-serialize from the Crass AST — never from the raw text. The
+  sandboxed iframe stays the second layer regardless.
+
 ## Supply-chain hardening follow-ups (2026-07-29)
 
 Deferred items from the Docker/Omdia supply-chain report review (CI for the

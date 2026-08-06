@@ -167,9 +167,7 @@ class EmailMessage < ApplicationRecord
     mail = parsed
     part = mail.text_part || (mail unless mail.multipart?)
     if part
-      body = part.body.decoded
-      charset = part.charset || "UTF-8"
-      body.force_encoding(charset).encode("UTF-8", invalid: :replace, undef: :replace)
+      decoded_utf8(part)
     else
       html = mail.html_part&.body&.decoded
       html ? html.gsub(/<[^>]+>/, " ").squish : ""
@@ -178,7 +176,55 @@ class EmailMessage < ApplicationRecord
     raw.to_s.split(/\r?\n\r?\n/, 2).last.to_s
   end
 
+  # Cheap "does an HTML rendering exist" check for the view toggle.
+  def html_part?
+    html_source.present?
+  rescue StandardError
+    false
+  end
+
+  # Sanitised HTML body for the web UI (nil when the message has no HTML
+  # part). Safety lives in EmailHtmlSanitizer plus the sandboxed iframe the
+  # view puts the result in; remote images stay blocked unless the reader
+  # asked for them on this visit.
+  def html_body(allow_remote_images: false)
+    part = html_source
+    return nil unless part
+
+    EmailHtmlSanitizer.sanitize(decoded_utf8(part),
+                                inline_images: inline_images,
+                                allow_remote_images: allow_remote_images)
+  rescue StandardError
+    nil
+  end
+
   private
+
+  def html_source
+    mail = parsed
+    mail.html_part || (mail if !mail.multipart? && mail.mime_type == "text/html")
+  end
+
+  # cid:-referenced images for html_body, keyed by bare Content-ID. Gated by
+  # the same vouching rule as attachment downloads: embedding an image part
+  # into the page is serving its bytes, so an unscanned or infected message
+  # renders with its inline images dead just like its attachment links.
+  def inline_images
+    return {} unless attachments_downloadable? && parsed.multipart?
+
+    parsed.all_parts.filter_map do |part|
+      next unless part.content_id.present? && part.mime_type.to_s.start_with?("image/")
+
+      cid = part.content_id.delete_prefix("<").delete_suffix(">")
+      [ cid, EmailHtmlSanitizer::InlineImage.new(content_type: part.mime_type, data: part.body.decoded) ]
+    end.to_h
+  end
+
+  def decoded_utf8(part)
+    body = part.body.decoded
+    charset = part.charset || "UTF-8"
+    body.force_encoding(charset).encode("UTF-8", invalid: :replace, undef: :replace)
+  end
 
   def authored_by_owner?
     authenticated_as.present? && authenticated_as.casecmp?(mailbox.email_account.email)
