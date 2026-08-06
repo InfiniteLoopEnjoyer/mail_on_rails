@@ -41,6 +41,17 @@ class Domain < ApplicationRecord
   # records won't exist yet, but "all red" beats "not checked").
   after_create_commit -> { DnsCheckRefreshJob.perform_later(self) }
 
+  # Live-refresh the domain page and index pills when check RESULTS change
+  # (subscribed via turbo_stream_from). Only on result changes: every show
+  # render runs a write-through DnsCheck.refresh! (touching
+  # dns_checked_at), so an unconditional broadcast would ping-pong
+  # refreshes between viewers.
+  after_update_commit -> { broadcast_refresh_later }, if: -> { saved_change_to_dns_checks? }
+  after_update_commit -> { broadcast_refresh_later_to :domains }, if: -> { saved_change_to_dns_checks? }
+  # Index also lists the domains themselves.
+  after_create_commit -> { broadcast_refresh_later_to :domains }
+  after_destroy_commit -> { broadcast_refresh_later_to :domains }
+
   def self.dmarc_ingestion_address?(email)
     local, _, domain_name = email.to_s.partition("@")
     local == DMARC_LOCAL_PART && exists?(name: domain_name)

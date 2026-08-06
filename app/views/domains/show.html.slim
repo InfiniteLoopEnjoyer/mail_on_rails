@@ -1,6 +1,8 @@
 - page_title "#{@domain.name}"
 - mail_host = ENV["SMTP_HELO_HOST"].presence || "<your mail host>"
 
+= turbo_stream_from @domain
+
 nav.mb-2.text-sm.text-slate-500.dark:text-slate-400
   =<> link_to "Domains", domains_path, class: "text-accent"
   | /
