@@ -120,7 +120,13 @@ servers:
 # Using an SSL proxy like this requires turning on config.assume_ssl and config.force_ssl in production.rb!
 proxy:
   ssl: true
-  host: www.example.com
+  # List every hosted domain's MTA-STS policy host (mta-sts.<domain>)
+  # alongside the web host: the Domains UI CNAMEs them here and the app
+  # serves /.well-known/mta-sts.txt, but kamal-proxy only obtains
+  # certificates for hosts named below.
+  hosts:
+    - www.example.com
+    - mta-sts.example.com
 
 # Give the containers time to boot: the web entrypoint runs db:prepare
 # before /up turns healthy.

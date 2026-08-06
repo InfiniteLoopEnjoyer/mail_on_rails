@@ -33,6 +33,10 @@ Rails.application.routes.draw do
   match "rails/action_mailbox/*path", via: :all,
     to: proc { [ 404, { "Content-Type" => "text/plain" }, [ "Not Found\n" ] ] }
 
+  # MTA-STS policy (RFC 8461), fetched by sending MTAs from the
+  # mta-sts.<domain> hosts DnsPublisher points at this app.
+  get ".well-known/mta-sts.txt" => "mta_sts#show"
+
   # Render dynamic PWA files from app/views/pwa/* (remember to link manifest in application.html.erb)
   # get "manifest" => "rails/pwa#manifest", as: :pwa_manifest
   # get "service-worker" => "rails/pwa#service_worker", as: :pwa_service_worker

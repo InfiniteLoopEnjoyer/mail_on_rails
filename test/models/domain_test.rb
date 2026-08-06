@@ -45,4 +45,11 @@ class DomainTest < ActiveSupport::TestCase
     assert EmailAccount.exists?(email: domain.dmarc_address)
     assert Domain.dmarc_ingestion_address?(domain.dmarc_address)
   end
+
+  test "create provisions the tls-rpt reports account" do
+    domain = Domain.create!(name: "example.com")
+
+    assert EmailAccount.exists?(email: domain.tls_rpt_address)
+    assert_not Domain.dmarc_ingestion_address?(domain.tls_rpt_address), "tls-rpt mail must not feed the DMARC parser"
+  end
 end

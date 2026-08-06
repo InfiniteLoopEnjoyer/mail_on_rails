@@ -20,6 +20,11 @@ class Domain < ApplicationRecord
   # triggers report ingestion for mail delivered to it.
   DMARC_LOCAL_PART = "dmarc"
 
+  # Local part of the auto-created account TLS-RPT failure reports are
+  # mailed to (the TLS-RPT rua= target). Kept for human review only -
+  # nothing parses these.
+  TLS_RPT_LOCAL_PART = "tls-rpt"
+
   DKIM_KEY_BITS = 2048
 
   has_many :dmarc_reports, dependent: :delete_all
@@ -31,6 +36,7 @@ class Domain < ApplicationRecord
 
   before_create :generate_dkim_key
   after_create_commit :ensure_dmarc_account!
+  after_create_commit :ensure_tls_rpt_account!
   # Fill the DNS pill cache without waiting for the hourly refresh (the
   # records won't exist yet, but "all red" beats "not checked").
   after_create_commit -> { DnsCheckRefreshJob.perform_later(self) }
@@ -60,6 +66,10 @@ class Domain < ApplicationRecord
     "#{DMARC_LOCAL_PART}@#{name}"
   end
 
+  def tls_rpt_address
+    "#{TLS_RPT_LOCAL_PART}@#{name}"
+  end
+
   # The cached DnsCheck results (jsonb; see DnsCheck.refresh! for when it
   # refreshes), rehydrated into Check structs for the index pills. Empty
   # until the first check runs.
@@ -75,6 +85,14 @@ class Domain < ApplicationRecord
   def ensure_dmarc_account!
     EmailAccount.find_by(email: dmarc_address) ||
       EmailAccount.create!(email: dmarc_address, name: "DMARC reports", password: EmailAccount.generate_password)
+  end
+
+  # Same lifecycle as the dmarc account. Also called by DnsPublisher when
+  # it first publishes the TLS-RPT record, so domains created before
+  # TLS-RPT support get the account backfilled.
+  def ensure_tls_rpt_account!
+    EmailAccount.find_by(email: tls_rpt_address) ||
+      EmailAccount.create!(email: tls_rpt_address, name: "TLS reports", password: EmailAccount.generate_password)
   end
 
   # Escalation advice for the readiness indicator, from the last 30 days

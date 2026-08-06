@@ -56,7 +56,7 @@ class DnsCheck
   def initialize(domain, resolver)
     @domain = domain
     @resolver = resolver
-    @checks = [ mx_check, spf_check, dkim_check, dmarc_check ]
+    @checks = [ mx_check, spf_check, dkim_check, dmarc_check, mta_sts_check, tls_rpt_check ]
   end
 
   # The published DMARC record, feeding Domain#dmarc_advice.
@@ -126,6 +126,34 @@ class DnsCheck
       check("DMARC", :pass, @dmarc_record)
     else
       check("DMARC", :fail, nil, "no _dmarc record published")
+    end
+  end
+
+  def mta_sts_check
+    return check("MTA-STS", :unknown, nil, "SMTP hostname is not set (Settings page or SMTP_HELO_HOST)") unless mail_host
+
+    records = @resolver.txt("_mta-sts.#{@domain.name}")
+    return check("MTA-STS", :unknown, nil, "DNS lookup failed") if records.nil?
+
+    published = records.find { |r| r.match?(/\Av=STSv1\b/i) }
+    return check("MTA-STS", :fail, nil, "no _mta-sts record published") unless published
+
+    if published == MtaSts.txt_record
+      check("MTA-STS", :pass, published)
+    else
+      check("MTA-STS", :warn, published, "id does not match this server's policy - republish so senders re-fetch the policy file")
+    end
+  end
+
+  def tls_rpt_check
+    records = @resolver.txt("_smtp._tls.#{@domain.name}")
+    return check("TLS-RPT", :unknown, nil, "DNS lookup failed") if records.nil?
+
+    published = records.find { |r| r.match?(/\Av=TLSRPTv1\b/i) }
+    if published
+      check("TLS-RPT", :pass, published)
+    else
+      check("TLS-RPT", :fail, nil, "no _smtp._tls record published")
     end
   end
 
