@@ -4,6 +4,14 @@
 header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
   h1.text-2xl.font-bold= protocol
 
+  / History window tabs. _top because these render inside no frame but
+  / their result feeds the poll frame below: the poll controller reloads
+  / from window.location.href, so the selection must be a real page
+  / navigation or the next poll tick would silently revert it.
+  nav.flex.items-center.gap-1
+    - LiveConnectionsController::WINDOWS.each_key do |key|
+      = link_to key, { window: key }, class: window_tab_classes(@window == key), data: { turbo_frame: "_top" }
+
 p.mb-4.text-sm.text-slate-500.dark:text-slate-400
   - if controller_name == "smtp"
     ' Live connections on the SMTP listeners running inside this process,

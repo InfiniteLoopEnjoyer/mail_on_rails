@@ -20,6 +20,21 @@ module ApplicationHelper
   def imap_section?      = controller_name == "imap"
   def security_section?  = controller_name == "auth_attempts"
 
+  # Compact duration for the connection history table: "3s", "4m 12s",
+  # "2h 5m". Rollup rows carry no duration.
+  def duration_label(seconds)
+    return "—" if seconds.nil?
+
+    total = seconds.round
+    return "#{total}s" if total < 60
+
+    minutes, secs = total.divmod(60)
+    return "#{minutes}m #{secs}s" if minutes < 60
+
+    hours, minutes = minutes.divmod(60)
+    "#{hours}h #{minutes}m"
+  end
+
   # Window selector on the auth attempts page. Class literals again, so
   # Tailwind's scanner sees them.
   def window_tab_classes(active)

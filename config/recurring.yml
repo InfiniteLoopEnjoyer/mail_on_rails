@@ -41,6 +41,12 @@ production:
     command: "AuthAttempt.prune!"
     schedule: every day at 4:17am
 
+  # Same reasoning for the connection history behind /smtp and /imap:
+  # scanners set the write rate, retention is enforced daily.
+  prune_closed_connections:
+    command: "ClosedConnection.prune!"
+    schedule: every day at 4:43am
+
   # Keep the imported Spamhaus DROP netblocks (BannedIp) current; manual
   # bans are untouched.
   refresh_spamhaus_drop:

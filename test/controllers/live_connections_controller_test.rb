@@ -80,6 +80,42 @@ class LiveConnectionsControllerTest < ActionDispatch::IntegrationTest
     assert_select "input[name=origin][value=imap]"
   end
 
+  # History is DB-backed, so all of these run without a live server
+  # (Boot.server is nil in the test process) - which also pins that the
+  # history section renders on a web-only boot.
+  test "history lists the protocol's closed connections in the window" do
+    ClosedConnection.create!(protocol: "smtp", ip: "198.51.100.7", port: 1025, role: "mx",
+                             username: "carol@example.com", helo: "laptop.lan", messages: 1,
+                             tls: true, duration_seconds: 72.5, closed_at: 2.hours.ago)
+    ClosedConnection.create!(protocol: "imap", ip: "198.51.100.8", closed_at: 1.hour.ago)
+    ClosedConnection.create!(protocol: "smtp", ip: "198.51.100.9", closed_at: 3.days.ago)
+
+    get smtp_path
+
+    assert_response :success
+    assert_select "h2", "Recent connections"
+    assert_match "198.51.100.7", response.body
+    assert_match "laptop.lan", response.body
+    assert_match "1m 13s", response.body
+    assert_no_match "198.51.100.8", response.body # imap row
+    assert_no_match "198.51.100.9", response.body # outside 24h window
+    assert_select "input[name=origin][value=smtp]"
+
+    get smtp_path(window: "7d")
+
+    assert_match "198.51.100.9", response.body
+  end
+
+  test "rollup rows render as one collapsed line" do
+    ClosedConnection.create!(protocol: "imap", ip: "198.51.100.10", rollup: true,
+                             connection_count: 61, closed_at: 10.minutes.ago)
+
+    get imap_path
+
+    assert_response :success
+    assert_match "61 connections collapsed", response.body
+  end
+
   test "a connection covered by an existing ban shows the badge instead of a button" do
     BannedIp.create!(cidr: "203.0.113.0/24", note: "test")
     server = FakeServer.new([

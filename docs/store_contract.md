@@ -116,6 +116,17 @@ material, so the store never sees those failures — without this, SCRAM
 would be an unthrottled path around the `authenticate` throttle. Returns
 `{}`.
 
+### `record_closed_connection(info)` — optional
+
+Persist one closed connection for the Rails UI's history section (both
+protocols; the SMTP server calls it too). `info` is a plain-values hash
+assembled by the server's close path: `protocol:, ip:, port:, role:,
+connected_at:, closed_at:, duration_seconds:` plus the session's
+`live_info` fields (`user:, state:, tls:, helo:, messages:`). Optional:
+servers call it behind `respond_to?`, so a store without it (the memory
+stores) simply keeps no history. Best-effort — must never raise into
+the connection teardown. Returns `{}`.
+
 ### `scram_credentials(email, ip: nil)`
 
 SCRAM-SHA-256 verifier material (RFC 5802/7677) for the daemon's

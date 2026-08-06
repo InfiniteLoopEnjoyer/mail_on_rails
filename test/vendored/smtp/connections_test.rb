@@ -10,6 +10,24 @@ require "mail_on_rails/smtp/store/memory"
 # or thread escapes), including the session's HELO name and listener
 # role, and Server#kick force-closes a banned address's live sessions.
 class SmtpConnectionsTest < Minitest::Test
+  # A memory store that also keeps connection history, standing in for
+  # the Rails backend's optional record_closed_connection. The plain
+  # Memory store used everywhere else lacks the method, which doubles as
+  # the pin on the server's respond_to? guard.
+  class RecordingStore < MailOnRails::Smtp::Store::Memory
+    attr_reader :closed
+
+    def initialize(*)
+      super
+      @closed = []
+    end
+
+    def record_closed_connection(info)
+      @closed << info
+      {}
+    end
+  end
+
   def setup
     @cleanup = []
   end
@@ -18,8 +36,7 @@ class SmtpConnectionsTest < Minitest::Test
     @cleanup.each { |c| c.call rescue nil }
   end
 
-  def build_server
-    store = MailOnRails::Smtp::Store::Memory.new
+  def build_server(store: MailOnRails::Smtp::Store::Memory.new)
     listener = TCPServer.new("127.0.0.1", 0)
     spec = { host: "127.0.0.1", port: listener.addr[1], tls: :starttls, role: :mx,
              hostname: "mx.test", tcp_server: listener }
@@ -97,5 +114,31 @@ class SmtpConnectionsTest < Minitest::Test
 
     assert_nil client.gets("\r\n"), "kicked client must see EOF"
     eventually(5, "kicked connection not deregistered") { server.connections.empty? }
+  end
+
+  def test_close_reports_history_to_a_store_that_keeps_it
+    store = RecordingStore.new
+    _server, spec = build_server(store: store)
+    client = connect(spec)
+
+    assert_match(/\A220 /, read_reply(client))
+    client.write("EHLO client.test\r\n")
+    read_reply(client)
+    client.write("QUIT\r\n")
+    read_reply(client)
+
+    eventually(5, "close not reported") { store.closed.size == 1 }
+    info = store.closed.first
+
+    assert_equal "smtp", info[:protocol]
+    assert_equal "127.0.0.1", info[:ip]
+    assert_equal spec[:port], info[:port]
+    assert_equal :mx, info[:role]
+    assert_equal "client.test", info[:helo]
+    assert_equal 0, info[:messages]
+    assert_nil info[:user]
+    assert_kind_of Time, info[:connected_at]
+    assert_kind_of Time, info[:closed_at]
+    assert_operator info[:duration_seconds], :>=, 0
   end
 end

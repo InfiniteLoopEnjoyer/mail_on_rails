@@ -279,10 +279,29 @@ module MailOnRails
           nil
         end
         @limiter.release(ip)
-        @lifecycle.synchronize do
-          @sessions.delete(raw)
-          @lifecycle_cv.broadcast
+        conn = @lifecycle.synchronize do
+          @sessions.delete(raw).tap { @lifecycle_cv.broadcast }
         end
+        report_closed(conn)
+      end
+
+      # Hands the finished connection to the store's history log (the
+      # Rails UI's closed-connections table), when the store keeps one -
+      # the vendored memory stores don't, hence the respond_to? guard.
+      # Runs on the dying connection thread after the limiter slot is
+      # back; best-effort, so a history problem can never disturb a
+      # teardown.
+      def report_closed(conn)
+        return unless conn && @store.respond_to?(:record_closed_connection)
+
+        now = Time.now
+        info = { protocol: protocol_name.downcase, ip: conn.peer_ip,
+                 port: conn.spec[:port], role: conn.spec[:role],
+                 connected_at: conn.connected_at, closed_at: now,
+                 duration_seconds: now - conn.connected_at }
+        @store.record_closed_connection(info.merge(conn.session ? conn.session.live_info : {}))
+      rescue StandardError
+        nil
       end
 
       # The peer address at accept time, threaded through to the release

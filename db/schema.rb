@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_05_150000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_06_090000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -89,6 +89,29 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_05_150000) do
     t.datetime "updated_at", null: false
     t.index ["cidr"], name: "index_banned_ips_on_cidr", unique: true
     t.index ["source"], name: "index_banned_ips_on_source"
+  end
+
+  create_table "closed_connections", force: :cascade do |t|
+    t.datetime "closed_at", null: false
+    t.datetime "connected_at"
+    t.integer "connection_count", default: 1, null: false
+    t.datetime "created_at", null: false
+    t.float "duration_seconds"
+    t.string "final_state"
+    t.string "helo"
+    t.string "ip"
+    t.integer "messages"
+    t.integer "port"
+    t.string "protocol", null: false
+    t.string "role"
+    t.boolean "rollup", default: false, null: false
+    t.boolean "tls", default: false, null: false
+    t.datetime "updated_at", null: false
+    t.string "username"
+    t.index ["closed_at"], name: "index_closed_connections_on_closed_at"
+    t.index ["protocol", "closed_at"], name: "index_closed_connections_on_protocol_and_closed_at"
+    t.index ["protocol", "ip", "closed_at"], name: "index_closed_connections_on_protocol_and_ip_and_closed_at"
+    t.index ["protocol", "ip", "closed_at"], name: "index_closed_connections_on_rollup_key", unique: true, where: "rollup"
   end
 
   create_table "dmarc_reports", force: :cascade do |t|

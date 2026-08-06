@@ -67,8 +67,8 @@ class BannedIpsController < ApplicationController
   # window params say which one to return to.
   def redirect_back_to_attempts(**options)
     target = case params[:origin]
-    when "smtp" then smtp_path
-    when "imap" then imap_path
+    when "smtp" then smtp_path(window: params[:window])
+    when "imap" then imap_path(window: params[:window])
     else
       if params[:range].present?
         range_auth_attempts_path(cidr: params[:range], window: params[:window])

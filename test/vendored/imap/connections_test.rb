@@ -13,6 +13,24 @@ class ImapConnectionsTest < Minitest::Test
   EMAIL = "user@example.test"
   PASSWORD = "pw-123456"
 
+  # A memory store that also keeps connection history, standing in for
+  # the Rails backend's optional record_closed_connection. The plain
+  # Memory store used everywhere else lacks the method, which doubles as
+  # the pin on the server's respond_to? guard.
+  class RecordingStore < MailOnRails::Imap::Store::Memory
+    attr_reader :closed
+
+    def initialize(*)
+      super
+      @closed = []
+    end
+
+    def record_closed_connection(info)
+      @closed << info
+      {}
+    end
+  end
+
   def setup
     @cleanup = []
   end
@@ -21,8 +39,7 @@ class ImapConnectionsTest < Minitest::Test
     @cleanup.each { |c| c.call rescue nil }
   end
 
-  def build_server
-    store = MailOnRails::Imap::Store::Memory.new
+  def build_server(store: MailOnRails::Imap::Store::Memory.new)
     store.add_account(email: EMAIL, password: PASSWORD)
     listener = TCPServer.new("127.0.0.1", 0)
     spec = { host: "127.0.0.1", port: listener.addr[1], tls: :none, tcp_server: listener }
@@ -84,6 +101,28 @@ class ImapConnectionsTest < Minitest::Test
 
     assert_nil client.gets("\r\n"), "kicked client must see EOF"
     eventually(5, "kicked connection not deregistered") { server.connections.empty? }
+  end
+
+  def test_close_reports_history_to_a_store_that_keeps_it
+    store = RecordingStore.new
+    _server, spec = build_server(store: store)
+    client = connect(spec)
+
+    assert_match(/\A\* OK /, client.gets("\r\n"))
+    client.write("a1 LOGOUT\r\n")
+
+    eventually(5, "close not reported") { store.closed.size == 1 }
+    info = store.closed.first
+
+    assert_equal "imap", info[:protocol]
+    assert_equal "127.0.0.1", info[:ip]
+    assert_equal spec[:port], info[:port]
+    assert_nil info[:role]
+    assert_equal "pre-auth", info[:state]
+    assert_nil info[:user]
+    assert_kind_of Time, info[:connected_at]
+    assert_kind_of Time, info[:closed_at]
+    assert_operator info[:duration_seconds], :>=, 0
   end
 
   # Session-level live_info, driven over a real wire but with the session

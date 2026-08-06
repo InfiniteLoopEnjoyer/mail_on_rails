@@ -14,7 +14,7 @@ module MailOnRails
     class WithSource
       extend Forwardable
 
-      def_delegators :@backend, :log, :scram_credentials,
+      def_delegators :@backend, :log, :scram_credentials, :record_closed_connection,
                      :list_mailboxes, :create_mailbox, :delete_mailbox, :rename_mailbox,
                      :select_mailbox, :status, :fetch, :store_flags, :expunge, :append,
                      :copy, :move, :expunged_since
