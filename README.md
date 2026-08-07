@@ -38,6 +38,16 @@ Virus-scanning tests run against a scripted fake clamd, so no ClamAV
 install is needed; the real-engine EICAR smoke procedure and the scanning
 policy live in [docs/virus_scanning.md](docs/virus_scanning.md).
 
+## Securing /metrics
+
+The Prometheus endpoint is bearer-token gated (`METRICS_TOKEN`; when the
+variable is unset the route answers 404). The token alone shouldn't be
+the only wall: kamal-proxy has no per-path ACLs, so either scrape over a
+private network/VPN or restrict the HTTPS port to the scraper's address
+at the droplet/cloud-firewall layer. Rotate `METRICS_TOKEN`
+periodically — update the deploy secret and the scraper config, then
+redeploy.
+
 ## Roadmap
 
 Web UI, roughly by value:
