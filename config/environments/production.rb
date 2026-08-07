@@ -84,12 +84,19 @@ Rails.application.configure do
   # Only use :id for inspections in production.
   config.active_record.attributes_for_inspect = [ :id ]
 
-  # Enable DNS rebinding protection and other `Host` header attacks.
-  # config.hosts = [
-  #   "example.com",     # Allow requests from example.com
-  #   /.*\.example\.com/ # Allow requests from subdomains like `www.example.com`
-  # ]
-  #
-  # Skip DNS rebinding protection for the default health check endpoint.
-  # config.host_authorization = { exclude: ->(request) { request.path == "/up" } }
+  # DNS rebinding / Host-header protection. The deploy already requires
+  # MAIL_ON_RAILS_WEB_HOST (mailer URLs, WebAuthn origin, DnsPublisher);
+  # if it were ever unset, hosts stay open rather than crashing the boot.
+  if (web_host = ENV["MAIL_ON_RAILS_WEB_HOST"]).present?
+    config.hosts = [ web_host ]
+  end
+
+  # /up is probed by kamal-proxy against the container IP, and the MTA-STS
+  # policy is fetched by sending MTAs from mta-sts.<each hosted domain> -
+  # those hosts are DB-driven (DnsPublisher CNAMEs them here), so exclude
+  # the path rather than enumerate hosts. MtaStsController serves one
+  # static policy for any Host and derives no URLs from it.
+  config.host_authorization = {
+    exclude: ->(request) { request.path == "/up" || request.path == "/.well-known/mta-sts.txt" }
+  }
 end
