@@ -52,6 +52,12 @@ redeploy.
 
 Web UI, roughly by value:
 
+- [ ] **Roles / authorization (RBAC)** — every signed-in user is a full
+  admin today (deliberate for a single-operator deployment, flagged in
+  the 2026-08 security audit). Introduce roles (operator / mail admin /
+  read-only), scope email-account access per user, and gate destructive
+  actions (domain delete, user delete, DNS publish) behind the elevated
+  role.
 - [ ] **Per-account server-side filing rules** — inbound filtering is
   global only (rspamd, DMARC); no per-user "file sender X into folder Y"
   (Sieve or a simpler home-grown rule table acted on in the mailroom).
