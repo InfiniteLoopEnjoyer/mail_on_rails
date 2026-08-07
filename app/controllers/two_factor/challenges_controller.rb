@@ -57,6 +57,9 @@ class TwoFactor::ChallengesController < ApplicationController
     # (TOTP) paths can send the browser to the same place.
     def complete_sign_in
       clear_pending_second_factor
+      # Full sign-in is where the AuthThrottle budget refills for 2FA users;
+      # SessionsController#create deliberately skipped it at password stage.
+      AuthThrottle.clear_account(@user.email_address)
       start_new_session_for @user
       after_authentication_url
     end
