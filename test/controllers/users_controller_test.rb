@@ -115,4 +115,26 @@ class UsersControllerTest < ActionDispatch::IntegrationTest
     get users_url
     assert_redirected_to new_session_url
   end
+
+  test "the only remaining user cannot be deleted" do
+    User.excluding(@user).delete_all
+
+    assert_no_difference "User.count" do
+      delete user_url(@user)
+    end
+    assert_redirected_to users_url
+
+    get users_url
+    assert_response :success, "the session must survive the refused delete"
+  end
+
+  test "the delete button is hidden for the only remaining user" do
+    User.excluding(@user).delete_all
+
+    get edit_user_url(@user)
+
+    assert_response :success
+    assert_empty css_select("form[action='#{user_path(@user)}'] input[name=_method][value=delete]"),
+      "no delete-user button when only one user is left"
+  end
 end
