@@ -1,8 +1,14 @@
+require "mail_on_rails/clamav_scanner"
+
 class MailboxesController < ApplicationController
   before_action :set_email_account
-  before_action :set_mailbox, only: %i[show edit update destroy export]
-  rate_limit to: 30, within: 10.minutes, only: %i[create update destroy],
+  before_action :set_mailbox, only: %i[show edit update destroy export import]
+  rate_limit to: 30, within: 10.minutes, only: %i[create update destroy import],
              with: -> { redirect_to email_account_path(params[:email_account_id]), alert: "Try again later." }
+
+  # The same bound the IMAP server advertises as APPENDLIMIT: import is the
+  # web-UI mirror of APPEND, so a file APPEND would refuse is refused here too.
+  MAX_IMPORT_BYTES = 30 * 1024 * 1024
 
   # Newest-first, one page at a time - a mailbox can hold years of mail and
   # rendering it all in one response hurts long before the query does
@@ -46,6 +52,35 @@ class MailboxesController < ApplicationController
     response.content_type = "application/mbox"
   end
 
+  # Files uploaded .eml messages into this folder - the web-UI mirror of
+  # IMAP APPEND, with APPEND's gates: the size cap above, a ClamAV scan
+  # when the scanner is on (infected uploads are refused outright; a
+  # scanner outage stores the message flagged "unscanned", never
+  # quarantined - the user chose to import it), and the storage quota
+  # inside deliver_raw. No authenticated_as: imported bytes are foreign
+  # mail being filed, not mail this user is vouched to have written.
+  def import
+    files = Array(params[:eml]).reject(&:blank?)
+    if files.none?
+      return redirect_to email_account_mailbox_path(@email_account, @mailbox),
+                         alert: "Choose one or more .eml files to import."
+    end
+
+    imported = 0
+    failures = []
+    files.each do |file|
+      if (failure = import_one(file))
+        failures << "#{file.original_filename}: #{failure}"
+      else
+        imported += 1
+      end
+    end
+
+    flash[:notice] = "Imported #{imported} #{"message".pluralize(imported)}." if imported.positive?
+    flash[:alert] = "Not imported - #{failures.to_sentence}" if failures.any?
+    redirect_to email_account_mailbox_path(@email_account, @mailbox)
+  end
+
   def new
     @mailbox = @email_account.mailboxes.new
   end
@@ -80,6 +115,38 @@ class MailboxesController < ApplicationController
   end
 
   private
+
+  # Stores one uploaded file, returning nil on success or the reason it was
+  # refused. Mirrors the APPEND path in Store::ImapBackend#append.
+  def import_one(file)
+    raw = file.read
+    return "larger than #{MAX_IMPORT_BYTES / 1_048_576} MB" if raw.bytesize > MAX_IMPORT_BYTES
+
+    mail = Mail.read_from_string(raw) rescue nil
+    return "not an RFC822 message" if raw.blank? || mail.nil? || mail.header.fields.none?
+
+    scan_status = nil
+    if MailOnRails::ClamavScanner.enabled?
+      verdict = MailOnRails::ClamavScanner.scan(raw)
+      return "virus detected (#{verdict.virus})" if verdict.infected?
+
+      scan_status = verdict.clean? ? "clean" : "unscanned"
+    end
+
+    EmailMessage.deliver_raw(@mailbox, raw, internal_date: original_date(mail), scan_status: scan_status)
+    nil
+  rescue EmailMessage::OverQuota => e
+    e.message
+  end
+
+  # The message's own Date header, so an imported archive sorts where the
+  # mail actually happened rather than piling up at the import moment.
+  # Mail raises on malformed dates; those fall back to delivery time.
+  def original_date(mail)
+    mail.date&.to_time
+  rescue StandardError
+    nil
+  end
 
   def set_email_account
     @email_account = EmailAccount.find(params[:email_account_id])

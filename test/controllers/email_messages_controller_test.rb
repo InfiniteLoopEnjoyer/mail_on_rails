@@ -462,7 +462,7 @@ class EmailMessagesControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-controller='draft-autosave']", 1
     assert_select "input[name='composed_email[to]'][value=?]", "sender@remote.test"
     assert_select "input[name='composed_email[subject]'][value=?]", "Re: hello"
-    assert_select "textarea[name='composed_email[body]']", /sender@remote\.test wrote:/
+    assert_select "lexxy-editor[name='composed_email[body_html]'][value*=?]", "sender@remote.test wrote:"
   end
 
   # The composer has to carry the threading headers through to submit, or a

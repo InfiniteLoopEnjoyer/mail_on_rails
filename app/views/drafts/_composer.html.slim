@@ -56,9 +56,18 @@ section.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:b
             class: "w-full rounded-md border border-slate-200 dark:border-slate-800 px-3 py-1.5 text-sm focus:border-accent focus:outline-none",
             data: { draft_autosave_target: "field", draft_field: field, action: "input->draft-autosave#schedule" }
 
-      = text_area_tag "composed_email[body]", draft.body, rows: 12,
-        class: "w-full rounded-md border border-slate-200 dark:border-slate-800 px-3 py-2 font-sans text-sm focus:border-accent focus:outline-none",
-        data: { draft_autosave_target: "field", draft_field: "body", action: "input->draft-autosave#schedule" }
+      / The rich-text body (Lexxy). A saved rich draft seeds the editor with
+      / its HTML part; a plain draft (an old one, or a reply's quoted text)
+      / is escaped and line-broken into markup the editor can start from.
+      / Attachments stay disabled - files travel on the input below, as
+      / plain MIME parts, never as inline uploads.
+      - seed = draft.body_html.presence
+      - seed ||= ERB::Util.html_escape(draft.body).gsub("\n", "<br>") if draft.body.present?
+      lexxy-editor.lexxy-content.w-full.rounded-md.border.border-slate-200.dark:border-slate-800.text-sm[
+        name="composed_email[body_html]" value=seed attachments="false"
+        placeholder="Write your message…"
+        data-draft-autosave-target="field" data-draft-field="body_html"
+        data-action="lexxy:change->draft-autosave#schedule" ]
 
       / Not an autosave field: attachments are sent with the message, they
       / are not part of the saved draft.

@@ -49,7 +49,7 @@ class EmailsController < ApplicationController
   end
 
   def composed_email_params
-    params.expect(composed_email: [ :email_account_id, :to, :cc, :subject, :body,
+    params.expect(composed_email: [ :email_account_id, :to, :cc, :subject, :body, :body_html,
                                     :in_reply_to, :references, :message_id, :draft_message_id,
                                     attachments: [] ])
   end

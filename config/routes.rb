@@ -114,8 +114,12 @@ Rails.application.routes.draw do
     resources :email_aliases, only: %i[create destroy], path: "aliases"
     resources :mailboxes, except: %i[index] do
       # The whole folder as a standard mbox file (streamed - see
-      # MboxExport), importable by any other mail client.
-      member { get :export }
+      # MboxExport), importable by any other mail client; and the reverse:
+      # .eml uploads filed into the folder, the web-UI mirror of IMAP APPEND.
+      member do
+        get :export
+        post :import
+      end
       resources :email_messages, only: %i[show destroy], path: "messages" do
         member do
           post :mark_read

@@ -22,7 +22,7 @@ class ComposedEmail
   # to ~29.4 MiB, leaving headroom for headers and the text part.
   MAX_ATTACHMENT_BYTES = 22 * 1024 * 1024
 
-  attr_accessor :email_account_id, :to, :cc, :subject, :body,
+  attr_accessor :email_account_id, :to, :cc, :subject, :body, :body_html,
                 :in_reply_to, :references, :message_id
   # Uploaded files (ActionDispatch::Http::UploadedFile) to send along.
   attr_writer :attachments
@@ -133,7 +133,27 @@ class ComposedEmail
     # the whole ancestry, which is what clients group a conversation by.
     mail.in_reply_to = in_reply_to if in_reply_to.present?
     mail.references  = references if references.present?
-    if attachments.none?
+    if html?
+      # A rich-text send is multipart/alternative: the editor's HTML - run
+      # through the same EmailHtmlSanitizer that renders inbound mail, so
+      # nothing leaves here that we would not render ourselves - plus a
+      # plain-text alternative derived from it for text-only readers.
+      # Never built from string concatenation (see README on the
+      # email-HTML-injection class).
+      if attachments.none?
+        add_alternative_parts(mail)
+      else
+        # Mail does not nest on its own: setting text/html parts and then
+        # adding attachments would flatten everything into one
+        # multipart/alternative. The standard shape is mixed(alternative,
+        # attachments), so the alternative pair is built as its own part.
+        alternative = Mail::Part.new(content_type: "multipart/alternative")
+        add_alternative_parts(alternative)
+        mail.content_type("multipart/mixed")
+        mail.add_part(alternative)
+        add_attachment_parts(mail)
+      end
+    elsif attachments.none?
       mail.body = body.to_s
     else
       # With attachments the message is multipart/mixed and the body must
@@ -146,16 +166,61 @@ class ComposedEmail
         content_type "text/plain; charset=UTF-8"
         body text
       end
-      attachments.each do |file|
-        options = { content: file.read }
-        options[:mime_type] = file.content_type if file.content_type.present?
-        mail.attachments[file.original_filename] = options
-      end
+      add_attachment_parts(mail)
     end
     mail.to_s
   end
 
+  # True when the composer sent rich text; an HTML part is built only then,
+  # so a plain-text send serialises exactly as it always has.
+  def html?
+    body_html.present?
+  end
+
   private
+
+  # Fills +container+ (the message itself, or a nested part when there are
+  # attachments) with the text and HTML alternatives of a rich-text send.
+  def add_alternative_parts(container)
+    text = plain_alternative
+    html = sanitized_html
+    container.text_part = Mail::Part.new do
+      content_type "text/plain; charset=UTF-8"
+      body text
+    end
+    container.html_part = Mail::Part.new do
+      content_type "text/html; charset=UTF-8"
+      body html
+    end
+  end
+
+  def add_attachment_parts(mail)
+    attachments.each do |file|
+      options = { content: file.read }
+      options[:mime_type] = file.content_type if file.content_type.present?
+      mail.attachments[file.original_filename] = options
+    end
+  end
+
+  # The editor's HTML reduced to the markup we are willing to render of
+  # anyone else's mail - same allowlist, same CSS scrub. Remote images the
+  # user pasted keep their src: this is outbound, so read-tracking is the
+  # recipient's client's concern, not ours.
+  def sanitized_html
+    EmailHtmlSanitizer.sanitize(body_html, allow_remote_images: true).html
+  end
+
+  # The text/plain alternative, derived from the sanitized HTML: block
+  # ends become line breaks, list items get a marker, tags go. Every
+  # message keeps a readable text part however it was written.
+  def plain_alternative
+    text = sanitized_html
+           .gsub(%r{<br[^>]*>}i, "\n")
+           .gsub(/<li[^>]*>/i, "- ")
+           .gsub(%r{</(?:p|div|h[1-6]|li|blockquote|tr|pre|ul|ol|table)>}i, "\n")
+    text = Loofah.fragment(text).text(encode_special_chars: false)
+    text.gsub(/[ \t]+\n/, "\n").gsub(/\n{3,}/, "\n\n").strip
+  end
 
   # The process-wide quota unless a test injected its own (or nil). Keyed
   # by the account email - the same key authenticated SMTP sessions use -

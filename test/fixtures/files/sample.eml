@@ -1,0 +1,7 @@
+Message-ID: <import-1@remote.test>
+From: sender@remote.test
+To: carol@example.com
+Subject: imported hello
+Date: Mon, 10 Mar 2025 12:00:00 +0000
+
+Imported body.

@@ -1,6 +1,9 @@
 require "test_helper"
+require_relative "../test_helpers/clamav_stub_helper"
 
 class MailboxesControllerTest < ActionDispatch::IntegrationTest
+  include ClamavStubHelper
+
   setup do
     sign_in_as users(:one)
     @account = EmailAccount.create!(email: "carol@example.com", password: "secret123")
@@ -28,6 +31,90 @@ class MailboxesControllerTest < ActionDispatch::IntegrationTest
     assert_equal 2, response.body.scan(/^From (?:a|b)@remote\.test /).size
     assert_includes response.body, "Subject: one\n"
     assert_includes response.body, "second\n"
+  end
+
+  # -- .eml import -------------------------------------------------------------
+
+  def import_eml(*files, mailbox: @inbox)
+    post import_email_account_mailbox_url(@account, mailbox), params: { eml: files }
+  end
+
+  def eml_upload(raw, filename: "message.eml")
+    Rack::Test::UploadedFile.new(StringIO.new(raw), "message/rfc822", original_filename: filename)
+  end
+
+  test "import files an .eml into the folder at its original date" do
+    import_eml fixture_file_upload("sample.eml", "message/rfc822")
+
+    assert_redirected_to email_account_mailbox_url(@account, @inbox)
+    assert_equal "Imported 1 message.", flash[:notice]
+
+    message = @inbox.email_messages.sole
+    assert_equal "imported hello", message.subject
+    assert_nil message.scan_status
+    assert_nil message.authenticated_as, "imported mail must not carry the importer's vouching"
+    assert_equal Time.utc(2025, 3, 10, 12), message.internal_date
+  end
+
+  test "import stamps the scanner's verdict like IMAP APPEND" do
+    clean = MailOnRails::ClamavScanner::Result.new(:clean, nil)
+    with_scanner(enabled: true, scan: clean) { import_eml eml_upload("Subject: ok\r\n\r\nhi\r\n") }
+    assert_equal "clean", @inbox.email_messages.sole.scan_status
+
+    down = MailOnRails::ClamavScanner::Result.new(:unavailable, nil)
+    with_scanner(enabled: true, scan: down) { import_eml eml_upload("Subject: two\r\n\r\nhi\r\n") }
+    assert_equal "unscanned", @inbox.email_messages.order(:uid).last.scan_status
+  end
+
+  test "import refuses an infected upload" do
+    infected = MailOnRails::ClamavScanner::Result.new(:infected, "Eicar-Test-Signature")
+    with_scanner(enabled: true, scan: infected) do
+      import_eml eml_upload("Subject: bad\r\n\r\npayload\r\n", filename: "bad.eml")
+    end
+
+    assert_redirected_to email_account_mailbox_url(@account, @inbox)
+    assert_match(/bad\.eml: virus detected \(Eicar-Test-Signature\)/, flash[:alert])
+    assert_empty @inbox.email_messages
+  end
+
+  test "import refuses a file that is not a message" do
+    import_eml eml_upload("", filename: "empty.eml"), eml_upload("Subject: ok\r\n\r\nhi\r\n")
+
+    assert_equal "Imported 1 message.", flash[:notice]
+    assert_match(/empty\.eml: not an RFC822 message/, flash[:alert])
+    assert_equal 1, @inbox.email_messages.count
+  end
+
+  test "import refuses a file over the APPENDLIMIT-sized cap" do
+    huge = eml_upload("Subject: big\r\n\r\n#{"x" * 64}\r\n", filename: "big.eml")
+    original = MailboxesController::MAX_IMPORT_BYTES
+    MailboxesController.send(:remove_const, :MAX_IMPORT_BYTES)
+    MailboxesController.const_set(:MAX_IMPORT_BYTES, 32)
+    begin
+      import_eml huge
+    ensure
+      MailboxesController.send(:remove_const, :MAX_IMPORT_BYTES)
+      MailboxesController.const_set(:MAX_IMPORT_BYTES, original)
+    end
+
+    assert_match(/big\.eml: larger than/, flash[:alert])
+    assert_empty @inbox.email_messages
+  end
+
+  test "import respects the storage quota" do
+    @account.update!(quota_bytes: 1)
+
+    import_eml eml_upload("Subject: over\r\n\r\nbody\r\n", filename: "over.eml")
+
+    assert_match(/over\.eml: .*over its storage quota/, flash[:alert])
+    assert_empty @inbox.email_messages
+  end
+
+  test "import with no file chosen explains itself" do
+    post import_email_account_mailbox_url(@account, @inbox)
+
+    assert_redirected_to email_account_mailbox_url(@account, @inbox)
+    assert_equal "Choose one or more .eml files to import.", flash[:alert]
   end
 
   # -- pagination --------------------------------------------------------------

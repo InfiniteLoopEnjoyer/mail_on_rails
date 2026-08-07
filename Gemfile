@@ -90,3 +90,5 @@ gem "image_processing"
 
 gem "requestjs-rails"
 gem "ruby-vips"
+
+gem "lexxy", "~> 0.9"

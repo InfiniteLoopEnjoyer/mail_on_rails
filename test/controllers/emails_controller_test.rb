@@ -136,7 +136,7 @@ class EmailsControllerTest < ActionDispatch::IntegrationTest
     } }
 
     assert_response :unprocessable_entity
-    assert_select "textarea[name='composed_email[body]']", /Hello/
+    assert_select "lexxy-editor[name='composed_email[body_html]'][value*=?]", "Hello"
   end
 
   test "threading headers survive the send" do
@@ -156,7 +156,7 @@ class EmailsControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_select "[data-controller='draft-autosave']", 1
     assert_select "select[name='composed_email[email_account_id]'][data-draft-field='email_account_id']", 1
-    assert_select "textarea[name='composed_email[body]'][data-draft-field='body']", 1
+    assert_select "lexxy-editor[name='composed_email[body_html]'][data-draft-field='body_html']", 1
   end
 
   test "?from preselects the sending account" do
@@ -179,7 +179,7 @@ class EmailsControllerTest < ActionDispatch::IntegrationTest
     } }
 
     assert_response :unprocessable_entity
-    assert_select "textarea[name='composed_email[body]']", /Half written/
+    assert_select "lexxy-editor[name='composed_email[body_html]'][value*=?]", "Half written"
     assert_select "input[name='composed_email[draft_message_id]'][value=?]", saved.id.to_s
     assert_select "input[name='composed_email[to]'][value=?]", "not-an-address"
   end

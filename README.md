@@ -74,13 +74,19 @@ policy live in [docs/virus_scanning.md](docs/virus_scanning.md).
   drafts autosave, password-reset token use, 2FA enrollment, message
   rescan, and the admin mutations (users, accounts, aliases, domains,
   mailboxes, bans, settings).
-- [ ] **If the composer grows rich-text/HTML sending** — it is immune to
-  the email-HTML-injection class today only because it sends text/plain
-  exclusively. Before adding an HTML part: build it with a templating
-  layer or an editor emitting constrained markup (never string
-  concatenation), run the result through `EmailHtmlSanitizer` too, and
-  keep the Mail gem's header encoding plus the whitespace-rejecting
-  recipient validation.
+- [x] **Rich-text sending in the composer** — the body field is now a
+  Lexxy editor (37signals' Lexical-based Action Text successor; gem
+  assets via importmap, no Node, editor attachments disabled — files
+  still travel on the plain file input). A rich send builds
+  multipart/alternative in `ComposedEmail#build_raw`: the editor's HTML
+  runs through the same `EmailHtmlSanitizer` used to render inbound mail
+  (closing the email-HTML-injection class: constrained markup, never
+  string concatenation) and a text/plain part is derived from the
+  sanitized HTML, so every message keeps a readable text alternative;
+  with attachments the pair nests as mixed(alternative, files). Drafts
+  round-trip the HTML part, old plain drafts still open (escaped into
+  the editor), and the Mail gem's header encoding plus the recipient
+  validation are unchanged.
 
 ### Feature gaps (capability scan, 2026-08)
 
@@ -139,6 +145,13 @@ Web UI, roughly by value:
   not depend on a verdict). "Export mbox" on the folder page streams the
   whole mailbox as an RFC 4155 mbox (mboxrd quoting, LF line endings),
   one message in memory at a time — see `MboxExport`.
+- [x] **.eml import** — "Import .eml" on the folder page files uploaded
+  messages into that folder, the web-UI mirror of IMAP APPEND with
+  APPEND's gates: the same 30 MiB cap, a ClamAV scan when the scanner is
+  on (infected uploads refused; an outage stores flagged "unscanned"),
+  and the storage quota. Messages keep their own Date as the internal
+  date, and carry no `authenticated_as` — imported bytes are foreign
+  mail being filed, not mail the importer wrote.
 - [ ] **Web Push for new mail** — the PWA service worker skeleton exists
   but is unused; clients must poll / IMAP IDLE.
 

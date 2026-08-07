@@ -53,7 +53,7 @@ class DraftsController < ApplicationController
   end
 
   def draft_params
-    params.expect(draft: [ :email_account_id, :to, :cc, :subject, :body,
+    params.expect(draft: [ :email_account_id, :to, :cc, :subject, :body, :body_html,
                            :in_reply_to, :references, :message_id, :draft_message_id ])
   end
 end

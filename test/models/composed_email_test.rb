@@ -242,6 +242,47 @@ class ComposedEmailTest < ActiveSupport::TestCase
     assert_empty @recipient.inbox.email_messages
   end
 
+  # -- rich text ---------------------------------------------------------------
+
+  test "a rich-text send is multipart/alternative with a derived text part" do
+    email = composed(body: nil, body_html: "<p>Hello <strong>world</strong></p><p>bye</p>", send_quota: nil)
+    with_scanner(enabled: false) do
+      assert email.deliver
+    end
+
+    mail = Mail.read_from_string(@recipient.inbox.email_messages.sole.raw)
+    assert_equal "multipart/alternative", mail.mime_type
+    assert_includes mail.html_part.decoded, "<strong>world</strong>"
+    assert_includes mail.text_part.decoded, "Hello world"
+    assert_includes mail.text_part.decoded, "bye"
+  end
+
+  test "outbound HTML passes through the sanitizer" do
+    email = composed(body_html: "<p>hi</p><script>alert(1)</script><a href=\"javascript:x\">link</a>",
+                     send_quota: nil)
+    with_scanner(enabled: false) do
+      assert email.deliver
+    end
+
+    html = Mail.read_from_string(@recipient.inbox.email_messages.sole.raw).html_part.decoded
+    assert_no_match(/script|alert/, html)
+    assert_no_match(/javascript:/, html)
+    assert_includes html, "<p>hi</p>"
+  end
+
+  test "a rich-text send with attachments nests the alternative inside mixed" do
+    email = composed(body_html: "<p>see attached</p>", attachments: [ upload ], send_quota: nil)
+    with_scanner(enabled: false) do
+      assert email.deliver
+    end
+
+    mail = Mail.read_from_string(@recipient.inbox.email_messages.sole.raw)
+    assert_equal "multipart/mixed", mail.mime_type
+    assert_equal "hello.txt", mail.attachments.sole.filename
+    assert_includes mail.html_part.decoded, "see attached"
+    assert_includes mail.text_part.decoded, "see attached"
+  end
+
   # The gates forward the account as the authenticated sender so rspamd
   # applies its authenticated-sender policy, mirroring the SMTP session.
   test "rspamd receives the sending account as the authenticated user" do
