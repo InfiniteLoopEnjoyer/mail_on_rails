@@ -44,6 +44,28 @@ class EmailMessagesControllerTest < ActionDispatch::IntegrationTest
     assert_select "article footer span.bg-green-100", text: /Spam score/
   end
 
+  # -- .eml download -----------------------------------------------------------
+
+  test "download serves the stored bytes as message/rfc822 with an .eml filename" do
+    message = EmailMessage.deliver_raw(@account.inbox, RAW)
+
+    get download_email_account_mailbox_email_message_url(@account, message.mailbox, message)
+
+    assert_response :success
+    assert_equal "message/rfc822", response.media_type
+    assert_equal message.raw, response.body
+    assert_match(/attachment; filename="message-#{message.id}-hello\.eml"/, response.headers["Content-Disposition"])
+  end
+
+  test "download works regardless of scan status - unlike attachment downloads" do
+    message = EmailMessage.deliver_raw(@account.inbox, RAW, scan_status: "infected", virus_name: "Eicar")
+
+    get download_email_account_mailbox_email_message_url(@account, message.mailbox, message)
+
+    assert_response :success
+    assert_equal message.raw, response.body
+  end
+
   # rspamd verdicts that aren't "no action" keep the neutral slate pill, so
   # green stays reserved for a clean bill of health.
   test "a flagged spam action keeps the neutral badge without a check" do
@@ -440,7 +462,7 @@ class EmailMessagesControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-controller='draft-autosave']", 1
     assert_select "input[name='composed_email[to]'][value=?]", "sender@remote.test"
     assert_select "input[name='composed_email[subject]'][value=?]", "Re: hello"
-    assert_select "textarea[name='composed_email[body]']", /sender@remote\.test wrote:/
+    assert_select "lexxy-editor[name='composed_email[body_html]'][value*=?]", "sender@remote.test wrote:"
   end
 
   # The composer has to carry the threading headers through to submit, or a
@@ -471,5 +493,79 @@ class EmailMessagesControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_select "[data-controller='draft-autosave']", 0
     assert_select "a[href=?]", edit_draft_path(saved), text: "Continue writing"
+  end
+
+  # --- HTML rendering: sanitized content inside a sandboxed iframe ---
+
+  HTML_RAW = "From: sender@remote.test\r\nTo: carol@example.com\r\nSubject: rich\r\n" \
+             "Content-Type: text/html; charset=UTF-8\r\n\r\n" \
+             "<p>Hello <b>there</b></p><script>alert(1)</script>\r\n"
+
+  TRACKED_RAW = "From: sender@remote.test\r\nTo: carol@example.com\r\nSubject: pixel\r\n" \
+                "Content-Type: text/html; charset=UTF-8\r\n\r\n" \
+                '<p>news</p><img src="https://tracker.test/p.png">' + "\r\n"
+
+  def iframe_srcdoc
+    frame = css_select("iframe").first
+    assert frame, "expected an iframe on the page"
+    frame["srcdoc"]
+  end
+
+  test "an HTML message renders sanitized inside a sandboxed iframe" do
+    message = EmailMessage.deliver_raw(@account.inbox, HTML_RAW)
+    show(message)
+
+    assert_response :success
+    assert_select "iframe[sandbox=?]", "allow-popups allow-popups-to-escape-sandbox"
+    assert_includes iframe_srcdoc, "<b>there</b>"
+    assert_not_includes iframe_srcdoc, "alert"
+    assert_select "a", text: "View plain text"
+  end
+
+  test "a plain-text message renders without an iframe" do
+    message = EmailMessage.deliver_raw(@account.inbox, RAW)
+    show(message)
+
+    assert_select "iframe", 0
+    assert_select "article pre", text: /body/
+    assert_select "a", text: "View HTML", count: 0
+  end
+
+  test "view=text falls back to the text body with a way back to HTML" do
+    message = EmailMessage.deliver_raw(@account.inbox, HTML_RAW)
+    get email_account_mailbox_email_message_url(@account, message.mailbox, message, view: "text")
+
+    assert_select "iframe", 0
+    assert_select "article pre"
+    assert_select "a[href=?]", email_account_mailbox_email_message_path(@account, message.mailbox, message),
+                  text: "View HTML"
+  end
+
+  test "remote images are blocked until the reader opts in" do
+    message = EmailMessage.deliver_raw(@account.inbox, TRACKED_RAW)
+    show(message)
+
+    assert_not_includes iframe_srcdoc, "tracker.test"
+    assert_select "a[href=?]", email_account_mailbox_email_message_path(@account, message.mailbox, message, images: 1),
+                  text: "Load remote images"
+
+    get email_account_mailbox_email_message_url(@account, message.mailbox, message, images: 1)
+
+    assert_includes iframe_srcdoc, "https://tracker.test/p.png"
+    assert_select "a", text: "Load remote images", count: 0
+  end
+
+  test "a link disguising its destination gets a warning banner and an inline marker" do
+    raw = "From: sender@remote.test\r\nTo: carol@example.com\r\nSubject: urgent\r\n" \
+          "Content-Type: text/html; charset=UTF-8\r\n\r\n" \
+          '<a href="https://evil.test/login">https://innocent.test</a>' + "\r\n"
+    message = EmailMessage.deliver_raw(@account.inbox, raw)
+    show(message)
+
+    assert_select "article strong", text: /Deceptive links/
+    assert_includes iframe_srcdoc, "[actually links to https://evil.test/login]"
+
+    show(EmailMessage.deliver_raw(@account.inbox, HTML_RAW))
+    assert_select "article strong", text: /Deceptive links/, count: 0
   end
 end

@@ -2,9 +2,10 @@
 # (IMAP, SMTP AUTH, the web login), kept so the shape of an attack can be
 # looked at after the fact.
 #
-# The edges already log their own failures - exim writes a line per 535,
-# the IMAP daemon likewise - but those live in container logs capped at
-# 10 MB and rotate away, and nothing can query across the three. This table
+# The listeners already log their own failures - the SMTP server logs a
+# line per 535, the IMAP server likewise - but those live in container
+# logs capped at 10 MB and rotate away, and nothing can query across the
+# three surfaces. This table
 # exists for retention and queryability, not because the data is otherwise
 # unavailable.
 #

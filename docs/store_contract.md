@@ -10,15 +10,14 @@ holds no database credentials), this app's Active Record adapter behind the
 imap endpoints (`MailOnRails::Store::ImapBackend`), and the gem's
 dependency-free reference implementation (`MailOnRails::Imap::Store::Memory`).
 
-> **The SMTP edge does not use a store.** It is the external
-> [`mail_on_rails_exim`](https://github.com/InfiniteLoopEnjoyer/mail_on_rails_exim)
-> service — an Exim MTA that terminates SMTP and reaches this app over
-> plain HTTP, not through a store object. Its contract with the app is the
-> **[HTTP edge contract](#the-http-edge-contract-exim)** below, and the
-> trust-boundary details (header stamping, forged-header stripping) live in
-> that repo's README. The store abstraction remains only for IMAP, where the
-> daemon runs in-process (dev) or as its own service and genuinely needs a
-> database-free seam.
+> **The in-process SMTP server has a store contract of its own**
+> (`MailOnRails::Smtp::Store::Contracts::Smtp`, in
+> `lib/mail_on_rails/smtp/store/contracts.rb`), honored by the Active
+> Record implementation `MailOnRails::Store::SmtpBackend` and the
+> dependency-free `MailOnRails::Smtp::Store::Memory`. The trust-boundary
+> details (header stamping, forged-header stripping) live with the
+> backend and its tests
+> (`test/lib/mail_on_rails/store/smtp_stamping_test.rb`).
 
 ## Ground rules
 
@@ -105,8 +104,9 @@ Requirements, in the order they matter:
 Limits, windows and block durations are the implementation's to choose;
 the contract suite discovers them rather than assuming any. The app's
 implementation is `AuthThrottle` (counters in the database, so the IMAP
-daemon's worker Ractors and the exim edge share one budget and it
-survives a restart); `Store::Memory` mirrors the semantics in a Hash.
+daemon's worker Ractors and the in-process SMTP server share one budget
+and it survives a restart); `Store::Memory` mirrors the semantics in a
+Hash.
 
 ### `record_auth_failure(email, ip: nil, source: nil)`
 
@@ -115,6 +115,17 @@ itself. SCRAM proofs are verified in the daemon against verifier
 material, so the store never sees those failures — without this, SCRAM
 would be an unthrottled path around the `authenticate` throttle. Returns
 `{}`.
+
+### `record_closed_connection(info)` — optional
+
+Persist one closed connection for the Rails UI's history section (both
+protocols; the SMTP server calls it too). `info` is a plain-values hash
+assembled by the server's close path: `protocol:, ip:, port:, role:,
+connected_at:, closed_at:, duration_seconds:` plus the session's
+`live_info` fields (`user:, state:, tls:, helo:, messages:`). Optional:
+servers call it behind `respond_to?`, so a store without it (the memory
+stores) simply keeps no history. Best-effort — must never raise into
+the connection teardown. Returns `{}`.
 
 ### `scram_credentials(email, ip: nil)`
 
@@ -181,6 +192,14 @@ in ascending UID order, silently skipping unknown UIDs (an unknown
 integer; `size` the stored byte size. When `with_raw` is true each entry
 also carries `raw:` with the full stored message bytes.
 
+Entries also carry `email_id:` (RFC 8474 EMAILID, content-derived),
+`thread_id:` (RFC 8474 THREADID, resolved at delivery time from the
+message's References/In-Reply-To ancestry, scoped account-wide: a reply
+adopts the thread of any stored ancestor, otherwise the id derives
+deterministically from the chain's root reference so a thread converges
+even when messages arrive out of order), and `saved_date:` (RFC 8514,
+epoch integer). Both object ids use the RFC 8474 objectid grammar.
+
 ### `store_flags(mailbox_id, uids, mode, flags)`
 
 Mode `"+"` adds, `"-"` removes, `"="` replaces. Returns
@@ -193,7 +212,9 @@ Store a message. Bare LFs in `raw` are normalized to CRLF before storage;
 `size` reflects the normalized bytes. `internal_date_epoch` nil means a
 server-chosen default (the Active Record store falls back to the
 message's Date header, then now). Returns `{ uid:, uid_validity: }`.
-`code: :notfound` for an unknown mailbox.
+`code: :notfound` for an unknown mailbox; `code: :overquota` when the
+write would exceed the account's storage quota (the IMAP server renders
+it as `NO [OVERQUOTA]`, RFC 5530).
 
 The app's adapter additionally virus-scans `raw` (on by default —
 `SMTP_CLAMAV_ADDR` defaults to the clamav accessory, `""` disables):
@@ -218,7 +239,8 @@ Copy messages (bytes, flags, internal date) into `dest_name` on the same
 account, assigning fresh UIDs in the destination. Returns
 `{ uid_validity:, src_uids:, dest_uids: }` (`uid_validity` of the
 destination; the two uid arrays correspond pairwise, ascending source
-order). `code: :notfound` for an unknown destination.
+order). `code: :notfound` for an unknown destination; `code: :overquota`
+when the copies would exceed the account's storage quota.
 
 ### `move(mailbox_id, uids, dest_name)`
 
@@ -226,6 +248,44 @@ Like `copy`, but atomically removes the source messages in the same
 operation (RFC 6851 MOVE) — a failure must leave each message in
 exactly one mailbox. Same return shape and `:notfound` semantics as
 `copy`.
+
+### `search_text(mailbox_id, query, scope)` — optional
+
+TEXT/BODY search pushdown. Optional: the IMAP server calls it behind
+`respond_to?`; without it (and for queries an index can't express —
+strings with no word characters) the server falls back to fetching raw
+bytes and scanning for an RFC-exact substring itself.
+
+`scope` is `"text"` (whole message) or `"body"` (body only, never the
+header). Returns `{ uids: [...] }` ascending; an unknown mailbox yields
+`{ uids: [] }`.
+
+Matching must be case-insensitive and hit at least whole words of the
+query (all of them, in any order or position) in the covered text:
+scope `"text"` covers at least the subject, the address headers, and
+the body's plain text; scope `"body"` covers the body only and must
+never match text that appears only in headers. A store may match more
+generously — the memory store does exact RFC 3501 substrings over the
+raw bytes — but the app's adapter matches word-level against a
+PostgreSQL tsvector (the Dovecot-style FTS trade-off: `TEXT "budget"`
+always finds "budget", `TEXT "udge"` may not).
+
+### `quota(account_id)` — optional
+
+Storage accounting for IMAP QUOTA (RFC 2087/9208). Optional: the IMAP
+server advertises `QUOTA QUOTA=RES-STORAGE` and accepts
+`GETQUOTA`/`GETQUOTAROOT` only when the store responds to it. Returns
+`{ used_bytes:, limit_bytes: }` — `used_bytes` is the sum of stored
+message sizes (CRLF-normalized) across the account, `limit_bytes` nil
+means no quota is configured (the server then reports an empty resource
+list for the root).
+
+A store with quotas must refuse `append` and `copy` with
+`code: :overquota` when the write would push `used_bytes` past
+`limit_bytes`. `move` within the account is net-zero and stays exempt —
+a full account must still be able to file mail into Trash. Contract
+hosts provide `apply_quota(account_id, bytes)` so the suite can set a
+limit however the implementation stores it.
 
 ### `expunged_since(mailbox_id, since_modseq)`
 
@@ -244,42 +304,17 @@ Minitest class, provide `build_store(**limits)` and
 `create_account(email:, password:)`, and the suite asserts everything
 above that is observable through the interface.
 
-## The HTTP edge contract (exim)
+## The SMTP trust boundary
 
-The `mail_on_rails_exim` service does not use a store — it POSTs directly
-to three app endpoints. This is the app's side of that contract; the
-`mail_on_rails_exim` README is authoritative for what exim sends and the
-trust boundary it enforces.
-
-- **Relay ingress** (`config.action_mailbox.ingress = :relay`,
-  authenticated with `action_mailbox.ingress_password`). Every inbound
-  message exim accepts is POSTed here as raw RFC822. Exim has already
-  **stripped any forged `X-Original-To` / `Return-Path` / `X-MailOnRails-*`
-  headers and stamped the authoritative values** the live SMTP connection
-  knows (`Return-Path`, one `X-Original-To` per envelope recipient,
-  `X-MailOnRails-Authenticated`, `X-MailOnRails-Client-Ip`,
-  `X-MailOnRails-Helo`). `MailroomMailbox` trusts exactly those headers to
-  route recipients and to feed the app-side checks — SPF/DKIM/DMARC via the
-  rspamd accessory (`MailOnRails::RspamdAnalyzer`, using the stamped IP /
-  HELO / envelope sender) and virus scanning via ClamAV
-  (`MailOnRails::ClamavScanner`). Exim does no SPF/DKIM/DMARC itself; it
-  does virus-scan at DATA time against the same clamav accessory
-  (rejecting infected mail before acceptance), but stamps no verdict — the
-  app's rescan here is unconditional.
-
-- **`POST mail_on_rails/internal/authenticate`** (basic-auth'd with
-  `mail_on_rails.internal_api_password`, or the `SMTP_INTERNAL_API_PASSWORD`
-  env fallback). Exim's AUTH check calls this; a 2xx with a non-null
-  `account_id` grants the login. Backed by the same account base as the
-  IMAP store's `authenticate`. Send the client address as `ip` so SMTP
-  AUTH and IMAP LOGIN share one brute-force budget; a throttled attempt
-  answers `account_id: null` with `throttled: true`, which an edge that
-  only reads `account_id` correctly treats as a denial.
-
-- **`POST mail_on_rails/internal/outbound_messages`** (same auth). Remote
-  recipients of an authenticated submission are queued here for the app to
-  DKIM-sign and deliver; the sender is forced to the authenticated
-  identity. A `507` tells exim its outbound queue is full so it retries;
-  a `4xx` bounces.
-
-See `MailOnRails::InternalController` for the endpoint implementations.
+Inbound mail enters Action Mailbox through `SmtpBackend#smtp_store`, which
+**strips any forged `X-Original-To` / `Return-Path` / `X-MailOnRails-*`
+headers and stamps the authoritative values** the live SMTP connection
+knows (`Return-Path`, one `X-Original-To` per envelope recipient,
+`X-MailOnRails-Authenticated`, `X-MailOnRails-Client-Ip`,
+`X-MailOnRails-Helo`). `MailroomMailbox` trusts exactly those headers to
+route recipients and to feed the app-side checks — SPF/DKIM/DMARC via the
+rspamd accessory (`MailOnRails::RspamdAnalyzer`, using the stamped IP /
+HELO / envelope sender) and virus scanning via ClamAV
+(`MailOnRails::ClamavScanner`). The SMTP session's own connection-time
+SPF/DKIM/DMARC results stay a connection-time gate and are deliberately
+not forwarded as headers; the mailroom recomputes every verdict itself.

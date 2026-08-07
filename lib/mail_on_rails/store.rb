@@ -2,16 +2,19 @@
 
 require_relative "store/base"
 require_relative "store/imap_backend"
+require_relative "store/smtp_backend"
 
 module MailOnRails
-  # Namespace for the app-side storage adapter behind the IMAP server. The
-  # server talks to the world only through a store; the interface is
-  # specified in docs/store_contract.md. The daemon-side implementation
-  # (MailOnRails::Imap::Store::Http) lives in the extracted gem and reaches
-  # this app over HTTP - what remains here is the Active Record store the
-  # internal API delegates to (Store::ImapBackend) and its shared plumbing
-  # (Store::Base). The SMTP edge (mail_on_rails_exim) uses no store; it POSTs
-  # straight to the relay ingress and the mail_on_rails/internal API.
+  # Namespace for the app-side storage adapters behind the in-process mail
+  # servers. A server talks to the world only through a store; the IMAP
+  # interface is specified in docs/store_contract.md and both interfaces
+  # have executable form in lib/mail_on_rails/{imap,smtp}/store/contracts.rb.
+  # Store::ImapBackend is the Active Record implementation the IMAP
+  # sessions use (wrapped in Store::WithSource so auth attempts carry
+  # source: "imap"); Store::SmtpBackend serves the SMTP sessions
+  # (recipient checks, inbound ingestion, outbound queueing, quarantine);
+  # Store::Base holds the shared plumbing (executor wrapping, AuthThrottle
+  # policy, AuthAttempt logging).
   module Store
   end
 end

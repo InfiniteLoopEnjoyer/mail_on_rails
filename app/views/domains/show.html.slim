@@ -1,6 +1,8 @@
 - page_title "#{@domain.name}"
 - mail_host = ENV["SMTP_HELO_HOST"].presence || "<your mail host>"
 
+= turbo_stream_from @domain
+
 nav.mb-2.text-sm.text-slate-500.dark:text-slate-400
   =<> link_to "Domains", domains_path, class: "text-accent"
   | /
@@ -9,19 +11,17 @@ nav.mb-2.text-sm.text-slate-500.dark:text-slate-400
 header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
   h1.text-2xl.font-bold= @domain.name
   .flex.items-center.gap-2
+    = button_to "Recheck DNS", recheck_dns_domain_path(@domain), class: "inline-block cursor-pointer rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3.5 py-1 text-sm font-medium text-slate-700 dark:text-slate-300"
     - if CloudflareDns.enabled?
-      = button_to "Publish DNS to Cloudflare", publish_dns_domain_path(@domain), class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white", form: { data: { turbo_confirm: "Create #{@domain.name}'s missing DNS records in Cloudflare? Existing MX/SPF/DMARC records are never overwritten; only a mismatched DKIM TXT is updated." } }
-    = button_to "Delete", domain_path(@domain), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 dark:border-red-900 bg-white dark:bg-slate-900 px-3.5 py-1 text-sm font-medium text-red-700 dark:text-red-400", form: { data: { turbo_confirm: "Remove #{@domain.name}? Exim will immediately refuse inbound mail for it and outbound mail stops being DKIM-signed." } }
+      = button_to "Publish DNS to Cloudflare", publish_dns_domain_path(@domain), class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white", form: { data: { turbo_confirm: "Create #{@domain.name}'s missing DNS records in Cloudflare? Existing MX/SPF/DMARC/TLS-RPT records are never overwritten; only mismatched DKIM and MTA-STS TXTs are updated." } }
+    = button_to "Delete", domain_path(@domain), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 dark:border-red-900 bg-white dark:bg-slate-900 px-3.5 py-1 text-sm font-medium text-red-700 dark:text-red-400", form: { data: { turbo_confirm: "Remove #{@domain.name}? Inbound mail for it is immediately refused and outbound mail stops being DKIM-signed." } }
 
 .mb-4.flex.flex-wrap.gap-2
   - if @domain.dkim_private_key.present?
     span.rounded-full.bg-green-100.dark:bg-green-950.px-2.py-0.5.text-xs.text-green-700.dark:text-green-400 DKIM key present
   - else
     span.rounded-full.bg-yellow-100.dark:bg-yellow-950.px-2.py-0.5.text-xs.text-yellow-700.dark:text-yellow-400 DKIM key missing (outbound goes unsigned)
-  - if @domain.synced_to_exim?
-    span.rounded-full.bg-green-100.dark:bg-green-950.px-2.py-0.5.text-xs.text-green-700.dark:text-green-400 listed in exim - accepting mail
-  - else
-    span.rounded-full.bg-red-100.dark:bg-red-950.px-2.py-0.5.text-xs.text-red-700.dark:text-red-400 not in exim's domain list (sync pending?)
+  span.rounded-full.bg-green-100.dark:bg-green-950.px-2.py-0.5.text-xs.text-green-700.dark:text-green-400 accepting mail
 
 h2.mb-2.text-lg.font-semibold DNS records to publish
 p.mb-3.text-sm.text-slate-500.dark:text-slate-400
@@ -33,7 +33,7 @@ p.mb-3.text-sm.text-slate-500.dark:text-slate-400
 - dns_status = @dns.checks.index_by(&:record)
 - status_badges = { pass: [ "published", "bg-green-100 dark:bg-green-950 text-green-700 dark:text-green-400" ], warn: [ "verify", "bg-yellow-100 dark:bg-yellow-950 text-yellow-700 dark:text-yellow-400" ], fail: [ "missing/wrong", "bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-400" ], unknown: [ "unknown", "bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300" ] }
 .mb-4.divide-y.divide-slate-100.dark:divide-slate-800.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900
-  - rows = [ [ "MX", "MX", @domain.name, "10 #{mail_host}." ], [ "TXT (SPF)", "SPF", @domain.name, "v=spf1 mx -all" ], [ "TXT (DKIM)", "DKIM", @domain.dkim_txt_name, nil ], [ "TXT (DMARC)", "DMARC", "_dmarc.#{@domain.name}", "v=DMARC1; p=none; rua=mailto:#{@domain.dmarc_address}" ] ]
+  - rows = [ [ "MX", "MX", @domain.name, "10 #{mail_host}." ], [ "TXT (SPF)", "SPF", @domain.name, "v=spf1 mx -all" ], [ "TXT (DKIM)", "DKIM", @domain.dkim_txt_name, nil ], [ "TXT (DMARC)", "DMARC", "_dmarc.#{@domain.name}", "v=DMARC1; p=none; rua=mailto:#{@domain.dmarc_address}" ], [ "TXT (MTA-STS)", "MTA-STS", "_mta-sts.#{@domain.name}", MtaSts.configured? ? MtaSts.txt_record : "v=STSv1; id=<set the SMTP hostname first>" ], [ "TXT (TLS-RPT)", "TLS-RPT", "_smtp._tls.#{@domain.name}", "v=TLSRPTv1; rua=mailto:#{@domain.tls_rpt_address}" ] ]
   - rows.each do |label, key, record_name, value|
     - c = dns_status[key]
     - badge_text, badge_class = status_badges[c.status]
@@ -67,6 +67,13 @@ p.mb-6.text-xs.text-slate-500.dark:text-slate-400
   ' . Aggregate reports are delivered to
   code<>= @domain.dmarc_address
   '  (auto-created) and parsed automatically.
+  ' MTA-STS senders fetch the policy (currently mode: #{MtaSts::MODE}) from
+  code<> https://mta-sts.#{@domain.name}/.well-known/mta-sts.txt
+  ' - publishing creates that CNAME, and this app serves the file; the
+  ' host must also be listed under the kamal proxy's hosts so it gets a
+  ' certificate. TLS failure reports (TLS-RPT) are mailed to
+  code<>= @domain.tls_rpt_address
+  '  (auto-created) for review.
 
 h2.mb-2.text-lg.font-semibold DMARC monitoring
 - advice_key, advice_text = @dmarc_advice

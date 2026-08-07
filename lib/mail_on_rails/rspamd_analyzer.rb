@@ -7,8 +7,9 @@ require "uri"
 module MailOnRails
   # Sends a raw RFC822 message to an rspamd worker's HTTP /checkv2 endpoint
   # to compute the inbound sender-authentication verdicts (SPF/DKIM/DMARC)
-  # and a spam action. The exim edge does none of this itself - it only
-  # forwards the connection facts (client IP, HELO, envelope sender) as the
+  # and a spam action. This is the verdict authority for filing - the SMTP
+  # edge's own SPF/DKIM checks are only a connection-time gate; it forwards
+  # the connection facts (client IP, HELO, envelope sender) as the
   # trusted X-MailOnRails-* / Return-Path headers, which the mailroom passes
   # here so rspamd's SPF/DMARC checks have the data the app never saw on the
   # wire.
@@ -22,12 +23,20 @@ module MailOnRails
     # mechanism verdicts (e.g. "mail.example.com; spf=pass; dkim=pass;
     # dmarc=pass"), the exact shape EmailMessage#auth_result parses and the
     # mailroom stamps. `action`/`score` carry rspamd's spam verdict for logging.
-    Result = Struct.new(:status, :action, :score, :required_score, :spf, :dkim, :dmarc, :auth_results,
-                        keyword_init: true) do
+    # `dmarc_policy` is the sender domain's own published disposition
+    # ("reject"/"quarantine") when the message failed DMARC, nil otherwise -
+    # p=none failures still read dmarc=fail but carry no policy, so enforcing
+    # on dmarc_policy always honors what the domain owner asked for.
+    Result = Struct.new(:status, :action, :score, :required_score, :spf, :dkim, :dmarc, :dmarc_policy,
+                        :auth_results, keyword_init: true) do
       def ok? = status == :ok
       def unavailable? = status == :unavailable
       # Any action past plain acceptance/greylisting is rspamd calling it spam.
       def spam? = ok? && ![ nil, "no action", "greylist" ].include?(action)
+      # rspamd's two refusal actions, split by SMTP semantics: "reject"
+      # deserves a permanent 5xx, "soft reject" a retryable 4xx.
+      def reject? = ok? && action == "reject"
+      def soft_reject? = ok? && action == "soft reject"
     end
 
     DEFAULT_PORT = 11333
@@ -50,6 +59,11 @@ module MailOnRails
       "DMARC_POLICY_QUARANTINE" => "fail", "DMARC_POLICY_SOFTFAIL" => "fail",
       "DMARC_NA" => "none", "DMARC_BAD_POLICY" => "permerror"
     }.freeze
+    # The failure symbols that also carry the domain's published disposition
+    # (DMARC_POLICY_SOFTFAIL is a fail under p=none - no disposition).
+    DMARC_POLICY_SYMBOLS = {
+      "DMARC_POLICY_REJECT" => "reject", "DMARC_POLICY_QUARANTINE" => "quarantine"
+    }.freeze
 
     module_function
 
@@ -65,12 +79,15 @@ module MailOnRails
       Integer(ENV.fetch("SMTP_RSPAMD_TIMEOUT", DEFAULT_TIMEOUT))
     end
 
-    # Analyze a message. The keyword facts come from the exim-stamped headers
+    # Analyze a message. The keyword facts come from the edge-stamped headers
     # and are passed to rspamd so SPF/DMARC (which need the live connection)
-    # can run app-side. Returns a Result; :unavailable on any transport or
-    # parse failure - never raises.
-    def analyze(raw, ip: nil, helo: nil, mail_from: nil, rcpt: nil, authenticated_as: nil)
-      uri = endpoint
+    # can run app-side. addr/timeout default to the env config and exist for
+    # callers that carry their own (the SMTP session's per-listener spec).
+    # Returns a Result; :unavailable on any transport or parse failure -
+    # never raises.
+    def analyze(raw, ip: nil, helo: nil, mail_from: nil, rcpt: nil, authenticated_as: nil,
+                addr: self.addr, timeout: self.timeout)
+      uri = endpoint(addr)
       http = Net::HTTP.new(uri.host, uri.port || DEFAULT_PORT)
       http.open_timeout = timeout
       http.read_timeout = timeout
@@ -102,7 +119,8 @@ module MailOnRails
 
       Result.new(
         status: :ok, action: json["action"], score: json["score"], required_score: json["required_score"],
-        spf: spf, dkim: dkim, dmarc: dmarc, auth_results: auth_results_string(spf, dkim, dmarc)
+        spf: spf, dkim: dkim, dmarc: dmarc, dmarc_policy: mechanism(symbols, DMARC_POLICY_SYMBOLS),
+        auth_results: auth_results_string(spf, dkim, dmarc)
       )
     end
 
@@ -130,7 +148,7 @@ module MailOnRails
       ENV["SMTP_RSPAMD_PASSWORD"].to_s.strip
     end
 
-    def endpoint
+    def endpoint(addr = self.addr)
       base = addr.include?("://") ? addr : "http://#{addr}"
       URI.parse(base)
     end

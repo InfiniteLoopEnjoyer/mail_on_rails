@@ -124,8 +124,9 @@ class OutboundDeliverer
   end
 
   # What we announce in EHLO. Remote servers check this resolves back to
-  # us, so production sets it to the public mail hostname.
+  # us, so production sets it to the public mail hostname (Settings page
+  # or SMTP_HELO_HOST).
   def helo_host
-    ENV.fetch("SMTP_HELO_HOST", Socket.gethostname)
+    Setting.effective_smtp_helo_hostname
   end
 end

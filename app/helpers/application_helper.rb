@@ -16,7 +16,25 @@ module ApplicationHelper
   def users_section?     = controller_name == "users" || controller_path.start_with?("two_factor/")
   def settings_section?  = controller_name == "settings"
   def mailboxes_section? = %w[email_accounts mailboxes email_messages].include?(controller_name)
-  def auth_attempts_section? = controller_name == "auth_attempts"
+  def smtp_section?      = controller_name == "smtp"
+  def imap_section?      = controller_name == "imap"
+  def security_section?  = controller_name == "auth_attempts"
+  def audit_section?     = controller_name == "audit_events"
+
+  # Compact duration for the connection history table: "3s", "4m 12s",
+  # "2h 5m". Rollup rows carry no duration.
+  def duration_label(seconds)
+    return "—" if seconds.nil?
+
+    total = seconds.round
+    return "#{total}s" if total < 60
+
+    minutes, secs = total.divmod(60)
+    return "#{minutes}m #{secs}s" if minutes < 60
+
+    hours, minutes = minutes.divmod(60)
+    "#{hours}h #{minutes}m"
+  end
 
   # Window selector on the auth attempts page. Class literals again, so
   # Tailwind's scanner sees them.
@@ -59,6 +77,46 @@ module ApplicationHelper
   def auth_badge_label(mechanism, verdict)
     icon = verdict == "pass" ? "✓" : "⚠"
     "#{icon} #{mechanism.upcase} #{(verdict || "none").capitalize}"
+  end
+
+  # Pill classes/icon for a DnsCheck status on the domains index. Same
+  # palette as auth_badge_classes; :warn/:unknown diverge (amber "verify
+  # yourself" vs slate "couldn't tell").
+  def dns_pill_classes(status)
+    case status
+    when :pass then "bg-green-100 dark:bg-green-950 text-green-700 dark:text-green-400"
+    when :warn then "bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-400"
+    when :fail then "bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-400"
+    else            "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+    end
+  end
+
+  def dns_pill_icon(status)
+    { pass: "✓", warn: "⚠", fail: "✗" }.fetch(status, "?")
+  end
+
+  # Human labels for IMAP flags on the message page ("\Seen" reads like a
+  # protocol dump). Standard system flags and the common client keywords
+  # get proper names; anything else shows minus its \ or $ sigil. The raw
+  # flag stays in the pill's title.
+  FLAG_LABELS = {
+    "\\Seen" => "Read", "\\Answered" => "Replied", "\\Flagged" => "★ Flagged",
+    "\\Deleted" => "Deleted", "\\Draft" => "Draft", "\\Recent" => "Recent",
+    "$Forwarded" => "Forwarded", "$Junk" => "Junk", "$NotJunk" => "Not junk"
+  }.freeze
+
+  def flag_pill_label(flag)
+    FLAG_LABELS.fetch(flag) { flag.delete_prefix("\\").delete_prefix("$") }
+  end
+
+  # Same pill palette as the other badges: amber for the attention-seeker,
+  # red for the doomed, neutral slate for the rest.
+  def flag_pill_classes(flag)
+    case flag
+    when "\\Flagged"          then "bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-400"
+    when "\\Deleted", "$Junk" then "bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-400"
+    else                           "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+    end
   end
 
   # rspamd score for the footer: "score / threshold — action", degrading to

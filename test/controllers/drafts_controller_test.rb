@@ -89,7 +89,8 @@ class DraftsControllerTest < ActionDispatch::IntegrationTest
     assert_select "input[name='composed_email[to]'][value=?]", "bob@remote.test"
     assert_select "input[name='composed_email[cc]'][value=?]", "carbon@remote.test"
     assert_select "input[name='composed_email[subject]'][value=?]", "Half written"
-    assert_select "textarea[name='composed_email[body]']", /Got this far\./
+    # A plain draft seeds the rich editor with its text, escaped into markup.
+    assert_select "lexxy-editor[name='composed_email[body_html]'][value*=?]", "Got this far."
     # The revision being edited, so the first autosave replaces it rather
     # than adding a second draft.
     assert_select "input[name='composed_email[draft_message_id]'][value=?]", saved.id.to_s

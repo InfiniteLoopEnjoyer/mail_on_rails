@@ -3,8 +3,7 @@ require "test_helper"
 class DomainsControllerTest < ActionDispatch::IntegrationTest
   setup do
     sign_in_as users(:one)
-    # No MAIL_ON_RAILS_EXIM_DOMAINS_FILE in test: the exim sync is a
-    # no-op (covered in the model test); the DKIM key mints into the row.
+    # The DKIM key mints into the row on create.
     @domain = Domain.create!(name: "example.com")
   end
 
@@ -39,6 +38,21 @@ class DomainsControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_match "rail._domainkey.example.com", response.body
     assert_match "v=spf1 mx -all", response.body
+  end
+
+  test "index renders pills from the cached DNS checks" do
+    @domain.update!(dns_checked_at: Time.current, dns_checks: [
+      { record: "MX", status: "pass", found: "10 mail.example.com", note: nil },
+      { record: "SPF", status: "fail", found: nil, note: "no v=spf1 record published" }
+    ])
+    get domains_url
+    assert_select "span", text: "✓ MX"
+    assert_select "span", text: "✗ SPF"
+  end
+
+  test "index shows a placeholder before the first DNS check" do
+    get domains_url
+    assert_select "span", text: "DNS not checked yet"
   end
 
   test "publish_dns without a Cloudflare token redirects with an alert" do

@@ -6,8 +6,8 @@ require "timeout"
 module MailOnRails
   # Streams a raw RFC822 message to clamd over its INSTREAM protocol
   # (clamd decodes MIME itself, so attachments are covered). App-side
-  # callers are the mailroom (all inbound mail - the exim edge does no
-  # scanning of its own) and the IMAP APPEND path.
+  # callers are the mailroom (which rescans all inbound mail even though
+  # the SMTP edge already scanned at DATA) and the IMAP APPEND path.
   #
   # Verdicts: :clean, :infected (with signature name), :unavailable (clamd
   # unreachable/timeout/unparseable answer). Never raises - callers decide

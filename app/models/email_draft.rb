@@ -22,7 +22,7 @@ class EmailDraft
   FLAGS = [ "\\Draft", "\\Seen" ].freeze
   MAILBOX = "Drafts"
 
-  attr_accessor :email_account_id, :to, :cc, :subject, :body,
+  attr_accessor :email_account_id, :to, :cc, :subject, :body, :body_html,
                 :in_reply_to, :references, :message_id
 
   # The saved revision this draft supersedes, if any.
@@ -63,6 +63,11 @@ class EmailDraft
       cc: Array(mail.cc).join(", ").presence,
       subject: mail.subject.to_s.presence,
       body: message.text_body,
+      # A rich draft is multipart/alternative; its HTML part comes back so
+      # the editor resumes with formatting intact. It is this app's own
+      # sanitized-at-save markup, and it is sanitized again on every save
+      # and send, so reading it raw here adds no surface.
+      body_html: mail.html_part&.decoded&.presence,
       in_reply_to: Array(mail.in_reply_to).first,
       references: Array(mail.references).join(" ").presence,
       message_id: message.message_id.presence,
@@ -92,7 +97,7 @@ class EmailDraft
   # and an empty draft in the mailbox is worse than no draft at all - it
   # shows up on every device as a piece of litter to clean up.
   def blank?
-    [ to, cc, subject ].all?(&:blank?) && body.to_s.strip.blank?
+    [ to, cc, subject ].all?(&:blank?) && body.to_s.strip.blank? && html_blank?
   end
 
   # Writes this revision and expunges the one it supersedes, returning the
@@ -127,7 +132,8 @@ class EmailDraft
   # once delivery has committed, so a failed send leaves the draft intact.
   def deliver
     composed = ComposedEmail.new(email_account_id: email_account_id, to: to, cc: cc,
-                                 subject: subject, body: body, message_id: message_id,
+                                 subject: subject, body: body, body_html: body_html,
+                                 message_id: message_id,
                                  in_reply_to: in_reply_to, references: references)
     return false unless composed.deliver
 
@@ -137,11 +143,18 @@ class EmailDraft
 
   def build_raw
     ComposedEmail.new(email_account_id: email_account_id, to: to, cc: cc, subject: subject,
-                      body: body, in_reply_to: in_reply_to, references: references,
+                      body: body, body_html: body_html,
+                      in_reply_to: in_reply_to, references: references,
                       message_id: message_id).build_raw
   end
 
   private
+
+  # An "empty" rich editor still submits markup (an empty paragraph), so
+  # blankness is judged on the text the markup renders to.
+  def html_blank?
+    body_html.blank? || Loofah.fragment(body_html.to_s).text.strip.blank?
+  end
 
   # A stable Message-ID across revisions, so a threading client (and our
   # own In-Reply-To handling) sees one draft being revised rather than a

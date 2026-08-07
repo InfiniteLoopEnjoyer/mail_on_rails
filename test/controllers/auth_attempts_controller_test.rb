@@ -19,7 +19,7 @@ class AuthAttemptsControllerTest < ActionDispatch::IntegrationTest
   test "renders an empty state with no attempts" do
     get auth_attempts_path
     assert_response :success
-    assert_select "h1", "Auth attempts"
+    assert_select "h1", "Security"
   end
 
   test "shows source ranges and the dictionary" do

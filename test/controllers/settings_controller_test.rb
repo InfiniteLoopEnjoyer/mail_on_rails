@@ -7,8 +7,7 @@ class SettingsControllerTest < ActionDispatch::IntegrationTest
   end
 
   teardown do
-    ENV.delete("MAIL_ON_RAILS_EXIM_DOMAINS_FILE")
-    ENV.delete("MAIL_ON_RAILS_EXIM_RECIPIENTS_FILE")
+    ENV.delete("MAIL_ON_RAILS_BANNED_IPS_FILE")
   end
 
   test "requires authentication" do
@@ -17,11 +16,9 @@ class SettingsControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to new_session_url
   end
 
-  test "shows the not-configured state without the env vars" do
+  test "shows the not-configured state without the env var" do
     get settings_url
     assert_response :success
-    assert_select "span", text: "MAIL_ON_RAILS_EXIM_DOMAINS_FILE not set"
-    assert_select "span", text: "MAIL_ON_RAILS_EXIM_RECIPIENTS_FILE not set"
     assert_select "span", text: "MAIL_ON_RAILS_BANNED_IPS_FILE not set"
   end
 
@@ -37,64 +34,38 @@ class SettingsControllerTest < ActionDispatch::IntegrationTest
 
       assert_redirected_to settings_url
       assert_equal %w[203.0.113.0/24], File.readlines(path, chomp: true)
-    ensure
-      ENV.delete("MAIL_ON_RAILS_BANNED_IPS_FILE")
     end
   end
 
   test "shows file contents and in-sync/drift against the database" do
     Dir.mktmpdir do |dir|
-      ENV["MAIL_ON_RAILS_EXIM_RECIPIENTS_FILE"] = File.join(dir, "local_recipients")
-      account = EmailAccount.create!(email: "settings@example.test", password: "secret-pass-123")
+      path = File.join(dir, "banned_ips")
+      ENV["MAIL_ON_RAILS_BANNED_IPS_FILE"] = path
+      BannedIp.delete_all
+      BannedIp.create!(cidr: "203.0.113.0/24", source: "manual")
 
       get settings_url
       assert_response :success
       assert_select "span", text: "Synced"
-      assert_select "pre", text: /settings@example\.test/
+      assert_select "pre", text: /203\.0\.113\.0\/24/
 
       # Drift both ways: a file entry with no row, a row not in the file.
-      File.write(ENV["MAIL_ON_RAILS_EXIM_RECIPIENTS_FILE"], "ghost@example.test\n")
+      File.write(path, "198.51.100.0/24\n")
       get settings_url
       assert_select "span", text: "Diverged"
-      assert_select "p", text: /exim rejects these\):\s*#{Regexp.escape(account.email)}/
-      assert_select "p", text: /exim still accepts these\):\s*ghost@example\.test/
+      assert_select "p", text: /not yet enforced\):\s*203\.0\.113\.0\/24/
+      assert_select "p", text: /still enforced\):\s*198\.51\.100\.0\/24/
     end
   end
 
   test "flags a missing file" do
-    ENV["MAIL_ON_RAILS_EXIM_DOMAINS_FILE"] = "/nonexistent/local_domains"
+    ENV["MAIL_ON_RAILS_BANNED_IPS_FILE"] = "/nonexistent/banned_ips"
     get settings_url
-    assert_select "span", text: "File missing - exim defers all inbound"
-  end
-
-  test "sync rewrites the recipients file from the database" do
-    Dir.mktmpdir do |dir|
-      ENV["MAIL_ON_RAILS_EXIM_RECIPIENTS_FILE"] = File.join(dir, "local_recipients")
-      account = EmailAccount.create!(email: "settings@example.test", password: "secret-pass-123")
-      File.write(ENV["MAIL_ON_RAILS_EXIM_RECIPIENTS_FILE"], "ghost@example.test\n")
-
-      post sync_settings_url(file: "recipients")
-      assert_redirected_to settings_url
-      assert_match(/rewritten from the database/, flash[:notice])
-      assert_includes File.read(ENV["MAIL_ON_RAILS_EXIM_RECIPIENTS_FILE"]), account.email
-      refute_includes File.read(ENV["MAIL_ON_RAILS_EXIM_RECIPIENTS_FILE"]), "ghost@example.test"
-    end
-  end
-
-  test "sync refuses to write an empty domain list" do
-    Dir.mktmpdir do |dir|
-      ENV["MAIL_ON_RAILS_EXIM_DOMAINS_FILE"] = File.join(dir, "local_domains")
-      Domain.delete_all
-
-      post sync_settings_url(file: "domains")
-      assert_redirected_to settings_url
-      assert_match(/sync failed/, flash[:alert])
-      refute File.exist?(ENV["MAIL_ON_RAILS_EXIM_DOMAINS_FILE"])
-    end
+    assert_select "span", text: "File missing - no bans enforced"
   end
 
   test "sync without the env var configured warns instead of writing" do
-    post sync_settings_url(file: "recipients")
+    post sync_settings_url(file: "banned_ips")
     assert_redirected_to settings_url
     assert_match(/is not set/, flash[:alert])
   end
@@ -129,5 +100,39 @@ class SettingsControllerTest < ActionDispatch::IntegrationTest
       assert_match(/whole number of days/, flash[:alert])
       assert_equal 30, Setting.trash_retention_days
     end
+  end
+
+  # -- SMTP hostname ---------------------------------------------------------
+
+  test "shows the smtp hostname form with the effective name as placeholder" do
+    get settings_url
+    assert_select "input[name='smtp_helo_hostname'][placeholder='#{Socket.gethostname}']"
+
+    Setting.smtp_helo_hostname = "mail.example.test"
+    get settings_url
+    assert_select "input[name='smtp_helo_hostname'][value='mail.example.test']"
+    assert_select "p", text: /Currently announcing\s+mail\.example\.test\s+\(from this setting\)/
+  end
+
+  test "update saves the smtp hostname" do
+    patch settings_url, params: { smtp_helo_hostname: "MX.Example.Test" }
+    assert_redirected_to settings_url
+    assert_equal "SMTP hostname set to mx.example.test.", flash[:notice]
+    assert_equal "mx.example.test", Setting.smtp_helo_hostname
+  end
+
+  test "update with a blank smtp hostname clears the override" do
+    Setting.smtp_helo_hostname = "mail.example.test"
+    patch settings_url, params: { smtp_helo_hostname: "" }
+    assert_redirected_to settings_url
+    assert_match(/override cleared/, flash[:notice])
+    assert_nil Setting.smtp_helo_hostname_override
+  end
+
+  test "update rejects a junk smtp hostname" do
+    patch settings_url, params: { smtp_helo_hostname: "not a hostname" }
+    assert_redirected_to settings_url
+    assert_match(/must be a hostname/, flash[:alert])
+    assert_nil Setting.smtp_helo_hostname_override
   end
 end

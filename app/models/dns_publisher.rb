@@ -2,12 +2,15 @@
 # explicit admin action (the "Publish DNS" button - never automatic).
 #
 # Deliberately conservative about what it will touch:
-#   - creates records that are MISSING (MX, SPF, DKIM TXT, DMARC);
-#   - updates only the DKIM TXT when it mismatches the key on disk - that
-#     record (<selector>._domainkey.<domain>) is ours to own;
-#   - never overwrites an existing MX set, SPF, or DMARC record - those
-#     may be deliberate (Email Routing MXs, custom SPF mechanisms, a
-#     tightened DMARC policy), so they are reported as skipped instead.
+#   - creates records that are MISSING (MX, SPF, DKIM TXT, DMARC,
+#     MTA-STS TXT + policy-host CNAME, TLS-RPT);
+#   - updates only the DKIM TXT when it mismatches the key on disk and
+#     the MTA-STS TXT when its id mismatches the policy this app serves -
+#     those records are ours to own;
+#   - never overwrites an existing MX set, SPF, DMARC, or TLS-RPT record
+#     - those may be deliberate (Email Routing MXs, custom SPF
+#     mechanisms, a tightened DMARC policy, a different report address),
+#     so they are reported as skipped instead.
 # DMARC escalation (p=none -> quarantine -> reject) stays a manual edit,
 # guided by the monitoring section's advice.
 class DnsPublisher
@@ -25,7 +28,7 @@ class DnsPublisher
   end
 
   def publish!
-    raise CloudflareDns::Error, "SMTP_HELO_HOST is not set" if mail_host.blank?
+    raise CloudflareDns::Error, "SMTP hostname is not set (Settings page or SMTP_HELO_HOST)" if mail_host.blank?
 
     @zone = @client.zone_id(@domain.name)
     @actions = []
@@ -34,13 +37,15 @@ class DnsPublisher
     publish_spf
     publish_dkim
     publish_dmarc
+    publish_mta_sts
+    publish_tls_rpt
     Result.new(actions: @actions, skipped: @skipped)
   end
 
   private
 
   def mail_host
-    ENV["SMTP_HELO_HOST"].to_s.strip.downcase.presence
+    Setting.smtp_helo_hostname
   end
 
   def publish_mx
@@ -95,6 +100,65 @@ class DnsPublisher
                                    content: quoted_txt("v=DMARC1; p=none; rua=mailto:#{@domain.dmarc_address}"), ttl: TTL)
       @actions << "created DMARC (p=none, reports to #{@domain.dmarc_address})"
     end
+  end
+
+  # The _mta-sts TXT carries an id derived from the policy file this app
+  # serves (MtaSts), so a mismatch just means the policy changed since the
+  # record was published - safe to update in place, unlike SPF/DMARC.
+  def publish_mta_sts
+    name = "_mta-sts.#{@domain.name}"
+    expected = MtaSts.txt_record
+    published = txt_records(name).find { |r| content_of(r).match?(/\Av=STSv1\b/i) }
+    if published.nil?
+      @client.create_record(@zone, type: "TXT", name: name, content: quoted_txt(expected), ttl: TTL)
+      @actions << "created MTA-STS TXT (#{expected})"
+    elsif content_of(published) == expected
+      @skipped << "MTA-STS TXT already matches the policy"
+    else
+      @client.update_record(@zone, published["id"], type: "TXT", name: name, content: quoted_txt(expected), ttl: TTL)
+      @actions << "updated MTA-STS TXT to the current policy id"
+    end
+    publish_mta_sts_host
+  end
+
+  # Senders fetch the policy from https://mta-sts.<domain>/..., so that
+  # host must reach this app's web endpoint (and be listed in the kamal
+  # proxy hosts so it gets a certificate).
+  def publish_mta_sts_host
+    host = MtaSts.policy_host(@domain)
+    if web_host.blank?
+      @skipped << "MTA-STS policy host: MAIL_ON_RAILS_WEB_HOST is not set, cannot point #{host} anywhere"
+      return
+    end
+
+    existing = @client.records(@zone, type: "CNAME", name: host)
+    if existing.empty?
+      @client.create_record(@zone, type: "CNAME", name: host, content: web_host, ttl: TTL)
+      @actions << "created CNAME #{host} -> #{web_host}"
+    elsif existing.any? { |r| r["content"].to_s.downcase.delete_suffix(".") == web_host }
+      @skipped << "#{host} already points at #{web_host}"
+    else
+      found = existing.map { |r| r["content"] }.join(", ")
+      @skipped << "#{host} exists but points elsewhere (#{found}) - senders will fetch the MTA-STS policy from there"
+    end
+  end
+
+  def publish_tls_rpt
+    name = "_smtp._tls.#{@domain.name}"
+    existing = txt_records(name).find { |r| content_of(r).match?(/\Av=TLSRPTv1\b/i) }
+    if existing
+      @skipped << "TLS-RPT already published (#{content_of(existing)}) - not modifying an existing report address"
+    else
+      # The rua target must exist before reporters mail it.
+      @domain.ensure_tls_rpt_account!
+      @client.create_record(@zone, type: "TXT", name: name,
+                                   content: quoted_txt("v=TLSRPTv1; rua=mailto:#{@domain.tls_rpt_address}"), ttl: TTL)
+      @actions << "created TLS-RPT (reports to #{@domain.tls_rpt_address})"
+    end
+  end
+
+  def web_host
+    ENV["MAIL_ON_RAILS_WEB_HOST"].to_s.strip.downcase.presence
   end
 
   def txt_records(name)

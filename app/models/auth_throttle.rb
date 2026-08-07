@@ -8,9 +8,9 @@
 # sessions from one worker Ractor per core with no shared memory between
 # them - an in-process counter would be per-worker, and connections are
 # dispatched round-robin, so a fleet of N workers would multiply any local
-# cap by N. The app is also where SMTP AUTH lands (exim calls the same
-# internal endpoint), so both protocols share one budget, and the counters
-# survive a daemon restart.
+# cap by N. The app is also where SMTP AUTH lands (Store::SmtpBackend
+# authenticates through the same plumbing), so both protocols share one
+# budget, and the counters survive a restart.
 #
 # The check runs *before* the bcrypt comparison, so a blocked attacker
 # costs a single indexed lookup rather than a KDF - this is a CPU

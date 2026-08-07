@@ -5,49 +5,34 @@ submission), IMAP, and a web UI, with mail stored in PostgreSQL.
 
 ## Architecture
 
-The mail edges live in sibling repos and deploy as their own Kamal
-services:
+One container runs everything: Puma serves the web UI and Solid Queue,
+and the `:mail_on_rails` Puma plugin boots the SMTP server (MX +
+authenticated submission, STARTTLS/implicit TLS, AUTH, DoS caps) and the
+IMAP server on background threads in the same process.
 
-- **[mail_on_rails_exim](https://github.com/InfiniteLoopEnjoyer/mail_on_rails_exim)**
-  — the SMTP edge: an [Exim](https://www.exim.org/) MTA (MX + authenticated
-  submission on 25/587/465) with STARTTLS/AUTH and DoS caps. It terminates
-  SMTP and hands mail to this app over HTTP — it holds no Rails code, no
-  database, and no master key. It virus-scans each message at DATA time
-  against this app's clamav accessory (infected → 550 before acceptance,
-  scanner down → 451, fail closed); this app rescans on ingress as defense
-  in depth. It does no SPF/DKIM/DMARC of its own — it forwards the
-  connection facts and this app runs those checks. The list of domains it
-  accepts mail for is managed live from this app's Domains admin UI (a
-  shared-volume file exim re-reads per connection — no edge redeploy to
-  add or remove a domain).
-- **[mail_on_rails_imap](https://github.com/InfiniteLoopEnjoyer/mail_on_rails_imap)**
-  — the IMAP server.
+The protocol servers are Rails-free and vendored under
+`lib/mail_on_rails/smtp*` and `lib/mail_on_rails/imap`; each speaks to a
+**store** (interface in `docs/store_contract.md`) whose Active
+Record-backed implementations are this app's. Inbound mail is
+SPF/DKIM/DMARC-verified and virus-scanned at SMTP DATA time (infected →
+550 before acceptance, scanner down → 451, fail closed), then routed
+through Action Mailbox; messages carry verified/unverified badges in the
+UI. Hosted domains are managed live from the Domains admin UI — no
+restart to add or remove one.
 
-This app is the persistence and UI side. It exposes the Action Mailbox
-relay ingress and the private internal API the edges talk to, stores mail
-in Postgres, and serves the web UI. The IMAP daemon speaks to a **store**
-(interface in `docs/store_contract.md`); the exim edge uses no store and
-POSTs straight to the ingress + internal API (its HTTP contract is in the
-same doc, authoritative details in the exim repo). Inbound messages carry
-verified/unverified badges in the UI.
-
-In development the IMAP daemon is a path dependency (the `:daemons` Gemfile
-group) and runs in-process on a background thread via the `:mail_on_rails`
-Puma plugin, so `bin/dev` brings up web + IMAP in one process. A second
+In development `bin/dev` brings up web + SMTP + IMAP in one process. A
 dev-only Puma plugin (`:clamav_dev`) keeps a local `clamav-dev` docker
 container running so virus scanning works too — with no docker it logs a
-note and leaves scanning off. The SMTP edge is a Docker/Exim service and
-runs on its own (see the exim repo).
+note and leaves scanning off.
 
 ## Running the test suite
 
     bin/rails test
 
-The suite includes the IMAP gem's store-contract tests, run against this
-app's Active Record and HTTP implementations. When the sibling path gem
-isn't installed (e.g. CI sets `BUNDLE_WITHOUT=daemons`), those tests skip
-with a note. Each edge repo also carries its own Rails-free suite
-(`bin/test`).
+The suite includes the protocol servers' store-contract tests, run
+against this app's Active Record implementations. The vendored servers'
+own Rails-free suites run with `bin/rails test:smtp_server` and
+`bin/rails test:imap_server` (CI runs both).
 
 Virus-scanning tests run against a scripted fake clamd, so no ClamAV
 install is needed; the real-engine EICAR smoke procedure and the scanning
@@ -55,37 +40,179 @@ policy live in [docs/virus_scanning.md](docs/virus_scanning.md).
 
 ## Roadmap
 
-Planned work, tracked here across the app and the edge repos.
+- [x] **DMARC enforcement (inbound)** — the app computes DMARC via rspamd
+  and badges the result; `MAILROOM_DMARC_ENFORCE` now goes further: mail
+  that failed DMARC under the sender domain's own published p=reject or
+  p=quarantine is filed into Junk when set to `enforce` (log-only by
+  default; `0` disables; p=none failures are never acted on). Complements
+  the edge-side `SMTP_DMARC_ENFORCE` 550. (Distinct from the outbound-side
+  DMARC *monitoring* also in place — see below.)
+- [x] **Web composer outbound abuse gates** — SMTP submission has a
+  per-account send quota (`Smtp::SendQuota`, RCPT-time 452) and an rspamd
+  spam gate at DATA, the tripwires for a stolen SMTP password. The web
+  composer now carries both: `ComposedEmail#deliver` counts each recipient
+  against the same `SendQuota.shared` budget (keyed by the account email,
+  as at RCPT) and scores the built message with `RspamdAnalyzer` before
+  queueing — only rspamd's own refusal actions refuse, and an unreachable
+  scorer fails open, mirroring the DATA gate.
+- [x] **Sanitize `<style>` blocks instead of dropping them** —
+  `EmailCssSanitizer` parses the stylesheet with Crass (already a
+  transitive dependency via Loofah), keeps qualified rules whose
+  declarations pass `Loofah::HTML5::Scrub.scrub_css`, recurses into
+  `@media`, drops everything else (`@import`, `url()`, unknown at-rules),
+  and re-serializes from the Crass AST — never from the raw text, and
+  never emitting a literal `</` (the `<style>` breakout). Stylesheets are
+  collected from head and body and re-emitted as one scrubbed `<style>`
+  element. The sandboxed iframe stays the second layer regardless.
+- [x] **Pin GitHub Actions to commit SHAs** — `actions/checkout@v7` etc.
+  were mutable tags (the tj-actions/changed-files compromise worked by
+  retargeting tags). All three repos' workflows now pin full SHAs with the
+  version in a trailing comment; Dependabot understands and updates SHA
+  pins (`github-actions` ecosystem already configured).
+- [x] **Rate limiting beyond auth** — Rails-native `rate_limit` now also
+  covers the composer (per-IP, alongside the per-account send quota),
+  drafts autosave, password-reset token use, 2FA enrollment, message
+  rescan, and the admin mutations (users, accounts, aliases, domains,
+  mailboxes, bans, settings).
+- [x] **Rich-text sending in the composer** — the body field is now a
+  Lexxy editor (37signals' Lexical-based Action Text successor; gem
+  assets via importmap, no Node, editor attachments disabled — files
+  still travel on the plain file input). A rich send builds
+  multipart/alternative in `ComposedEmail#build_raw`: the editor's HTML
+  runs through the same `EmailHtmlSanitizer` used to render inbound mail
+  (closing the email-HTML-injection class: constrained markup, never
+  string concatenation) and a text/plain part is derived from the
+  sanitized HTML, so every message keeps a readable text alternative;
+  with attachments the pair nests as mixed(alternative, files). Drafts
+  round-trip the HTML part, old plain drafts still open (escaped into
+  the editor), and the Mail gem's header encoding plus the recipient
+  validation are unchanged.
 
-### [mail_on_rails_exim](https://github.com/InfiniteLoopEnjoyer/mail_on_rails_exim)
+### Feature gaps (capability scan, 2026-08)
 
-Edge-level hardening (connection/volume caps, per-IP recipient and AUTH
-throttles, TLS floor, RBL/DNSBL) lives in the exim service and is tuned in
-its `config/exim4.conf.template` — see that repo's README. Exim replaces
-the retired Ruby SMTP daemon, so its own equivalents supersede the DNS /
-parser / connection-limiter work that used to be tracked here.
+Web UI, roughly by value:
 
-### mail_on_rails (this app)
+- [x] **Full-text search** — a GIN-indexed tsvector over
+  subject/from/to plus `body_text` (plain text extracted at delivery,
+  backfilled by migration) powers an account-wide search page
+  (websearch syntax: phrases, OR, `-word`) and an IMAP TEXT/BODY
+  pushdown: the store contract grew an optional `search_text` op, so
+  SEARCH resolves content keys in Postgres instead of shipping every
+  raw message to Ruby for a substring scan. FTS matches whole words
+  (the Dovecot trade-off — documented in `docs/store_contract.md`);
+  queries an index can't express, and stores without `search_text`,
+  keep the RFC-exact substring scan.
+- [x] **Pagination** — mailbox pages render 50 messages at a time
+  (newest first, Older/Newer links); an out-of-range page clamps.
+- [x] **Attachments in the composer** — a multiple-file input on the
+  composer; files become MIME parts in `ComposedEmail#build_raw` (the
+  body stays the text part), capped at 22 MB raw so the base64-encoded
+  message stays under the IMAP APPENDLIMIT (30 MiB). The built message
+  passes through the same ClamAV and rspamd gates as any other composer
+  send. Attachments travel with the send only — draft autosaves stay
+  text. (Attachment *download* with a ClamAV gate already works.)
+- [ ] **Per-account server-side filing rules** — inbound filtering is
+  global only (rspamd, DMARC); no per-user "file sender X into folder Y"
+  (Sieve or a simpler home-grown rule table acted on in the mailroom).
+- [x] **Vacation autoresponder** — per-account subject/body/date-range on
+  the account form; the mailroom fires `VacationResponder` for mail that
+  earned the INBOX (never junk/quarantine), with RFC 3834 loop
+  protections: no replies to bounces or the null sender, to
+  `Auto-Submitted`/`Precedence: bulk`/`X-Auto-Response-Suppress` mail,
+  or to `List-*` traffic; one reply per correspondent per week (an
+  atomic upsert, so concurrent deliveries can't double-reply); each
+  reply is marked `Auto-Submitted: auto-replied` and consumes a slot of
+  the account's outbound send quota.
+- [x] **Message threading** — In-Reply-To/References now land in columns
+  at delivery and resolve to an account-wide `thread_id` (a reply adopts
+  its stored ancestor's thread; with none it derives deterministically
+  from the chain root, so out-of-order arrivals converge; backfilled by
+  migration). The mailbox list shows one row per conversation (newest
+  message, count badge, unread dot if any member is unread), paginated
+  by latest activity. The same ids serve IMAP as real RFC 8474
+  THREADIDs. (IMAP THREAD — see below.)
+- [x] **Storage quotas** — per-account `quota_bytes` (blank = unlimited,
+  edited in MB on the account form) with `used_bytes` maintained
+  incrementally from message sizes. Enforced centrally in
+  `EmailMessage.deliver_raw`, which covers SMTP DATA (mailroom, which
+  skips a full recipient without blocking co-recipients), IMAP
+  APPEND/COPY (`NO [OVERQUOTA]`), and the composer; same-account moves
+  stay exempt so a full account can still file into Trash. Usage shows
+  on the account page. (IMAP QUOTA — see below.)
+- [x] **.eml download / mbox export** — "Download .eml" on the message
+  page serves the stored bytes as `message/rfc822` (no scan gate: an
+  .eml is not a browser-executable payload, and getting mail *out* must
+  not depend on a verdict). "Export mbox" on the folder page streams the
+  whole mailbox as an RFC 4155 mbox (mboxrd quoting, LF line endings),
+  one message in memory at a time — see `MboxExport`.
+- [x] **.eml import** — "Import .eml" on the folder page files uploaded
+  messages into that folder, the web-UI mirror of IMAP APPEND with
+  APPEND's gates: the same 30 MiB cap, a ClamAV scan when the scanner is
+  on (infected uploads refused; an outage stores flagged "unscanned"),
+  and the storage quota. Messages keep their own Date as the internal
+  date, and carry no `authenticated_as` — imported bytes are foreign
+  mail being filed, not mail the importer wrote.
+- [ ] **Web Push for new mail** — the PWA service worker skeleton exists
+  but is unused; clients must poll / IMAP IDLE.
 
-- [ ] **Spam-action routing** — the mailroom already gets an rspamd spam
-  action/score per message (currently logged only); act on it, e.g. file a
-  spam verdict into a Junk mailbox instead of INBOX.
-- [ ] **DMARC enforcement (inbound)** — the app computes DMARC via rspamd
-  and badges the result; go further and reject or quarantine on failure
-  (behind a flag, log-only first) rather than only badging. (Distinct from
-  the outbound-side DMARC *monitoring* already in place — see below.)
-- [ ] **Rate limiting beyond auth endpoints** — Rails-native
-  `rate_limit` covers login/password-reset only; consider coverage for
-  the internal API endpoints the edges call.
+Protocol/delivery:
+
+- [x] **IMAP THREAD (RFC 5256)** — `THREAD REFERENCES` (full JWZ:
+  ancestry forest, placeholder pruning, base-subject merge) and
+  `THREAD=ORDEREDSUBJECT`, advertised in CAPABILITY; the FETCH
+  `THREADID` NIL stub and the never-matching `THREADID` search key now
+  use the store's real thread ids (`fetch` entries carry `thread_id` —
+  see `docs/store_contract.md`).
+- [x] **IMAP QUOTA (RFC 2087)** — `GETQUOTA`/`GETQUOTAROOT` on a single
+  account-wide root `""` with the STORAGE resource (1024-octet units),
+  `QUOTA QUOTA=RES-STORAGE` in CAPABILITY, and `NO [OVERQUOTA]` on
+  APPEND/COPY; `SETQUOTA` is refused (limits are set in the web UI).
+  Backed by the optional store `quota` op — see `docs/store_contract.md`.
+- [ ] **DANE for outbound (RFC 7672)** — outbound TLS is opportunistic
+  and unverified; TLSA validation (and honoring recipient MTA-STS
+  policies, which we publish but don't check when sending) would close
+  the active-MITM gap on delivery.
+- [ ] **TLS-RPT sending** — we ingest reports at `tls-rpt@` but never
+  generate reports about our own inbound TLS failures.
+- [ ] **ARC sealing (RFC 8617)** — forwarded/relayed mail carries no
+  chain of custody.
+
+Operations:
+
+- [x] **Backups** — `DatabaseBackupJob` (nightly, `config/recurring.yml`)
+  writes a custom-format `pg_dump` of the primary database onto the
+  persistent storage volume, pruned to `DB_BACKUP_KEEP_DAYS` (default 14)
+  only after a successful dump. On demand: `bin/kamal backup` /
+  `bin/db-backup`. Restore runbook and offsite guidance:
+  [docs/backups.md](docs/backups.md).
+- [x] **Metrics** — `GET /metrics` serves Prometheus exposition format,
+  enabled by `METRICS_TOKEN` (scrape with it as a bearer token; unset =
+  404). Series are computed on scrape from what the app already records:
+  outbound queue depth by status and due backlog, queued-to-sent latency
+  (last hour, summary sum/count), auth failures by protocol,
+  quarantined/junked counts, accounts/messages/storage, and live SMTP/
+  IMAP connection counts.
+- [x] **Audit log** — an `audit_events` table written by hooks on every
+  admin surface (users, accounts, aliases, domains, bans, settings sync
+  and knobs, DNS publish, password regens): who did what to what, from
+  where. Rows snapshot the actor's email and a subject label, so they
+  stay legible after the user or subject is deleted; they are immutable
+  and never pruned. Viewer at `/audit` (sidebar: Audit log), newest
+  first, paginated.
 
 Already in place (not TODO): PostgreSQL-backed queuing (Solid Queue plus
-the `smtp_outbound_messages` retry/backoff table), app-side SPF/DKIM/DMARC
-of inbound mail (rspamd) and virus scanning (ClamAV — also consulted by
-the exim edge at DATA time, so infected mail is rejected before
-acceptance), outbound DKIM signing, **dynamic domain management** (the
-Domains admin UI creates/removes hosted domains live: exim picks the list
-up per connection, a DKIM key is generated per domain, and the page shows
-the DNS records to publish), and **DMARC monitoring** (aggregate reports
-mailed to each domain's auto-created `dmarc@` account are virus-scanned,
-sender-verified, parsed, and summarized into per-domain alignment stats
-with advice on when it is safe to tighten the published policy).
+the `smtp_outbound_messages` retry/backoff table), SPF/DKIM/DMARC
+verification of inbound mail (rspamd) and virus scanning (ClamAV,
+consulted at SMTP DATA time so infected mail is rejected before
+acceptance), **spam-action routing** (rspamd-flagged mail is filed into
+Junk instead of INBOX, with mark/unmark spam in the web UI), outbound
+DKIM signing plus the SMTP-side abuse tripwires (send quota, rspamd DATA
+gate, IP/range bans enforced at every edge), **dynamic domain
+management** (the Domains admin UI creates/removes hosted domains live: a
+DKIM key is generated per domain, the page shows the DNS records to
+publish, and `DnsCheck` verifies MX/SPF/DKIM/DMARC live against public
+DNS), two-factor auth (passkeys + TOTP), and **DMARC monitoring**
+(aggregate reports mailed to each domain's auto-created `dmarc@` account
+are virus-scanned, sender-verified, parsed, and summarized into
+per-domain alignment stats with advice on when it is safe to tighten the
+published policy).

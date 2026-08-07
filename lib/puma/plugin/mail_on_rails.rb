@@ -2,18 +2,26 @@
 
 require "puma/plugin"
 
-# Runs the mail_on_rails IMAP server inside the Puma process, started once
-# the Rails app has booted (registered from config/puma.rb via
-# `plugin :mail_on_rails` - development, or MAIL_ON_RAILS_SERVERS=true elsewhere).
-# In the Kamal deploy the IMAP listener runs as its own service from the
-# sibling mail_on_rails_imap repo instead; both paths share the gem's Daemon
-# runtime (here wired up by MailOnRails::Boot). The SMTP edge is the external
-# mail_on_rails_exim service and is never booted here.
+# Runs the mail_on_rails IMAP and SMTP servers inside the Puma process,
+# started once the Rails app has booted (registered from config/puma.rb via
+# `plugin :mail_on_rails` - development, or MAIL_ON_RAILS_SERVERS=true, as
+# the production web role sets). Wired up by MailOnRails::Boot: start after
+# boot, wait for the listeners to bind (HealthController keeps /up at 503
+# until then), and drain gracefully on Puma stop/restart.
 Puma::Plugin.create do
   def start(launcher)
+    if launcher.options[:workers].to_i > 1
+      raise "the :mail_on_rails plugin is incompatible with WEB_CONCURRENCY > 1 - " \
+            "the mail listeners must live in exactly one process"
+    end
+
     events = launcher.events
     hook = events.respond_to?(:after_booted) ? :after_booted : :on_booted
     events.public_send(hook) { boot_servers }
+    stop_hook = events.respond_to?(:after_stopped) ? :after_stopped : :on_stopped
+    events.public_send(stop_hook) { stop_servers }
+    restart_hook = events.respond_to?(:before_restart) ? :before_restart : :on_restart
+    events.public_send(restart_hook) { stop_servers }
   end
 
   private
@@ -24,5 +32,13 @@ Puma::Plugin.create do
     @started = true
     require_relative "../../mail_on_rails/boot"
     MailOnRails::Boot.start_servers
+    MailOnRails::Boot.wait_ready!
+  end
+
+  def stop_servers
+    return unless @started
+
+    @started = false
+    MailOnRails::Boot.stop_servers
   end
 end

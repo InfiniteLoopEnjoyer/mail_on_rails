@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_05_150000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_06_230000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -49,6 +49,21 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_05_150000) do
     t.bigint "blob_id", null: false
     t.string "variation_digest", null: false
     t.index ["blob_id", "variation_digest"], name: "index_active_storage_variant_records_uniqueness", unique: true
+  end
+
+  create_table "audit_events", force: :cascade do |t|
+    t.string "action", null: false
+    t.datetime "created_at", null: false
+    t.jsonb "details", default: {}, null: false
+    t.string "ip"
+    t.bigint "subject_id"
+    t.string "subject_label"
+    t.string "subject_type"
+    t.string "user_email", null: false
+    t.bigint "user_id"
+    t.index ["created_at"], name: "index_audit_events_on_created_at"
+    t.index ["subject_type", "subject_id"], name: "index_audit_events_on_subject_type_and_subject_id"
+    t.index ["user_id"], name: "index_audit_events_on_user_id"
   end
 
   create_table "auth_attempts", force: :cascade do |t|
@@ -91,6 +106,29 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_05_150000) do
     t.index ["source"], name: "index_banned_ips_on_source"
   end
 
+  create_table "closed_connections", force: :cascade do |t|
+    t.datetime "closed_at", null: false
+    t.datetime "connected_at"
+    t.integer "connection_count", default: 1, null: false
+    t.datetime "created_at", null: false
+    t.float "duration_seconds"
+    t.string "final_state"
+    t.string "helo"
+    t.string "ip"
+    t.integer "messages"
+    t.integer "port"
+    t.string "protocol", null: false
+    t.string "role"
+    t.boolean "rollup", default: false, null: false
+    t.boolean "tls", default: false, null: false
+    t.datetime "updated_at", null: false
+    t.string "username"
+    t.index ["closed_at"], name: "index_closed_connections_on_closed_at"
+    t.index ["protocol", "closed_at"], name: "index_closed_connections_on_protocol_and_closed_at"
+    t.index ["protocol", "ip", "closed_at"], name: "index_closed_connections_on_protocol_and_ip_and_closed_at"
+    t.index ["protocol", "ip", "closed_at"], name: "index_closed_connections_on_rollup_key", unique: true, where: "rollup"
+  end
+
   create_table "dmarc_reports", force: :cascade do |t|
     t.datetime "begin_at", null: false
     t.integer "count", default: 1, null: false
@@ -112,6 +150,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_05_150000) do
   create_table "domains", force: :cascade do |t|
     t.datetime "created_at", null: false
     t.text "dkim_private_key"
+    t.datetime "dns_checked_at"
+    t.jsonb "dns_checks"
     t.string "name", null: false
     t.datetime "updated_at", null: false
     t.index ["name"], name: "index_domains_on_name", unique: true
@@ -122,11 +162,18 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_05_150000) do
     t.string "email", null: false
     t.string "name"
     t.string "password_digest", null: false
+    t.bigint "quota_bytes"
     t.integer "scram_iterations"
     t.string "scram_salt"
     t.string "scram_server_key"
     t.string "scram_stored_key"
     t.datetime "updated_at", null: false
+    t.bigint "used_bytes", default: 0, null: false
+    t.text "vacation_body"
+    t.boolean "vacation_enabled", default: false, null: false
+    t.date "vacation_ends_on"
+    t.date "vacation_starts_on"
+    t.string "vacation_subject"
     t.index ["email"], name: "index_email_accounts_on_email", unique: true
   end
 
@@ -142,29 +189,37 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_05_150000) do
   create_table "email_messages", force: :cascade do |t|
     t.string "auth_results"
     t.string "authenticated_as"
+    t.text "body_text"
     t.datetime "created_at", null: false
     t.string "email_object_id"
     t.text "flags", default: "[]", null: false
     t.string "from_address"
+    t.string "in_reply_to"
     t.datetime "internal_date", null: false
     t.integer "mailbox_id", null: false
     t.string "message_id"
     t.bigint "modseq", default: 1, null: false
     t.binary "raw", null: false
+    t.text "references_ids"
     t.string "scan_status"
+    t.virtual "search_vector", type: :tsvector, as: "to_tsvector('simple'::regconfig, ((((((\"left\"((COALESCE(subject, ''::character varying))::text, 10000) || ' '::text) || \"left\"((COALESCE(from_address, ''::character varying))::text, 1000)) || ' '::text) || \"left\"(COALESCE(to_addresses, ''::text), 10000)) || ' '::text) || \"left\"(COALESCE(body_text, ''::text), 200000)))", stored: true
     t.integer "size", default: 0, null: false
     t.string "spam_action"
     t.float "spam_score"
     t.float "spam_threshold"
     t.string "subject"
+    t.string "thread_id"
     t.text "to_addresses"
     t.integer "uid", null: false
     t.datetime "updated_at", null: false
     t.string "virus_name"
     t.index ["mailbox_id", "internal_date"], name: "index_email_messages_on_mailbox_id_and_internal_date"
     t.index ["mailbox_id", "message_id"], name: "index_email_messages_on_mailbox_id_and_message_id"
+    t.index ["mailbox_id", "thread_id"], name: "index_email_messages_on_mailbox_id_and_thread_id"
     t.index ["mailbox_id", "uid"], name: "index_email_messages_on_mailbox_id_and_uid", unique: true
     t.index ["mailbox_id"], name: "index_email_messages_on_mailbox_id"
+    t.index ["message_id"], name: "index_email_messages_on_message_id"
+    t.index ["search_vector"], name: "index_email_messages_on_search_vector", using: :gin
   end
 
   create_table "expunged_messages", force: :cascade do |t|
@@ -232,6 +287,16 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_05_150000) do
     t.index ["email_address"], name: "index_users_on_email_address", unique: true
   end
 
+  create_table "vacation_replies", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.bigint "email_account_id", null: false
+    t.datetime "last_sent_at", null: false
+    t.string "sender", null: false
+    t.datetime "updated_at", null: false
+    t.index ["email_account_id", "sender"], name: "index_vacation_replies_on_email_account_id_and_sender", unique: true
+    t.index ["email_account_id"], name: "index_vacation_replies_on_email_account_id"
+  end
+
   create_table "webauthn_credentials", force: :cascade do |t|
     t.datetime "created_at", null: false
     t.string "external_id", null: false
@@ -246,11 +311,13 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_05_150000) do
 
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
+  add_foreign_key "audit_events", "users", on_delete: :nullify
   add_foreign_key "dmarc_reports", "domains"
   add_foreign_key "email_aliases", "email_accounts"
   add_foreign_key "email_messages", "mailboxes"
   add_foreign_key "expunged_messages", "mailboxes"
   add_foreign_key "mailboxes", "email_accounts"
   add_foreign_key "sessions", "users"
+  add_foreign_key "vacation_replies", "email_accounts"
   add_foreign_key "webauthn_credentials", "users"
 end

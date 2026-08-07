@@ -9,9 +9,9 @@
     = form.label :name, "Domain name", class: "mb-1 block text-sm font-semibold"
     = form.text_field :name, required: true, autofocus: true, placeholder: "example.com", class: "w-full rounded-md border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5"
     p.mt-1.text-xs.text-slate-500.dark:text-slate-400
-      ' Takes effect immediately: exim accepts mail for it and a DKIM
-      ' signing key is generated. Mail flows once the DNS records (shown
-      ' next) are published and accounts exist.
+      ' Takes effect immediately: the mail server accepts mail for it and
+      ' a DKIM signing key is generated. Mail flows once the DNS records
+      ' (shown next) are published and accounts exist.
 
   .mt-5
     = form.submit class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white"

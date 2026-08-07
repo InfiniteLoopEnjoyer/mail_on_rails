@@ -8,7 +8,9 @@
 - accounts = local_assigns[:accounts]
 - errors = local_assigns[:errors]
 section.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900 data-controller="draft-autosave" data-draft-autosave-url-value=drafts_path
-  = form_with url: emails_path, method: :post, class: "contents" do |form|
+  / multipart for the attachment input; attachments travel only with the
+  / send itself, not with draft autosaves (a draft revision is text).
+  = form_with url: emails_path, method: :post, multipart: true, class: "contents" do |form|
     header.flex.flex-wrap.items-center.gap-2.border-b.border-slate-200.dark:border-slate-800.px-4.py-3
       h2.font-semibold= title
       span.ml-auto.text-xs.text-slate-500.dark:text-slate-400 data-draft-autosave-target="status"
@@ -54,9 +56,26 @@ section.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:b
             class: "w-full rounded-md border border-slate-200 dark:border-slate-800 px-3 py-1.5 text-sm focus:border-accent focus:outline-none",
             data: { draft_autosave_target: "field", draft_field: field, action: "input->draft-autosave#schedule" }
 
-      = text_area_tag "composed_email[body]", draft.body, rows: 12,
-        class: "w-full rounded-md border border-slate-200 dark:border-slate-800 px-3 py-2 font-sans text-sm focus:border-accent focus:outline-none",
-        data: { draft_autosave_target: "field", draft_field: "body", action: "input->draft-autosave#schedule" }
+      / The rich-text body (Lexxy). A saved rich draft seeds the editor with
+      / its HTML part; a plain draft (an old one, or a reply's quoted text)
+      / is escaped and line-broken into markup the editor can start from.
+      / Attachments stay disabled - files travel on the input below, as
+      / plain MIME parts, never as inline uploads.
+      - seed = draft.body_html.presence
+      - seed ||= ERB::Util.html_escape(draft.body).gsub("\n", "<br>") if draft.body.present?
+      lexxy-editor.lexxy-content.w-full.rounded-md.border.border-slate-200.dark:border-slate-800.text-sm[
+        name="composed_email[body_html]" value=seed attachments="false"
+        placeholder="Write your message…"
+        data-draft-autosave-target="field" data-draft-field="body_html"
+        data-action="lexxy:change->draft-autosave#schedule" ]
+
+      / Not an autosave field: attachments are sent with the message, they
+      / are not part of the saved draft.
+      .grid class="grid-cols-[3rem_1fr] items-center gap-3"
+        = label_tag "composed_email_attachments", "Attach", class: "text-sm text-slate-500 dark:text-slate-400"
+        = file_field_tag "composed_email[attachments][]", multiple: true,
+          id: "composed_email_attachments",
+          class: "w-full text-sm text-slate-500 dark:text-slate-400 file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:bg-slate-100 dark:file:bg-slate-800 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-800 dark:file:text-slate-100"
 
     footer.flex.flex-wrap.items-center.gap-2.border-t.border-slate-200.dark:border-slate-800.px-4.py-3
       = form.submit "Send", class: "cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1.5 text-sm font-medium text-white"

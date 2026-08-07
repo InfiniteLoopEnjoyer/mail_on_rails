@@ -18,58 +18,46 @@ Rails.application.routes.draw do
   end
   # Define your application routes per the DSL in https://guides.rubyonrails.org/routing.html
 
-  # Reveal health status on /up that returns 200 if the app boots with no exceptions, otherwise 500.
-  # Can be used by load balancers and uptime monitors to verify that the app is live.
-  get "up" => "rails/health#show", as: :rails_health_check
+  # Health status on /up: 200 once the app booted with no exceptions AND
+  # (in deploys running the in-process mail servers) the SMTP/IMAP
+  # listeners are bound - kamal must not consider a container healthy
+  # while its mail ports are down. See HealthController.
+  get "up" => "health#show", as: :rails_health_check
 
-  # The mail edges (exim, the IMAP daemon) reach the app over the docker
-  # network - their INGRESS_URL / INTERNAL_API_URL resolve to kamal-proxy's
-  # network alias - so every legitimate client IP on those endpoints is
-  # private. On top of their password auth, refuse them to public clients
-  # entirely. kamal-proxy appends the true client IP to X-Forwarded-For, so a
-  # spoofed private address in that header still resolves to the public IP.
-  local_client = lambda do |request|
-    ip = begin
-      IPAddr.new(request.remote_ip)
-    rescue IPAddr::Error
-      nil
-    end
-    !ip.nil? && (ip.loopback? || ip.private?)
-  end
-  non_local = ->(request) { !local_client.call(request) }
-
-  # Action Mailbox's routes are drawn after this file, so blocking public
-  # clients takes an explicit earlier route: a non-local request matches it
-  # and gets the same 404 an unknown path would, while local requests fail
-  # the constraint and fall through to the real relay ingress.
-  match "rails/action_mailbox/*path", via: :all, constraints: non_local,
+  # The mail servers run inside this process (the :mail_on_rails Puma
+  # plugin) and hand inbound mail to Action Mailbox directly
+  # (Store::SmtpBackend), so no HTTP ingress exists anymore. Action
+  # Mailbox's routes are drawn after this file; pin them closed for
+  # everyone with an explicit earlier route answering the same 404 an
+  # unknown path would.
+  match "rails/action_mailbox/*path", via: :all,
     to: proc { [ 404, { "Content-Type" => "text/plain" }, [ "Not Found\n" ] ] }
+
+  # MTA-STS policy (RFC 8461), fetched by sending MTAs from the
+  # mta-sts.<domain> hosts DnsPublisher points at this app.
+  get ".well-known/mta-sts.txt" => "mta_sts#show"
 
   # Render dynamic PWA files from app/views/pwa/* (remember to link manifest in application.html.erb)
   # get "manifest" => "rails/pwa#manifest", as: :pwa_manifest
   # get "service-worker" => "rails/pwa#service_worker", as: :pwa_service_worker
 
-  # Private API for the mail edges - the exim service (authenticate +
-  # outbound_messages) and the IMAP daemon (imap/:op) - basic-auth'd with
-  # credentials mail_on_rails.internal_api_password, so those services hold
-  # no database connection at all. See MailOnRails::InternalController.
-  # Local clients only: public requests fail the constraint, match nothing,
-  # and 404.
-  scope "mail_on_rails/internal", controller: "mail_on_rails/internal",
-        constraints: local_client do
-    post :authenticate, action: :authenticate, as: :mail_on_rails_internal_authenticate
-    post :outbound_messages, action: :create_outbound, as: :mail_on_rails_internal_outbound_messages
-    post "imap/:op", action: :imap, as: :mail_on_rails_internal_imap, constraints: { op: /[a-z_]+/ }
-  end
-
   # Defines the root path route ("/")
   root "email_accounts#index"
 
-  # Operational internals (exim's shared-volume files, ...) - see
+  # Operational internals (the banned_ips file, app-wide knobs) - see
   # SettingsController.
   resource :settings, only: %i[show update] do
     post :sync
   end
+
+  # Live connections on the in-process mail listeners, one page per
+  # protocol - see LiveConnectionsController.
+  get "smtp", to: "smtp#show"
+  get "imap", to: "imap#show"
+
+  # Prometheus scrape endpoint, enabled by METRICS_TOKEN - see
+  # MetricsController.
+  get "metrics", to: "metrics#show"
 
   # Failed credential checks across all three auth surfaces - see
   # AuthAttempt / AuthAttemptsController. range drills into one /24's
@@ -80,8 +68,12 @@ Rails.application.routes.draw do
   end
 
   # Permanent IP/CIDR bans, managed from the auth attempts page - see
-  # BannedIp for how they reach exim, the IMAP daemon and the web login.
+  # BannedIp for how they reach the mail listeners and the web login.
   resources :banned_ips, only: %i[create destroy]
+
+  # The audit trail of admin actions - see AuditEvent / the Auditing
+  # controller concern.
+  resources :audit_events, only: :index, path: "audit"
 
   # The signed-in user's appearance/accent preference, saved from the
   # profile's Appearance card - see ThemesController.
@@ -95,12 +87,13 @@ Rails.application.routes.draw do
     end
   end
 
-  # Domains we host. Create/destroy rewrites the exim edge's local_domains
-  # file live (shared volume) - see Domain / EximLocalDomains. publish_dns
-  # creates the domain's missing DNS records in Cloudflare (DnsPublisher).
+  # Domains we host. Create/destroy takes effect at the next RCPT check
+  # (Store::SmtpBackend reads the Domain table live). publish_dns creates
+  # the domain's missing DNS records in Cloudflare (DnsPublisher).
   resources :domains, only: %i[index new create show destroy] do
     member do
       post :publish_dns
+      post :recheck_dns
     end
   end
 
@@ -115,14 +108,26 @@ Rails.application.routes.draw do
     member do
       post :generate_password
     end
+    # Account-wide full-text search over the tsvector index - see
+    # SearchesController.
+    resource :search, only: :show
     resources :email_aliases, only: %i[create destroy], path: "aliases"
     resources :mailboxes, except: %i[index] do
+      # The whole folder as a standard mbox file (streamed - see
+      # MboxExport), importable by any other mail client; and the reverse:
+      # .eml uploads filed into the folder, the web-UI mirror of IMAP APPEND.
+      member do
+        get :export
+        post :import
+      end
       resources :email_messages, only: %i[show destroy], path: "messages" do
         member do
           post :mark_read
           post :rescan
           post :mark_spam
           post :unmark_spam
+          # The stored bytes as message/rfc822 - a standard .eml file.
+          get :download
           get "attachments/:index", action: :attachment, as: :attachment, constraints: { index: /\d+/ }
         end
       end

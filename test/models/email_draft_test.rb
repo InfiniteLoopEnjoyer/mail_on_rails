@@ -30,6 +30,24 @@ class EmailDraftTest < ActiveSupport::TestCase
     EmailMessage.deliver_raw(@account.inbox, raw)
   end
 
+  # -- rich text ---------------------------------------------------------------
+
+  test "a rich draft round-trips its HTML through the mailbox" do
+    saved = build(body_html: "<p>Hello <em>there</em></p>").save
+
+    reread = EmailDraft.from_message(saved)
+    assert_includes reread.body_html, "<em>there</em>"
+  end
+
+  # Lexxy submits markup even when nothing was typed (an empty paragraph);
+  # that must not defeat the no-empty-drafts rule.
+  test "an empty rich editor value is still a blank draft" do
+    draft = build(to: "", subject: "", body: "", body_html: "<p><br></p>")
+
+    assert_nil draft.save
+    assert_equal 0, @drafts.email_messages.count
+  end
+
   # -- saving ----------------------------------------------------------------
 
   test "saving files the draft into Drafts with the draft flag" do

@@ -15,8 +15,13 @@ class DnsCheck
   Check = Struct.new(:record, :status, :found, :note, keyword_init: true)
 
   # Thin Resolv wrapper: nil on DNS failure (=> :unknown), lists otherwise.
+  # Queries public resolvers directly rather than the system resolver: the
+  # page promises "checked live against public DNS", and infrastructure
+  # resolvers (e.g. a cloud host's internal DNS) have served stale negative
+  # answers for freshly published records.
   class Resolver
     TIMEOUT = 3
+    NAMESERVERS = ENV.fetch("MAIL_ON_RAILS_DNS_CHECK_NAMESERVERS", "1.1.1.1,8.8.8.8").split(",").map(&:strip)
 
     def txt(name)
       query { |dns| dns.getresources(name, Resolv::DNS::Resource::IN::TXT).map { |r| r.strings.join } }
@@ -29,7 +34,7 @@ class DnsCheck
     private
 
     def query
-      Resolv::DNS.open do |dns|
+      Resolv::DNS.open(nameserver: NAMESERVERS) do |dns|
         dns.timeouts = TIMEOUT
         yield dns
       end
@@ -42,12 +47,21 @@ class DnsCheck
     new(domain, resolver)
   end
 
+  # Run the live checks and persist them onto the domain row - the cache
+  # behind the index pills (Domain#cached_dns_checks). Refreshed hourly
+  # for every domain by DnsCheckRefreshJob, and by each domain-page view.
+  def self.refresh!(domain, resolver: Resolver.new)
+    dns = new(domain, resolver)
+    domain.update!(dns_checks: dns.checks.map(&:to_h), dns_checked_at: Time.current)
+    dns
+  end
+
   attr_reader :checks
 
   def initialize(domain, resolver)
     @domain = domain
     @resolver = resolver
-    @checks = [ mx_check, spf_check, dkim_check, dmarc_check ]
+    @checks = [ mx_check, spf_check, dkim_check, dmarc_check, mta_sts_check, tls_rpt_check ]
   end
 
   # The published DMARC record, feeding Domain#dmarc_advice.
@@ -56,11 +70,11 @@ class DnsCheck
   private
 
   def mail_host
-    ENV["SMTP_HELO_HOST"].to_s.strip.downcase.presence
+    Setting.smtp_helo_hostname
   end
 
   def mx_check
-    return check("MX", :unknown, nil, "SMTP_HELO_HOST is not set") unless mail_host
+    return check("MX", :unknown, nil, "SMTP hostname is not set (Settings page or SMTP_HELO_HOST)") unless mail_host
 
     records = @resolver.mx(@domain.name)
     return check("MX", :unknown, nil, "DNS lookup failed") if records.nil?
@@ -117,6 +131,34 @@ class DnsCheck
       check("DMARC", :pass, @dmarc_record)
     else
       check("DMARC", :fail, nil, "no _dmarc record published")
+    end
+  end
+
+  def mta_sts_check
+    return check("MTA-STS", :unknown, nil, "SMTP hostname is not set (Settings page or SMTP_HELO_HOST)") unless mail_host
+
+    records = @resolver.txt("_mta-sts.#{@domain.name}")
+    return check("MTA-STS", :unknown, nil, "DNS lookup failed") if records.nil?
+
+    published = records.find { |r| r.match?(/\Av=STSv1\b/i) }
+    return check("MTA-STS", :fail, nil, "no _mta-sts record published") unless published
+
+    if published == MtaSts.txt_record
+      check("MTA-STS", :pass, published)
+    else
+      check("MTA-STS", :warn, published, "id does not match this server's policy - republish so senders re-fetch the policy file")
+    end
+  end
+
+  def tls_rpt_check
+    records = @resolver.txt("_smtp._tls.#{@domain.name}")
+    return check("TLS-RPT", :unknown, nil, "DNS lookup failed") if records.nil?
+
+    published = records.find { |r| r.match?(/\Av=TLSRPTv1\b/i) }
+    if published
+      check("TLS-RPT", :pass, published)
+    else
+      check("TLS-RPT", :fail, nil, "no _smtp._tls record published")
     end
   end
 

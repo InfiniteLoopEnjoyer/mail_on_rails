@@ -1,0 +1,57 @@
+/ The history section under the live table: connections that ended in
+/ the selected window (ClosedConnection), newest first, rollup counter
+/ rows rendered as one collapsed line. Rendered inside the poll frame,
+/ so a closing connection moves from the live table to here within one
+/ refresh.
+section.mt-4.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900
+  header.border-b.border-slate-200.dark:border-slate-800.px-4.py-3
+    h2.font-semibold Recent connections
+    p.text-sm.text-slate-500.dark:text-slate-400
+      ' Connections that ended in the selected window, newest first.
+      ' Anonymous noise past #{ClosedConnection.max_rows_per_ip} rows per
+      ' address and hour is collapsed into one counter row; authenticated
+      ' connections are always kept individually.
+  - if @history.any?
+    .overflow-x-auto
+      table.w-full.text-sm
+        thead.text-left.text-xs.text-slate-500.dark:text-slate-400
+          tr
+            th.px-4.py-2 Address
+            th.px-4.py-2 Listener
+            th.px-4.py-2 TLS
+            th.px-4.py-2 User
+            - if controller_name == "smtp"
+              th.px-4.py-2 HELO
+              th.px-4.py-2.text-right Messages
+            - else
+              th.px-4.py-2 State
+            th.px-4.py-2.text-right Duration
+            th.px-4.py-2 Closed
+            th.px-4.py-2
+        tbody
+          - @history.each do |row|
+            tr.border-t.border-slate-100.dark:border-slate-800
+              - if row.rollup?
+                td.px-4.py-1.5.font-mono.text-slate-500.dark:text-slate-400= row.ip
+                td.px-4.py-1.5.text-slate-500.dark:text-slate-400 colspan=(controller_name == "smtp" ? 7 : 6)
+                  = "#{number_with_delimiter(row.connection_count)} connections collapsed (hour starting #{row.closed_at.strftime("%b %-d %H:%M")})"
+              - else
+                td.px-4.py-1.5.font-mono= row.ip || "?"
+                td.px-4.py-1.5.whitespace-nowrap.text-slate-600.dark:text-slate-300
+                  = row.port
+                  - if row.role
+                    span.ml-1.text-xs.text-slate-500.dark:text-slate-400= row.role
+                td.px-4.py-1.5.text-slate-600.dark:text-slate-300= row.tls? ? "✓" : "—"
+                td.px-4.py-1.5.font-mono= row.username || "—"
+                - if controller_name == "smtp"
+                  td.px-4.py-1.5.font-mono.text-slate-600.dark:text-slate-300= row.helo || "—"
+                  td.px-4.py-1.5.text-right.tabular-nums.text-slate-600.dark:text-slate-300= row.messages || "—"
+                - else
+                  td.px-4.py-1.5.text-slate-600.dark:text-slate-300= row.final_state || "—"
+                td.px-4.py-1.5.text-right.tabular-nums.text-slate-600.dark:text-slate-300= duration_label(row.duration_seconds)
+                td.px-4.py-1.5.whitespace-nowrap.text-slate-600.dark:text-slate-300= row.closed_at.strftime("%b %-d %H:%M")
+              td.px-4.py-1.5.text-right
+                - if row.ip
+                  = render "auth_attempts/ban_button", target: row.ip, origin: controller_name, confirm: "Ban #{row.ip}? Its live connections are dropped and it loses SMTP, IMAP and web login access."
+  - else
+    p.px-4.py-3.text-sm.text-slate-500.dark:text-slate-400 Nothing in this window.

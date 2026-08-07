@@ -19,17 +19,18 @@ class EmailAccountsControllerTest < ActionDispatch::IntegrationTest
     assert_select "turbo-cable-stream-source", 1
   end
 
-  test "index sorts regular accounts by domain then email and splits dmarc accounts into their own list" do
+  test "index sorts regular accounts by domain then email and splits dmarc and tls-rpt accounts into their own lists" do
     EmailAccount.create!(email: "zed@aardvark.test", name: "Zed", password: "secret123")
     EmailAccount.create!(email: "amy@zebra.test", name: "Amy", password: "secret123")
     domain = Domain.create!(name: "example.com")
 
     get root_url
     assert_response :success
-    assert_select "ul", 2
+    assert_select "ul", 3
     emails = css_select("ul:first-of-type .primary").map(&:text)
     assert_equal [ "zed@aardvark.test", "carol@example.com", "amy@zebra.test" ], emails
-    assert_equal [ domain.dmarc_address ], css_select("ul:last-of-type .primary").map(&:text)
+    assert_equal [ domain.dmarc_address ], css_select("ul:nth-of-type(2) .primary").map(&:text)
+    assert_equal [ domain.tls_rpt_address ], css_select("ul:last-of-type .primary").map(&:text)
   end
 
   test "account page subscribes to live updates" do

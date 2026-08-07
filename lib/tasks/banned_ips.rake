@@ -1,4 +1,4 @@
-# Manage the banned-IPs file shared with the exim and IMAP edges.
+# Manage the banned-IPs file the in-process mail listeners read.
 #
 #   bin/rails mail_on_rails:banned_ips:sync   # rewrite the shared banned_ips file from the DB
 namespace :mail_on_rails do

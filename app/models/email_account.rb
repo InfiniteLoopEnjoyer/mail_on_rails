@@ -28,14 +28,49 @@ class EmailAccount < ApplicationRecord
   after_commit -> { broadcast_refresh_later_to :email_accounts }
   after_update_commit -> { broadcast_refresh_later }
 
-  # Keep the exim edge's RCPT-time recipient list (a file on the shared
-  # mailconf volume, see EximLocalRecipients) in step with the table.
-  # One registration for create/rename/destroy: repeating the same method
-  # symbol across after_*_commit macros keeps only the last registration.
-  # saved_change_to_email? is also true on create (nil -> address).
-  after_commit :sync_exim_recipients, if: -> { destroyed? || saved_change_to_email? }
-
   after_create :create_default_mailboxes
+
+  # -- storage quota -----------------------------------------------------------
+  # quota_bytes nil = unlimited. used_bytes is maintained incrementally by
+  # EmailMessage's create/destroy callbacks (backfilled by migration); it
+  # can drift only if a process dies between the message write and the
+  # counter bump, and a console re-sum trues it up.
+
+  validates :quota_bytes, numericality: { greater_than: 0 }, allow_nil: true
+
+  def quota_exceeded_by?(bytes)
+    quota_bytes.present? && used_bytes + bytes > quota_bytes
+  end
+
+  def used_percent
+    return nil unless quota_bytes
+
+    (used_bytes * 100.0 / quota_bytes).round
+  end
+
+  # The admin form edits the quota in whole megabytes; blank = unlimited.
+  def quota_megabytes
+    quota_bytes && quota_bytes / 1_048_576
+  end
+
+  def quota_megabytes=(value)
+    self.quota_bytes = value.present? ? (value.to_f * 1_048_576).round : nil
+  end
+
+  # -- vacation autoresponder ----------------------------------------------------
+
+  has_many :vacation_replies, dependent: :delete_all
+
+  validates :vacation_body, presence: true, if: :vacation_enabled
+  validate :vacation_dates_ordered
+
+  # Enabled and inside the (optional) date range. A nil bound is open:
+  # starts_on nil = already started, ends_on nil = until switched off.
+  def vacation_active?
+    vacation_enabled &&
+      (vacation_starts_on.nil? || Date.current >= vacation_starts_on) &&
+      (vacation_ends_on.nil? || Date.current <= vacation_ends_on)
+  end
 
   def inbox
     mailboxes.find_by(name: "INBOX")
@@ -83,14 +118,16 @@ class EmailAccount < ApplicationRecord
     DEFAULT_MAILBOXES.each { |name| mailboxes.create!(name: name) }
   end
 
-  def sync_exim_recipients
-    EximLocalRecipients.sync!
-  end
-
   # Mirror of EmailAlias#email_not_an_account_address - an address can be
   # an account or an alias, never both. Own aliases count too: renaming an
   # account onto one of its aliases would shadow that alias forever.
   def email_not_an_alias_address
     errors.add(:email, "is already in use as an alias") if email.present? && EmailAlias.exists?(email: email)
+  end
+
+  def vacation_dates_ordered
+    if vacation_starts_on && vacation_ends_on && vacation_ends_on < vacation_starts_on
+      errors.add(:vacation_ends_on, "must not be before the start date")
+    end
   end
 end

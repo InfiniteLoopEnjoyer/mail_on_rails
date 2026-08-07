@@ -11,35 +11,23 @@ nav.mb-2.text-sm.text-slate-500.dark:text-slate-400
 
 header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
   h1.text-2xl.font-bold= @mailbox.name
-  - unless @mailbox.inbox?
-    .flex.items-center.gap-2
+  .flex.items-center.gap-2
+    / Import: the file input stays hidden; picking files submits the form,
+    / so the label is the whole UI. Styled to match the buttons beside it.
+    = form_with url: import_email_account_mailbox_path(@email_account, @mailbox), method: :post, multipart: true, class: "contents" do
+      label.inline-block.cursor-pointer.rounded-md.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900.px-3.5.py-1.text-sm.font-medium.text-slate-800.dark:text-slate-100 for="mailbox_import_eml"
+        | Import .eml
+        input#mailbox_import_eml.sr-only type="file" name="eml[]" accept=".eml,message/rfc822" multiple=true onchange="this.form.requestSubmit()"
+    / data-turbo=false: a file download, not a navigation.
+    = link_to "Export mbox", export_email_account_mailbox_path(@email_account, @mailbox), class: "inline-block cursor-pointer rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3.5 py-1 text-sm font-medium text-slate-800 dark:text-slate-100", data: { turbo: false }
+    - unless @mailbox.inbox?
       = link_to "Edit", edit_email_account_mailbox_path(@email_account, @mailbox), class: "inline-block cursor-pointer rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3.5 py-1 text-sm font-medium text-slate-800 dark:text-slate-100"
       = button_to "Delete", email_account_mailbox_path(@email_account, @mailbox), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 dark:border-red-900 bg-white dark:bg-slate-900 px-3.5 py-1 text-sm font-medium text-red-700 dark:text-red-400", form: { data: { turbo_confirm: "Delete the #{@mailbox.name} folder and all messages in it?" } }
 
-- if @email_messages.any?
+- if @threads.any?
   ul
-    - @email_messages.each do |message|
-      li.mb-2.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900
-        / An unsent draft opens in the composer to carry on writing; anything
-        / else opens as a message to read.
-        - destination = message.draft? ? edit_draft_path(message) : email_account_mailbox_email_message_path(@email_account, @mailbox, message)
-        = link_to destination, class: "flex items-baseline gap-3 px-4 py-3" do
-          span.primary.font-semibold
-            - unless message.seen?
-              span.mr-2.inline-block.h-2.w-2.rounded-full.bg-accent.align-middle
-            = message.subject.presence || "(no subject)"
-          span.truncate.text-slate-500.dark:text-slate-400
-            - if message.draft?
-              span.rounded-full.bg-slate-100.dark:bg-slate-800.px-2.text-xs.whitespace-nowrap.text-slate-600.dark:text-slate-300 Draft
-            - else
-              => message.from_address
-            - if message.scan_status == "infected"
-              span.rounded-full.bg-red-100.dark:bg-red-950.px-2.text-xs.whitespace-nowrap.text-red-700.dark:text-red-400 title="ClamAV: #{message.virus_name}"
-                | ☣ virus: #{message.virus_name}
-            - elsif message.scan_status == "unscanned"
-              span.rounded-full.bg-amber-100.dark:bg-amber-950.px-2.text-xs.whitespace-nowrap.text-amber-700.dark:text-amber-400 title="Accepted while the virus scanner was unavailable" unscanned
-            - unless message.sender_verified?
-              span.rounded-full.bg-red-100.dark:bg-red-950.px-2.text-xs.whitespace-nowrap.text-red-700.dark:text-red-400 title="Unverified sender - may be spoofed#{message.auth_results.present? ? " (#{message.auth_results})" : ""}" ⚠
-          span.ml-auto.text-xs.whitespace-nowrap.text-slate-500.dark:text-slate-400= message.internal_date.strftime("%b %-d, %Y %H:%M")
+    - @threads.each do |thread|
+      = render "email_messages/row", message: thread.latest, email_account: @email_account, mailbox: @mailbox, thread_count: thread.count, unseen: thread.unseen?
+  = render "shared/pagination", page: @page, pages: @pages, count: @message_count, url: ->(page) { email_account_mailbox_path(@email_account, @mailbox, page: page) }
 - else
   p.text-slate-500.dark:text-slate-400 This folder is empty.

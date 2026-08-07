@@ -31,7 +31,7 @@ class BannedIpsFileTest < ActiveSupport::TestCase
 
   test "no bans writes an empty file, not a missing one" do
     assert_equal :written, BannedIpsFile.sync!
-    assert File.exist?(@path), "empty means 'no bans'; missing makes exim defer"
+    assert File.exist?(@path), "empty means 'no bans' - written even with zero rows"
     assert_equal "", File.read(@path)
   end
 

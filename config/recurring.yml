@@ -41,6 +41,19 @@ production:
     command: "AuthAttempt.prune!"
     schedule: every day at 4:17am
 
+  # Same reasoning for the connection history behind /smtp and /imap:
+  # scanners set the write rate, retention is enforced daily.
+  prune_closed_connections:
+    command: "ClosedConnection.prune!"
+    schedule: every day at 4:43am
+
+  # Refresh the cached MX/SPF/DKIM/DMARC statuses behind the domains
+  # index pills (Domain#dns_checks). The domain page still checks live on
+  # every view and writes through to the same cache.
+  refresh_dns_checks:
+    class: DnsCheckRefreshJob
+    schedule: every hour at minute 52
+
   # Keep the imported Spamhaus DROP netblocks (BannedIp) current; manual
   # bans are untouched.
   refresh_spamhaus_drop:
@@ -53,3 +66,9 @@ production:
   purge_trash:
     class: PurgeTrashJob
     schedule: every day at 3:07am
+
+  # Nightly pg_dump of the primary database onto the persistent storage
+  # volume, pruned to DB_BACKUP_KEEP_DAYS. Restore runbook: docs/backups.md.
+  database_backup:
+    class: DatabaseBackupJob
+    schedule: every day at 1:30am

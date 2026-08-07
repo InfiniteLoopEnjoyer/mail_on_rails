@@ -1,0 +1,7 @@
+#!/usr/bin/env ruby
+# Take a database backup right now (the nightly one is DatabaseBackupJob
+# in config/recurring.yml). Prints the path of the dump it wrote.
+# In production: bin/kamal backup
+require_relative "../config/environment"
+
+puts DatabaseBackupJob.perform_now

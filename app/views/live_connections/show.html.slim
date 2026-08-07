@@ -1,0 +1,28 @@
+- protocol = controller_name.upcase
+- page_title protocol
+
+header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
+  h1.text-2xl.font-bold= protocol
+
+  / History window tabs. _top because these render inside no frame but
+  / their result feeds the poll frame below: the poll controller reloads
+  / from window.location.href, so the selection must be a real page
+  / navigation or the next poll tick would silently revert it.
+  nav.flex.items-center.gap-1
+    - LiveConnectionsController::WINDOWS.each_key do |key|
+      = link_to key, { window: key }, class: window_tab_classes(@window == key), data: { turbo_frame: "_top" }
+
+p.mb-4.text-sm.text-slate-500.dark:text-slate-400
+  - if controller_name == "smtp"
+    ' Live connections on the SMTP listeners running inside this process,
+    ' refreshed every few seconds. Banning an address drops its live
+    ' connections and silences future ones before the banner.
+  - else
+    ' Live connections on the IMAP listeners running inside this process,
+    ' refreshed every few seconds - idling mail clients hold connections
+    ' open for a long time, so long-lived rows here are healthy. Banning
+    ' an address drops its live connections and silences future ones
+    ' before the greeting.
+
+= turbo_frame_tag "live_connections", data: { controller: "poll", poll_interval_value: 5000 } do
+  = render "connections"

@@ -34,14 +34,14 @@ port ENV.fetch("PORT", 3000)
 # Allow puma to be restarted by `bin/rails restart` command.
 plugin :tmp_restart
 
-# In development everything runs inside this one Puma process: the Solid
-# Queue supervisor (so DeliverSmtpOutboundJob's recurring schedule works with
-# a plain `bin/rails server`) and the mail_on_rails IMAP server. In the
-# Kamal deploy the web container also runs Solid Queue in-process
-# (SOLID_QUEUE_IN_PUMA in config/deploy.yml), while the IMAP listener lives in
-# its own service (bin/server in the sibling mail_on_rails_imap repo) -
-# MAIL_ON_RAILS_SERVERS=true would pull it back into Puma. The SMTP edge is
-# the external mail_on_rails_exim service and never runs in Puma.
+# Everything runs inside this one Puma process, in development and in the
+# Kamal deploy alike: the Solid Queue supervisor (so
+# DeliverSmtpOutboundJob's recurring schedule works with a plain
+# `bin/rails server`; SOLID_QUEUE_IN_PUMA in config/deploy.yml) and the
+# mail_on_rails SMTP + IMAP servers (the :mail_on_rails plugin;
+# MAIL_ON_RAILS_SERVERS=true on the web role). One process serving every
+# protocol is the point of the unified deploy - which is also why the
+# plugin refuses WEB_CONCURRENCY > 1.
 rails_env = ENV.fetch("RAILS_ENV") { ENV.fetch("RACK_ENV", "development") }
 
 plugin :solid_queue if rails_env == "development" || ENV["SOLID_QUEUE_IN_PUMA"] == "true"

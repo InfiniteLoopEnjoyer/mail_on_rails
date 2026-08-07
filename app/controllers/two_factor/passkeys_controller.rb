@@ -2,6 +2,11 @@
 # options issues the creation challenge; create verifies the attestation the
 # browser posts back (webauthn_controller.js) and stores the public key.
 class TwoFactor::PasskeysController < ApplicationController
+  rate_limit to: 10, within: 3.minutes, only: %i[options create],
+             with: -> { render json: { error: "Try again later." }, status: :too_many_requests }
+  rate_limit to: 10, within: 3.minutes, only: :destroy, name: "destroy",
+             with: -> { redirect_to edit_user_path(Current.user), alert: "Try again later." }
+
   def options
     user = Current.user
     options = WebAuthn::Credential.options_for_create(

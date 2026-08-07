@@ -65,6 +65,20 @@ module MailOnRails
         end
       end
 
+      # Persists one closed connection for the history section of the live
+      # connection pages (ClosedConnection). Optional store method: the
+      # servers call it behind respond_to?, so stores without it (the
+      # vendored memory stores) simply keep no history. +info+ is the
+      # plain-values payload Server#report_closed assembles; best-effort
+      # end to end - db's rescue plus ClosedConnection.record's own mean a
+      # history failure can never disturb a connection teardown.
+      def record_closed_connection(info)
+        db do
+          ClosedConnection.record(info)
+          {}
+        end
+      end
+
       private
 
       def throttled_result(blocked, email, ip, source = nil)

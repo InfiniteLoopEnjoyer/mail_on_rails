@@ -1,11 +1,15 @@
 / A ban button for one IP or CIDR - or, when a ban already covers it, a
 / badge naming that ban. locals: target (the IP/CIDR to ban), confirm
-/ (turbo_confirm text), range (optional: the drill-down CIDR to return to).
+/ (turbo_confirm text), range (optional: the drill-down CIDR to return
+/ to), origin (optional: "smtp"/"imap" when the button sits on a live
+/ connections page, so the ban redirects back there). The form targets
+/ _top because the live pages render these inside a polling turbo frame,
+/ and the redirect (with its flash) must navigate the whole page.
 - if (ban = ban_covering(target))
   span.inline-block.rounded.bg-red-50.px-1.5.py-0.5.text-xs.font-medium.text-red-700.dark:bg-red-950.dark:text-red-400 title="Covered by #{ban.cidr}#{" (Spamhaus DROP)" if ban.source == "spamhaus_drop"}"
     | banned
 - else
   = button_to "Ban", banned_ips_path,
-      params: { banned_ip: { cidr: target }, window: @window, range: local_assigns[:range] }.compact,
+      params: { banned_ip: { cidr: target }, window: @window, range: local_assigns[:range], origin: local_assigns[:origin] }.compact,
       class: "inline-block cursor-pointer rounded-md border border-red-200 bg-white px-2 py-0.5 text-xs font-medium text-red-700 dark:border-red-900 dark:bg-slate-900 dark:text-red-400",
-      form: { data: { turbo_confirm: confirm }, class: "inline-block" }
+      form: { data: { turbo_confirm: confirm, turbo_frame: "_top" }, class: "inline-block" }

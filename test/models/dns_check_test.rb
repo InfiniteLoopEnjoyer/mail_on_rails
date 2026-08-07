@@ -29,9 +29,26 @@ class DnsCheckTest < ActiveSupport::TestCase
       mx: { "example.com" => [ [ 10, "mail.host.test" ] ] },
       txt: { "example.com" => [ "v=spf1 mx -all" ],
              dkim_txt_name => [ dkim_txt_value ],
-             "_dmarc.example.com" => [ "v=DMARC1; p=none" ] }
+             "_dmarc.example.com" => [ "v=DMARC1; p=none" ],
+             "_mta-sts.example.com" => [ MtaSts.txt_record ],
+             "_smtp._tls.example.com" => [ "v=TLSRPTv1; rua=mailto:tls-rpt@example.com" ] }
     )
     assert checks.values.all? { |c| c.status == :pass }, checks.values.inspect
+  end
+
+  test "MTA-STS: missing fails, a stale id warns, the current id passes" do
+    assert_equal :fail, run_checks["MTA-STS"].status
+
+    checks = run_checks(txt: { "_mta-sts.example.com" => [ "v=STSv1; id=oldpolicyid" ] })
+    assert_equal :warn, checks["MTA-STS"].status
+    assert_includes checks["MTA-STS"].note, "republish"
+
+    assert_equal :pass, run_checks(txt: { "_mta-sts.example.com" => [ MtaSts.txt_record ] })["MTA-STS"].status
+  end
+
+  test "TLS-RPT: any published record passes, absence fails" do
+    assert_equal :fail, run_checks["TLS-RPT"].status
+    assert_equal :pass, run_checks(txt: { "_smtp._tls.example.com" => [ "v=TLSRPTv1; rua=mailto:elsewhere@other.test" ] })["TLS-RPT"].status
   end
 
   test "MX fails when no record points at the mail host, passes on any match" do
@@ -70,6 +87,18 @@ class DnsCheckTest < ActiveSupport::TestCase
     dns = DnsCheck.for(@domain, resolver: FakeResolver.new({ "_dmarc.example.com" => [ "v=DMARC1; p=quarantine" ] }, {}))
     assert_equal "v=DMARC1; p=quarantine", dns.dmarc_record
     assert_equal :fail, run_checks["DMARC"].status # and absent => fail, no record
+  end
+
+  test "refresh! persists the checks as the domain's cached pills" do
+    DnsCheck.refresh!(@domain, resolver: FakeResolver.new({ "example.com" => [ "v=spf1 mx -all" ] },
+                                                          { "example.com" => [ [ 10, "mail.host.test" ] ] }))
+    @domain.reload
+    assert @domain.dns_checked_at.present?
+    cached = @domain.cached_dns_checks.index_by(&:record)
+    assert_equal :pass, cached["MX"].status
+    assert_equal :pass, cached["SPF"].status
+    assert_equal :fail, cached["DMARC"].status
+    assert_includes cached["DMARC"].note, "no _dmarc record"
   end
 
   test "DNS failures surface as unknown, not fail" do

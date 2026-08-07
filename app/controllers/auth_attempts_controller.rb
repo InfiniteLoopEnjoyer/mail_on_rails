@@ -4,6 +4,8 @@
 # /24's individual addresses so a single machine can be banned without
 # taking the whole range.
 class AuthAttemptsController < ApplicationController
+  include BanCoverage
+
   WINDOWS = { "24h" => 1.day, "7d" => 7.days, "30d" => 30.days }.freeze
   DEFAULT_WINDOW = "7d"
 
@@ -45,16 +47,4 @@ class AuthAttemptsController < ApplicationController
     @drop_bans = @bans.count { |ban| ban.source == "spamhaus_drop" }
     @drop_refreshed_at = @bans.filter_map { |ban| ban.updated_at if ban.source == "spamhaus_drop" }.max
   end
-
-  # The ban already covering an address or range shown on the page, if
-  # any - checked against the loaded set, no per-row queries. Works for
-  # bare IPs and for whole ranges (IPAddr#include? only reports true when
-  # the ban covers the entire /24).
-  def ban_covering(target)
-    addr = IPAddr.new(target.to_s)
-    @bans.detect { |ban| ban.covers_addr?(addr) }
-  rescue IPAddr::Error
-    nil
-  end
-  helper_method :ban_covering
 end

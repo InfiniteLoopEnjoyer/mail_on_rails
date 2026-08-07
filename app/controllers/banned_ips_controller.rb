@@ -2,6 +2,9 @@
 # ban buttons and the manual form - no pages of its own, both actions land
 # back where they were clicked, on the index or a range drill-down).
 class BannedIpsController < ApplicationController
+  rate_limit to: 20, within: 10.minutes,
+             with: -> { redirect_to auth_attempts_path, alert: "Try again later." }
+
   def create
     banned_ip = BannedIp.new(banned_ip_params)
 
@@ -16,7 +19,11 @@ class BannedIpsController < ApplicationController
 
     synced = with_sync_alert { banned_ip.save }
     if banned_ip.persisted?
-      redirect_back_to_attempts notice: ("Banned #{banned_ip.cidr}." if synced)
+      audit "banned_ip.create", banned_ip, note: banned_ip.note
+      kicked = kick_live_connections(banned_ip)
+      notice = [ ("Banned #{banned_ip.cidr}." if synced),
+                 ("Dropped #{kicked} live #{"connection".pluralize(kicked)}." if kicked.positive?) ].compact.join(" ")
+      redirect_back_to_attempts notice: notice.presence
     else
       redirect_back_to_attempts alert:
         "Ban not added: #{banned_ip.errors.full_messages.to_sentence}."
@@ -26,6 +33,7 @@ class BannedIpsController < ApplicationController
   def destroy
     banned_ip = BannedIp.find(params[:id])
     synced = with_sync_alert { banned_ip.destroy! }
+    audit "banned_ip.destroy", banned_ip
     redirect_back_to_attempts status: :see_other,
       notice: ("Unbanned #{banned_ip.cidr}." if synced)
   end
@@ -44,13 +52,34 @@ class BannedIpsController < ApplicationController
     false
   end
 
-  # Both actions live as buttons on the auth attempts index and its range
-  # drill-down; cidr/window params say which one to return to.
+  # The mail servers run inside this very process (the :mail_on_rails
+  # Puma plugin), so a new ban can also drop the address's live
+  # connections - the denylist files only silence future ones, and an
+  # established IMAP IDLE would otherwise outlive the ban by up to its
+  # 1800s idle timeout. A no-server boot (tests, plain `rails server`)
+  # just kicks nothing.
+  def kick_live_connections(banned_ip)
+    require "mail_on_rails/boot"
+    MailOnRails::Boot.kick_connections do |ip|
+      banned_ip.covers_addr?(IPAddr.new(ip))
+    rescue IPAddr::Error
+      false
+    end
+  end
+
+  # The actions live as buttons on the auth attempts index, its range
+  # drill-down, and the SMTP/IMAP live connection pages; origin/cidr/
+  # window params say which one to return to.
   def redirect_back_to_attempts(**options)
-    target = if params[:range].present?
-      range_auth_attempts_path(cidr: params[:range], window: params[:window])
+    target = case params[:origin]
+    when "smtp" then smtp_path(window: params[:window])
+    when "imap" then imap_path(window: params[:window])
     else
-      auth_attempts_path(window: params[:window])
+      if params[:range].present?
+        range_auth_attempts_path(cidr: params[:range], window: params[:window])
+      else
+        auth_attempts_path(window: params[:window])
+      end
     end
     redirect_to target, **options
   end

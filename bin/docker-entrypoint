@@ -3,13 +3,10 @@
 # If running the rails server then create or migrate existing database
 if [ "${@: -2:1}" == "./bin/rails" ] && [ "${@: -1:1}" == "server" ]; then
   ./bin/rails db:prepare
-  # Reconcile the exim local_domains file with the Domain table (shared
-  # mailconf volume). Best-effort: must not block boot (e.g. the table is
-  # empty before the first domains:bootstrap, which the sync refuses).
-  ./bin/rails mail_on_rails:domains:sync || echo "domain sync skipped"
-  # Same for the local_recipients file exim checks RCPTs against - without
-  # it (fresh volume) exim defers all inbound until the first account write.
-  ./bin/rails mail_on_rails:recipients:sync || echo "recipient sync skipped"
+  # Reconcile the banned_ips file with the BannedIp table - the in-process
+  # SMTP/IMAP listeners read it, and on a fresh volume it wouldn't exist
+  # until the first ban commit otherwise. Best-effort: must not block boot.
+  ./bin/rails mail_on_rails:banned_ips:sync || echo "banned_ips sync skipped"
 fi
 
 exec "${@}"

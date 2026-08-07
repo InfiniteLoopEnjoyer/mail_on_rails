@@ -1,0 +1,33 @@
+/ One message in a list (mailbox page, search results). show_mailbox
+/ adds the folder chip search results need to say where a hit lives;
+/ thread_count > 1 marks the row as a whole conversation, and unseen
+/ can widen the dot to "any message in the thread is unread".
+- show_mailbox = local_assigns.fetch(:show_mailbox, false)
+- thread_count = local_assigns.fetch(:thread_count, 1)
+- unseen = local_assigns.fetch(:unseen) { !message.seen? }
+li.mb-2.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900
+  / An unsent draft opens in the composer to carry on writing; anything
+  / else opens as a message to read.
+  - destination = message.draft? ? edit_draft_path(message) : email_account_mailbox_email_message_path(email_account, mailbox, message)
+  = link_to destination, class: "flex items-baseline gap-3 px-4 py-3" do
+    span.primary.font-semibold
+      - if unseen
+        span.mr-2.inline-block.h-2.w-2.rounded-full.bg-accent.align-middle
+      = message.subject.presence || "(no subject)"
+      - if thread_count > 1
+        span.ml-2.rounded-full.bg-slate-100.dark:bg-slate-800.px-2.text-xs.font-normal.whitespace-nowrap.text-slate-600.dark:text-slate-300 title="#{thread_count} messages in this conversation"= thread_count
+    span.truncate.text-slate-500.dark:text-slate-400
+      - if show_mailbox
+        span.mr-1.rounded-full.bg-slate-100.dark:bg-slate-800.px-2.text-xs.whitespace-nowrap.text-slate-600.dark:text-slate-300= mailbox.name
+      - if message.draft?
+        span.rounded-full.bg-slate-100.dark:bg-slate-800.px-2.text-xs.whitespace-nowrap.text-slate-600.dark:text-slate-300 Draft
+      - else
+        => message.from_address
+      - if message.scan_status == "infected"
+        span.rounded-full.bg-red-100.dark:bg-red-950.px-2.text-xs.whitespace-nowrap.text-red-700.dark:text-red-400 title="ClamAV: #{message.virus_name}"
+          | ☣ virus: #{message.virus_name}
+      - elsif message.scan_status == "unscanned"
+        span.rounded-full.bg-amber-100.dark:bg-amber-950.px-2.text-xs.whitespace-nowrap.text-amber-700.dark:text-amber-400 title="Accepted while the virus scanner was unavailable" unscanned
+      - unless message.sender_verified?
+        span.rounded-full.bg-red-100.dark:bg-red-950.px-2.text-xs.whitespace-nowrap.text-red-700.dark:text-red-400 title="Unverified sender - may be spoofed#{message.auth_results.present? ? " (#{message.auth_results})" : ""}" ⚠
+    span.ml-auto.text-xs.whitespace-nowrap.text-slate-500.dark:text-slate-400= message.internal_date.strftime("%b %-d, %Y %H:%M")

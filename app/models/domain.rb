@@ -1,24 +1,29 @@
 # A domain we host mail for. Creating/destroying one takes effect live:
-# the exim edge's local_domains list is a file on a volume shared with this
-# app (see EximLocalDomains), re-read by exim per connection - no restart.
+# the in-process SMTP server consults this table at RCPT time
+# (Store::SmtpBackend#local_rcpts), so a recipient in a hosted domain with
+# no account answers "no such user" instead of "relaying denied".
 # Creation also mints the DKIM signing key, stored encrypted on this row
 # (dkim_private_key) - so no domain ever silently sends unsigned. The key
 # dies with the row: re-adding a domain mints a NEW key, so the DKIM TXT
 # must be republished then.
 #
-# A domain here only makes exim treat recipients as local and enables DKIM
-# signing; DNS (MX/SPF/DKIM TXT - shown on the domain page) and
-# EmailAccount rows are still needed before mail flows.
+# A domain here only makes the SMTP server treat recipients as local and
+# enables DKIM signing; DNS (MX/SPF/DKIM TXT - shown on the domain page)
+# and EmailAccount rows are still needed before mail flows.
 class Domain < ApplicationRecord
   encrypts :dkim_private_key
-  # Lowercase ASCII/punycode FQDN. Also keeps Exim list metacharacters
-  # (':', '!', '*', whitespace) out of the local_domains file.
+  # Lowercase ASCII/punycode FQDN.
   HOSTNAME = /\A(?=.{1,253}\z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\z/
 
   # Local part of the auto-created account DMARC aggregate reports are
   # mailed to (the rua= target on the domain page). MailroomMailbox
   # triggers report ingestion for mail delivered to it.
   DMARC_LOCAL_PART = "dmarc"
+
+  # Local part of the auto-created account TLS-RPT failure reports are
+  # mailed to (the TLS-RPT rua= target). Kept for human review only -
+  # nothing parses these.
+  TLS_RPT_LOCAL_PART = "tls-rpt"
 
   DKIM_KEY_BITS = 2048
 
@@ -30,8 +35,22 @@ class Domain < ApplicationRecord
   normalizes :name, with: ->(name) { name.to_s.strip.downcase.delete_suffix(".") }
 
   before_create :generate_dkim_key
-  after_create_commit :activate
-  after_destroy_commit :deactivate
+  after_create_commit :ensure_dmarc_account!
+  after_create_commit :ensure_tls_rpt_account!
+  # Fill the DNS pill cache without waiting for the hourly refresh (the
+  # records won't exist yet, but "all red" beats "not checked").
+  after_create_commit -> { DnsCheckRefreshJob.perform_later(self) }
+
+  # Live-refresh the domain page and index pills when check RESULTS change
+  # (subscribed via turbo_stream_from). Only on result changes: every show
+  # render runs a write-through DnsCheck.refresh! (touching
+  # dns_checked_at), so an unconditional broadcast would ping-pong
+  # refreshes between viewers.
+  after_update_commit -> { broadcast_refresh_later }, if: -> { saved_change_to_dns_checks? }
+  after_update_commit -> { broadcast_refresh_later_to :domains }, if: -> { saved_change_to_dns_checks? }
+  # Index also lists the domains themselves.
+  after_create_commit -> { broadcast_refresh_later_to :domains }
+  after_destroy_commit -> { broadcast_refresh_later_to :domains }
 
   def self.dmarc_ingestion_address?(email)
     local, _, domain_name = email.to_s.partition("@")
@@ -58,6 +77,19 @@ class Domain < ApplicationRecord
     "#{DMARC_LOCAL_PART}@#{name}"
   end
 
+  def tls_rpt_address
+    "#{TLS_RPT_LOCAL_PART}@#{name}"
+  end
+
+  # The cached DnsCheck results (jsonb; see DnsCheck.refresh! for when it
+  # refreshes), rehydrated into Check structs for the index pills. Empty
+  # until the first check runs.
+  def cached_dns_checks
+    Array(dns_checks).map do |c|
+      DnsCheck::Check.new(record: c["record"], status: c["status"].to_sym, found: c["found"], note: c["note"])
+    end
+  end
+
   # The reports account. Auto-created on domain creation with a random
   # password (generate a new one in the accounts UI for IMAP access to the
   # raw reports); left in place on domain destroy so history survives.
@@ -66,10 +98,12 @@ class Domain < ApplicationRecord
       EmailAccount.create!(email: dmarc_address, name: "DMARC reports", password: EmailAccount.generate_password)
   end
 
-  # Is the domain in the exim file right now? (The file lives on our own
-  # mount, so we can just read it.)
-  def synced_to_exim?
-    EximLocalDomains.current.include?(name)
+  # Same lifecycle as the dmarc account. Also called by DnsPublisher when
+  # it first publishes the TLS-RPT record, so domains created before
+  # TLS-RPT support get the account backfilled.
+  def ensure_tls_rpt_account!
+    EmailAccount.find_by(email: tls_rpt_address) ||
+      EmailAccount.create!(email: tls_rpt_address, name: "TLS reports", password: EmailAccount.generate_password)
   end
 
   # Escalation advice for the readiness indicator, from the last 30 days
@@ -103,16 +137,5 @@ class Domain < ApplicationRecord
   # ||= so an import (e.g. restoring a dumped row) keeps its key.
   def generate_dkim_key
     self.dkim_private_key ||= OpenSSL::PKey::RSA.new(DKIM_KEY_BITS).to_pem
-  end
-
-  def activate
-    ensure_dmarc_account!
-    EximLocalDomains.sync!
-  end
-
-  # force_empty: removing the last domain is explicit admin intent, even
-  # though an empty list makes exim 550 all inbound mail.
-  def deactivate
-    EximLocalDomains.sync!(force_empty: true)
   end
 end
