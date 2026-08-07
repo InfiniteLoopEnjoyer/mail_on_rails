@@ -7,6 +7,10 @@ class TwoFactor::ChallengesController < ApplicationController
   allow_unauthenticated_access
   rate_limit to: 10, within: 3.minutes, only: :totp,
     with: -> { redirect_to new_two_factor_challenge_path, alert: "Try again later." }
+  # The passkey endpoints answer JSON (webauthn_controller.js shows
+  # result.error); a separate name so the counters don't merge with totp's.
+  rate_limit to: 10, within: 3.minutes, only: %i[ webauthn_options webauthn ], name: "webauthn",
+    with: -> { render json: { error: "Try again later." }, status: :too_many_requests }
   before_action :set_user
 
   def new
@@ -57,6 +61,9 @@ class TwoFactor::ChallengesController < ApplicationController
     # (TOTP) paths can send the browser to the same place.
     def complete_sign_in
       clear_pending_second_factor
+      # Full sign-in is where the AuthThrottle budget refills for 2FA users;
+      # SessionsController#create deliberately skipped it at password stage.
+      AuthThrottle.clear_account(@user.email_address)
       start_new_session_for @user
       after_authentication_url
     end

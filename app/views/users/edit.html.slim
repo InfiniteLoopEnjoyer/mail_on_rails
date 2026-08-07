@@ -8,8 +8,11 @@ nav.mb-2.text-sm.text-slate-500.dark:text-slate-400
 header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
   h1.text-2xl.font-bold Edit User
   - confirm = @user == Current.user ? "Delete your own account? You will be signed out." : "Delete #{@user.email_address}?"
-  .flex.items-center.gap-2
-    = button_to "Delete", user_path(@user), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 dark:border-red-900 bg-white dark:bg-slate-900 px-3.5 py-1 text-sm font-medium text-red-700 dark:text-red-400", form: { data: { turbo_confirm: confirm } }
+  / The controller refuses to delete the only remaining user; no button
+  / for an action that can only fail.
+  - if User.count > 1
+    .flex.items-center.gap-2
+      = button_to "Delete", user_path(@user), method: :delete, class: "inline-block cursor-pointer rounded-md border border-red-200 dark:border-red-900 bg-white dark:bg-slate-900 px-3.5 py-1 text-sm font-medium text-red-700 dark:text-red-400", form: { data: { turbo_confirm: confirm } }
 
 = render "form", user: @user
 

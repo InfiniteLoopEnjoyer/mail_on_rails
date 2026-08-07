@@ -14,10 +14,10 @@ header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
   .flex.items-center.gap-2
     / Import: the file input stays hidden; picking files submits the form,
     / so the label is the whole UI. Styled to match the buttons beside it.
-    = form_with url: import_email_account_mailbox_path(@email_account, @mailbox), method: :post, multipart: true, class: "contents" do
+    = form_with url: import_email_account_mailbox_path(@email_account, @mailbox), method: :post, multipart: true, class: "contents", data: { controller: "form" } do
       label.inline-block.cursor-pointer.rounded-md.border.border-slate-200.dark:border-slate-800.bg-white.dark:bg-slate-900.px-3.5.py-1.text-sm.font-medium.text-slate-800.dark:text-slate-100 for="mailbox_import_eml"
         | Import .eml
-        input#mailbox_import_eml.sr-only type="file" name="eml[]" accept=".eml,message/rfc822" multiple=true onchange="this.form.requestSubmit()"
+        input#mailbox_import_eml.sr-only type="file" name="eml[]" accept=".eml,message/rfc822" multiple=true data-action="change->form#submit"
     / data-turbo=false: a file download, not a navigation.
     = link_to "Export mbox", export_email_account_mailbox_path(@email_account, @mailbox), class: "inline-block cursor-pointer rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3.5 py-1 text-sm font-medium text-slate-800 dark:text-slate-100", data: { turbo: false }
     - unless @mailbox.inbox?

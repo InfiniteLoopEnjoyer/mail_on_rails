@@ -35,6 +35,11 @@ production:
     command: "AuthThrottle.prune!"
     schedule: every hour at minute 23
 
+  # Idle-expired sessions are refused at resume; this removes the rows.
+  prune_sessions:
+    command: "Session.prune!"
+    schedule: every day at 4:29am
+
   # The attempt log's write rate is set by whoever is attacking, so its
   # retention has to be enforced rather than assumed.
   prune_auth_attempts:

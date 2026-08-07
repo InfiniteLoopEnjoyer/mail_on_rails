@@ -53,6 +53,43 @@ class TwoFactor::ChallengesControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  # The AuthThrottle account counter must survive the password stage - an
+  # attacker who has the password but not the factor cannot refill their
+  # budget - and clear only on full sign-in.
+  test "account throttle counter clears on completed second factor, not on password success" do
+    AuthThrottle.record_failure(ip: "203.0.113.9", email: @user.email_address)
+
+    start_challenge
+    assert AuthThrottle.exists?(scope: AuthThrottle::ACCOUNT, key: @user.email_address),
+      "password success alone must not clear the counter"
+
+    post totp_two_factor_challenge_path, params: { code: ROTP::TOTP.new(@user.otp_secret).now }
+
+    assert cookies[:session_id].present?
+    assert_not AuthThrottle.exists?(scope: AuthThrottle::ACCOUNT, key: @user.email_address)
+  end
+
+  # The passkey endpoints are throttled like totp. The test env caches with
+  # the null store (which never accumulates), so route the limiter's
+  # captured store through a real one for the duration.
+  test "webauthn challenge endpoints are rate limited" do
+    memory = ActiveSupport::Cache::MemoryStore.new
+    store = TwoFactor::ChallengesController.cache_store
+    store.define_singleton_method(:increment) { |*args, **kwargs| memory.increment(*args, **kwargs) }
+
+    10.times { post webauthn_options_two_factor_challenge_path, as: :json }
+    post webauthn_options_two_factor_challenge_path, as: :json
+
+    assert_response :too_many_requests
+    assert_equal "Try again later.", response.parsed_body["error"]
+
+    # Separate counter: the totp budget is untouched by webauthn posts.
+    post totp_two_factor_challenge_path, params: { code: "000000" }
+    assert_redirected_to new_session_path
+  ensure
+    store.singleton_class.remove_method(:increment) if store
+  end
+
   test "challenge without a pending sign-in redirects to login" do
     get new_two_factor_challenge_path
     assert_redirected_to new_session_path

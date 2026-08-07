@@ -36,6 +36,12 @@ class UsersController < ApplicationController
   end
 
   def destroy
+    # The only remaining user cannot be deleted - a web-only deployment has
+    # no other way back in.
+    if User.count == 1
+      return redirect_to users_path, alert: "Cannot delete the only remaining user.", status: :see_other
+    end
+
     if @user == Current.user
       # Audit before the session dies, or the row would have no actor.
       audit "user.destroy", @user
