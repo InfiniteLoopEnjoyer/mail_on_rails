@@ -16,13 +16,13 @@ html class=("dark" if current_appearance == "dark") data-appearance=current_appe
 
     / "System" appearance can only be resolved where the OS preference lives;
     / do it before first paint so a dark reload never flashes white. Explicit
-    / light/dark came server-rendered on <html> and are left alone.
-    javascript:
-      (function () {
-        var html = document.documentElement
-        if (html.dataset.appearance === "system" && matchMedia("(prefers-color-scheme: dark)").matches)
-          html.classList.add("dark")
-      })()
+    / light/dark came server-rendered on <html> and are left alone. A plain
+    / script tag (not the javascript: filter, which can't take attributes)
+    / so it can carry the CSP nonce.
+    / Semicolons matter: Slim's pipe text collapses newlines, so the code
+    / cannot lean on automatic semicolon insertion.
+    script nonce=content_security_policy_nonce
+      | (function () { var html = document.documentElement; if (html.dataset.appearance === "system" && matchMedia("(prefers-color-scheme: dark)").matches) { html.classList.add("dark"); } })();
 
     / Enable PWA manifest for installable apps (make sure to enable in config/routes.rb too!)
     / = tag.link rel: "manifest", href: pwa_manifest_path(format: :json)
