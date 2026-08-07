@@ -76,6 +76,54 @@ Web UI, roughly by value:
 
 Protocol/delivery:
 
+- [ ] **Vacation responder backscatter (RFC 3834 §4)** — the auto-reply is
+  addressed from the `Reply-To`/`From` headers
+  (`VacationResponder#reply_address`), which any unauthenticated sender
+  sets freely. `bounce?` does validate the *envelope* return path, but
+  that address is never used as the destination and the two are never
+  compared — so a stranger can make a vacationing account send mail to a
+  third party who never contacted us. Because the reply is queued with
+  `mail_from: account.email`, `OutboundDeliverer#signed` DKIM-signs it
+  under our domain and it leaves our IP: fully DMARC-aligned backscatter
+  that reaches the victim's inbox rather than their spam folder, with the
+  reputation damage landing on us.
+
+  The per-correspondent window does not bound this. `VacationReply.claim`
+  stores the address verbatim into a case-sensitive unique index, so
+  `victim@x.com` and `Victim@x.com` are separate rows, and `+`-tagging
+  yields unlimited variants that all reach the same real mailbox — "one
+  reply per correspondent per week" is really one reply per *spelling*.
+  Fan-out compounds it: the dedup is per-account, so a single message
+  addressed to 100 vacationing accounts (`MAX_RECIPIENTS`) yields 100
+  replies to the same victim. The only real ceiling today is `SendQuota`
+  (~200/hour/account, genuinely shared with submission because
+  `SOLID_QUEUE_IN_PUMA` runs the mailroom inside the SMTP process).
+  Work, roughly in order of value:
+
+  - address the reply to the validated envelope return path instead of
+    `Reply-To`/`From`. This alone removes attacker control of the
+    destination and makes the address-variant bypass moot, since the
+    return path is the one address the sending MTA must be able to
+    receive at;
+  - normalize (downcase, optionally strip `+` tags) before
+    `VacationReply.claim`, backed by a `citext` column or a functional
+    index so the uniqueness constraint means what it reads as;
+  - move `claim` after the quota check — today an exhausted quota has
+    already written a fresh `last_sent_at`, so a genuine correspondent
+    gets no reply *and* is then suppressed for the full seven days;
+  - send with a null envelope sender (`MAIL FROM:<>`) as RFC 3834
+    requires, so the auto-reply is itself unbounceable and a dead victim
+    address stops generating bounces back to the vacationing user;
+  - prune `vacation_replies` past the window. Nothing sweeps the table
+    today (only `dependent: :delete_all` on account destroy), so an
+    attacker cycling addresses grows it without limit.
+
+  The loop protections themselves are sound and should survive the
+  rework: null-sender and daemon suppression,
+  `Auto-Submitted`/`Precedence`/`X-Auto-Response-Suppress`/`List-*`
+  checks, the self-address check, junk and quarantine never earning a
+  reply, and local delivery going straight to the inbox so replies can't
+  re-enter the mailroom and ping-pong.
 - [ ] **DANE for outbound (RFC 7672)** — outbound TLS is opportunistic
   and unverified; TLSA validation (and honoring recipient MTA-STS
   policies, which we publish but don't check when sending) would close
