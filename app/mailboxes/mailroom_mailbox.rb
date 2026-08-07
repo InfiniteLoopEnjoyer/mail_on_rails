@@ -21,23 +21,34 @@ require "mail_on_rails/rspamd_analyzer"
 # Anything not clean is filed into the account's Quarantine mailbox for
 # review instead of INBOX, deduped by Message-ID because a retrying sender
 # re-sends the same message for days. Virus-clean mail that rspamd calls
-# spam is filed into Junk instead of INBOX.
+# spam is filed into Junk instead of INBOX - as is, when
+# MAILROOM_DMARC_ENFORCE=enforce, mail that failed DMARC under the sender
+# domain's own p=reject/p=quarantine policy (log-only by default).
 class MailroomMailbox < ApplicationMailbox
   def process
     verdict = scan_verdict
     # uniq: several recipient addresses (an account plus its aliases) can
     # resolve to the same account - it still gets exactly one copy.
     recipients.filter_map { |recipient| resolve_account(recipient.strip.downcase) }.uniq.each do |account|
+      # A full account loses only its own copy - the message was already
+      # accepted at the SMTP edge, so there is no rejecting it now, and
+      # co-recipients must still get theirs.
       if verdict && verdict[:status] != "clean"
         quarantine(account, verdict)
       else
-        # Virus-clean but rspamd says spam: file into Junk, not INBOX.
-        dest = sender_analysis&.spam? ? account.junk_mailbox : account.inbox
+        # Virus-clean but rspamd says spam - or the sender domain's own
+        # DMARC policy asks for rejection/quarantine and enforcement is on:
+        # file into Junk, not INBOX.
+        dest = sender_analysis&.spam? || dmarc_policy_junk? ? account.junk_mailbox : account.inbox
         message = EmailMessage.deliver_raw(dest, inbound_email.source,
                                            authenticated_as: authenticated_as, auth_results: auth_results,
                                            scan_status: verdict&.dig(:status), **spam_attributes)
         sweep_stale_unscanned(account)
         Rails.logger.info "[mail_on_rails] delivered inbound message to #{account.email} #{dest.name}"
+        # Vacation auto-reply, only for mail that earned the INBOX: junk
+        # and quarantine never get one (answering spam confirms a live
+        # address). VacationResponder carries the loop protections.
+        vacation_reply(account) if dest.inbox?
         # Mail to a domain's dmarc@ ingestion account carries aggregate
         # reports - parse them only after a real clamav scan came back
         # clean (on this branch a present verdict IS clean). Quarantined,
@@ -51,10 +62,21 @@ class MailroomMailbox < ApplicationMailbox
           end
         end
       end
+    rescue EmailMessage::OverQuota => e
+      Rails.logger.warn "[mail_on_rails] inbound message dropped for #{account.email}: #{e.message}"
     end
   end
 
   private
+
+  # The auto-reply must never cost the sender their mail: a responder
+  # bug is logged, not raised (raising would fail the routing job and
+  # re-deliver the message).
+  def vacation_reply(account)
+    VacationResponder.deliver_if_due(account, mail, return_path: return_path)
+  rescue StandardError => e
+    Rails.logger.error "[mail_on_rails] vacation responder failed for #{account.email}: #{e.class}: #{e.message}"
+  end
 
   # A recipient address is either an account's own address or one of its
   # aliases (the two sets are kept disjoint by model validations); both
@@ -121,6 +143,36 @@ class MailroomMailbox < ApplicationMailbox
         end
         result
       end
+  end
+
+  # App-layer DMARC enforcement, the second look after the SMTP edge's
+  # SMTP_DMARC_ENFORCE (which can 550 a p=reject failure outright at DATA
+  # time, before the message is ever accepted). rspamd sets dmarc_policy
+  # only when the message failed DMARC under a published p=reject or
+  # p=quarantine - a p=none failure carries no policy - so acting on it
+  # always honors what the domain owner asked for. Post-acceptance there
+  # is no rejecting without backscatter (the envelope sender of DMARC-fail
+  # mail is exactly the address not to bounce to), so "enforce" files into
+  # Junk for review. The default is log-only: watch the would-be filings
+  # against real traffic before flipping it on. Memoized so multi-recipient
+  # messages log once.
+  def dmarc_policy_junk?
+    return @dmarc_policy_junk if defined?(@dmarc_policy_junk)
+
+    @dmarc_policy_junk = begin
+      policy = sender_analysis&.dmarc_policy
+      mode = ENV.fetch("MAILROOM_DMARC_ENFORCE", "log").to_s.strip.downcase
+      if policy.nil? || %w[0 off].include?(mode)
+        false
+      elsif %w[1 enforce].include?(mode)
+        Rails.logger.warn "[mail_on_rails] DMARC p=#{policy} failure from #{return_path}: filing into Junk"
+        true
+      else
+        Rails.logger.warn "[mail_on_rails] DMARC p=#{policy} failure from #{return_path}: " \
+                          "would file into Junk (MAILROOM_DMARC_ENFORCE=log)"
+        false
+      end
+    end
   end
 
   def client_ip

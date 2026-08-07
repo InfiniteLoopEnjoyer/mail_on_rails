@@ -2,6 +2,11 @@
 # a QR code for a candidate secret held only in the session; create saves it
 # once the user proves their app has it by entering a valid code.
 class TwoFactor::TotpController < ApplicationController
+  # Same budget as the login-time 2FA challenge: create verifies codes, so
+  # it must not be a free oracle for guessing the pending secret's output.
+  rate_limit to: 10, within: 3.minutes, only: %i[create destroy],
+             with: -> { redirect_to new_two_factor_totp_path, alert: "Try again later." }
+
   def new
     session[:pending_totp_secret] ||= ROTP::Base32.random
     @secret = session[:pending_totp_secret]

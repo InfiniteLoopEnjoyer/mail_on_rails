@@ -92,6 +92,41 @@ class MailroomMailboxTest < ActionMailbox::TestCase
     assert_equal 1, @account.inbox.email_messages.count
   end
 
+  # Vacation replies fire only for mail that earned the INBOX - the
+  # responder's own protections are covered in VacationResponderTest.
+  test "an inbox delivery triggers the vacation responder, a junk filing does not" do
+    @account.update!(vacation_enabled: true, vacation_body: "Away.")
+
+    scanning(CLEAN) { receive_inbound_email_from_source(source) }
+    queued = SmtpOutboundMessage.sole
+    assert_equal "sender@remote.test", queued.recipient
+    assert_match(/Auto-Submitted: auto-replied/, queued.data)
+
+    # Same sender, but filed to Junk by the spam verdict: no second reply
+    # even though the reply window would not block a different recipient.
+    spam = MailOnRails::RspamdAnalyzer::Result.new(status: :ok, action: "add header",
+                                                   score: 12.0, required_score: 6.0)
+    junk_raw = source(message_id: "<mid-2@remote.test>").gsub("sender@remote.test", "other@remote.test")
+    with_rspamd(enabled: true, analyze: spam) do
+      scanning(CLEAN) { receive_inbound_email_from_source(junk_raw) }
+    end
+    assert_equal 1, @account.junk_mailbox.email_messages.count
+    assert_equal 1, SmtpOutboundMessage.count
+  end
+
+  # The message was accepted at the SMTP edge; a full recipient loses only
+  # its own copy, without blocking co-recipients or failing the routing job.
+  test "a recipient over storage quota is skipped, co-recipients still delivered" do
+    @account.update!(quota_bytes: 1)
+    other = EmailAccount.create!(email: "roomy@example.test", password: "pw-123456")
+
+    raw = source.sub("X-Original-To: #{EMAIL}", "X-Original-To: #{EMAIL}\r\nX-Original-To: #{other.email}")
+    scanning(CLEAN) { receive_inbound_email_from_source(raw) }
+
+    assert_empty @account.inbox.email_messages
+    assert_equal 1, other.inbox.email_messages.count
+  end
+
   test "a local infected scan quarantines with its virus name, INBOX untouched" do
     scanning(infected("Local-Sig")) { receive_inbound_email_from_source(source) }
 
@@ -283,5 +318,75 @@ class MailroomMailboxTest < ActionMailbox::TestCase
 
     assert_empty junk.email_messages
     assert_equal 1, quarantine.email_messages.count
+  end
+
+  # -- DMARC enforcement -------------------------------------------------------
+
+  # A message that failed DMARC under the sender domain's published policy,
+  # but that rspamd did not otherwise act on - filing decisions below are
+  # purely MAILROOM_DMARC_ENFORCE's.
+  def dmarc_fail_verdict(policy: "reject")
+    MailOnRails::RspamdAnalyzer::Result.new(
+      status: :ok, action: "no action", score: 2.0, required_score: 6.0,
+      spf: "fail", dkim: "none", dmarc: "fail", dmarc_policy: policy,
+      auth_results: "mail.test; spf=fail; dkim=none; dmarc=fail"
+    )
+  end
+
+  def with_dmarc_enforcement(mode)
+    original = ENV["MAILROOM_DMARC_ENFORCE"]
+    mode.nil? ? ENV.delete("MAILROOM_DMARC_ENFORCE") : ENV["MAILROOM_DMARC_ENFORCE"] = mode
+    yield
+  ensure
+    original.nil? ? ENV.delete("MAILROOM_DMARC_ENFORCE") : ENV["MAILROOM_DMARC_ENFORCE"] = original
+  end
+
+  test "a DMARC policy failure only logs by default and still reaches INBOX" do
+    with_dmarc_enforcement(nil) do
+      with_rspamd(enabled: true, analyze: dmarc_fail_verdict) { receive_inbound_email_from_source(source) }
+    end
+
+    assert_equal 1, @account.inbox.email_messages.count
+    assert junk.nil? || junk.email_messages.empty?, "nothing may be junk-filed in log-only mode"
+  end
+
+  test "enforcement files a p=reject DMARC failure into Junk" do
+    with_dmarc_enforcement("enforce") do
+      with_rspamd(enabled: true, analyze: dmarc_fail_verdict) { receive_inbound_email_from_source(source) }
+    end
+
+    assert_empty @account.inbox.email_messages
+    message = junk.email_messages.sole
+    assert_includes message.auth_results, "dmarc=fail"
+  end
+
+  test "enforcement files a p=quarantine DMARC failure into Junk" do
+    with_dmarc_enforcement("enforce") do
+      with_rspamd(enabled: true, analyze: dmarc_fail_verdict(policy: "quarantine")) do
+        receive_inbound_email_from_source(source)
+      end
+    end
+
+    assert_equal 1, junk.email_messages.count
+  end
+
+  # p=none is the domain owner saying "monitor, don't act" - enforcement
+  # must not override that.
+  test "enforcement leaves a p=none DMARC failure in INBOX" do
+    with_dmarc_enforcement("enforce") do
+      with_rspamd(enabled: true, analyze: dmarc_fail_verdict(policy: nil)) do
+        receive_inbound_email_from_source(source)
+      end
+    end
+
+    assert_equal 1, @account.inbox.email_messages.count
+  end
+
+  test "MAILROOM_DMARC_ENFORCE=0 disables even the logging path" do
+    with_dmarc_enforcement("0") do
+      with_rspamd(enabled: true, analyze: dmarc_fail_verdict) { receive_inbound_email_from_source(source) }
+    end
+
+    assert_equal 1, @account.inbox.email_messages.count
   end
 end

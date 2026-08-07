@@ -1,5 +1,9 @@
 class DomainsController < ApplicationController
   before_action :set_domain, only: %i[show destroy publish_dns recheck_dns]
+  # Tighter than the other admin surfaces: publish_dns calls the
+  # Cloudflare API and destroy cuts off a domain's inbound mail.
+  rate_limit to: 10, within: 3.minutes, only: %i[create destroy publish_dns recheck_dns],
+             with: -> { redirect_to domains_path, alert: "Try again later." }
 
   def index
     @domains = Domain.order(:name)
@@ -20,6 +24,7 @@ class DomainsController < ApplicationController
   def create
     @domain = Domain.new(domain_params)
     if @domain.save
+      audit "domain.create", @domain
       redirect_to @domain, notice: "Domain #{@domain.name} added. Publish the DNS records below."
     else
       render :new, status: :unprocessable_entity
@@ -34,6 +39,7 @@ class DomainsController < ApplicationController
     end
 
     result = DnsPublisher.publish!(@domain)
+    audit "domain.publish_dns", @domain, actions: result.actions, skipped: result.skipped
     notice = result.actions.any? ? "Cloudflare: #{result.actions.join("; ")}." : "Cloudflare: nothing to publish."
     notice += " Skipped: #{result.skipped.join("; ")}." if result.skipped.any?
     redirect_to @domain, notice: notice
@@ -48,6 +54,7 @@ class DomainsController < ApplicationController
 
   def destroy
     @domain.destroy!
+    audit "domain.destroy", @domain
     redirect_to domains_path, notice: "Domain #{@domain.name} removed. Inbound mail for it is now refused.",
                               status: :see_other
   end

@@ -2,12 +2,6 @@
 	"folders": [
 		{
 			"path": "."
-		},
-		{
-			"path": "../mail_on_rails_imap"
-		},
-		{
-			"path": "../kamal-proxy"
 		}
 	]
 }

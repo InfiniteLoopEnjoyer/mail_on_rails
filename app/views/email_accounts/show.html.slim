@@ -8,7 +8,13 @@ nav.mb-2.text-sm.text-slate-500.dark:text-slate-400
   span<>= @email_account.email
 
 header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
-  h1.text-2xl.font-bold= @email_account.email
+  div
+    h1.text-2xl.font-bold= @email_account.email
+    p.mt-1.text-xs.text-slate-500.dark:text-slate-400 id="storage-usage"
+      - if @email_account.quota_bytes
+        = "#{number_to_human_size(@email_account.used_bytes)} of #{number_to_human_size(@email_account.quota_bytes)} used (#{@email_account.used_percent}%)"
+      - else
+        = "#{number_to_human_size(@email_account.used_bytes)} used"
   .flex.items-center.gap-2
     = link_to "New email", new_email_path(from: @email_account.id), class: "inline-block cursor-pointer rounded-md border border-accent bg-accent px-3.5 py-1 text-sm font-medium text-white"
     = link_to "New folder", new_email_account_mailbox_path(@email_account), class: "inline-block cursor-pointer rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3.5 py-1 text-sm font-medium text-slate-800 dark:text-slate-100"
@@ -21,6 +27,11 @@ header.mb-4.flex.flex-wrap.items-center.justify-between.gap-x-3.gap-y-2
   .mb-4.rounded-lg.border.border-amber-200.dark:border-amber-900.bg-amber-50.dark:bg-amber-950.p-4 id="generated-password-#{@email_account.id}" data-turbo-permanent=true
     h2.mb-2.text-sm.font-semibold Account password — save it now
     = render "shared/generated_password", password: flash[:generated_password]
+
+/ Account-wide full-text search (SearchesController).
+= form_with url: email_account_search_path(@email_account), method: :get, class: "mb-4 flex max-w-xl items-center gap-2" do |form|
+  = form.search_field :q, placeholder: "Search mail in every folder", class: "w-full rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-sm"
+  = form.submit "Search", class: "inline-block cursor-pointer whitespace-nowrap rounded-md border border-accent bg-accent px-3.5 py-1.5 text-sm font-medium text-white"
 
 ul
   - @mailboxes.each do |mailbox|

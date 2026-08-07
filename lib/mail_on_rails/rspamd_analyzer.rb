@@ -23,8 +23,12 @@ module MailOnRails
     # mechanism verdicts (e.g. "mail.example.com; spf=pass; dkim=pass;
     # dmarc=pass"), the exact shape EmailMessage#auth_result parses and the
     # mailroom stamps. `action`/`score` carry rspamd's spam verdict for logging.
-    Result = Struct.new(:status, :action, :score, :required_score, :spf, :dkim, :dmarc, :auth_results,
-                        keyword_init: true) do
+    # `dmarc_policy` is the sender domain's own published disposition
+    # ("reject"/"quarantine") when the message failed DMARC, nil otherwise -
+    # p=none failures still read dmarc=fail but carry no policy, so enforcing
+    # on dmarc_policy always honors what the domain owner asked for.
+    Result = Struct.new(:status, :action, :score, :required_score, :spf, :dkim, :dmarc, :dmarc_policy,
+                        :auth_results, keyword_init: true) do
       def ok? = status == :ok
       def unavailable? = status == :unavailable
       # Any action past plain acceptance/greylisting is rspamd calling it spam.
@@ -54,6 +58,11 @@ module MailOnRails
       "DMARC_POLICY_ALLOW" => "pass", "DMARC_POLICY_REJECT" => "fail",
       "DMARC_POLICY_QUARANTINE" => "fail", "DMARC_POLICY_SOFTFAIL" => "fail",
       "DMARC_NA" => "none", "DMARC_BAD_POLICY" => "permerror"
+    }.freeze
+    # The failure symbols that also carry the domain's published disposition
+    # (DMARC_POLICY_SOFTFAIL is a fail under p=none - no disposition).
+    DMARC_POLICY_SYMBOLS = {
+      "DMARC_POLICY_REJECT" => "reject", "DMARC_POLICY_QUARANTINE" => "quarantine"
     }.freeze
 
     module_function
@@ -110,7 +119,8 @@ module MailOnRails
 
       Result.new(
         status: :ok, action: json["action"], score: json["score"], required_score: json["required_score"],
-        spf: spf, dkim: dkim, dmarc: dmarc, auth_results: auth_results_string(spf, dkim, dmarc)
+        spf: spf, dkim: dkim, dmarc: dmarc, dmarc_policy: mechanism(symbols, DMARC_POLICY_SYMBOLS),
+        auth_results: auth_results_string(spf, dkim, dmarc)
       )
     end
 

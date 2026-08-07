@@ -55,6 +55,10 @@ Rails.application.routes.draw do
   get "smtp", to: "smtp#show"
   get "imap", to: "imap#show"
 
+  # Prometheus scrape endpoint, enabled by METRICS_TOKEN - see
+  # MetricsController.
+  get "metrics", to: "metrics#show"
+
   # Failed credential checks across all three auth surfaces - see
   # AuthAttempt / AuthAttemptsController. range drills into one /24's
   # individual addresses; its CIDR travels as a query param because of
@@ -66,6 +70,10 @@ Rails.application.routes.draw do
   # Permanent IP/CIDR bans, managed from the auth attempts page - see
   # BannedIp for how they reach the mail listeners and the web login.
   resources :banned_ips, only: %i[create destroy]
+
+  # The audit trail of admin actions - see AuditEvent / the Auditing
+  # controller concern.
+  resources :audit_events, only: :index, path: "audit"
 
   # The signed-in user's appearance/accent preference, saved from the
   # profile's Appearance card - see ThemesController.
@@ -100,14 +108,22 @@ Rails.application.routes.draw do
     member do
       post :generate_password
     end
+    # Account-wide full-text search over the tsvector index - see
+    # SearchesController.
+    resource :search, only: :show
     resources :email_aliases, only: %i[create destroy], path: "aliases"
     resources :mailboxes, except: %i[index] do
+      # The whole folder as a standard mbox file (streamed - see
+      # MboxExport), importable by any other mail client.
+      member { get :export }
       resources :email_messages, only: %i[show destroy], path: "messages" do
         member do
           post :mark_read
           post :rescan
           post :mark_spam
           post :unmark_spam
+          # The stored bytes as message/rfc822 - a standard .eml file.
+          get :download
           get "attachments/:index", action: :attachment, as: :attachment, constraints: { index: /\d+/ }
         end
       end

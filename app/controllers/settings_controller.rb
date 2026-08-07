@@ -4,6 +4,9 @@
 # the database rows it mirrors - the point is seeing exactly what the
 # listeners are acting on right now, drift included.
 class SettingsController < ApplicationController
+  rate_limit to: 20, within: 10.minutes, only: %i[update sync],
+             with: -> { redirect_to settings_path, alert: "Try again later." }
+
   # One app-maintained file: what's on disk (lines/mtime via the model
   # that writes it) next to what the DB says should be there. missing =
   # rows the file doesn't have yet; stale = file entries with no DB row
@@ -50,7 +53,9 @@ class SettingsController < ApplicationController
 
     begin
       case file.writer.sync!
-      when :written then flash[:notice] = "#{file.label} file rewritten from the database."
+      when :written
+        audit "settings.sync", nil, file: file.key
+        flash[:notice] = "#{file.label} file rewritten from the database."
       when :skipped then flash[:alert] = "#{file.label}: #{file.env_var} is not set, nothing was written."
       end
     rescue BannedIpsFile::Error => e
@@ -63,6 +68,7 @@ class SettingsController < ApplicationController
 
   def update_trash_retention
     Setting.trash_retention_days = params[:trash_retention_days]
+    audit "settings.update", nil, trash_retention_days: Setting.trash_retention_days
     redirect_to settings_path, notice: "Trash retention set to #{Setting.trash_retention_days} days."
   rescue ArgumentError, TypeError
     redirect_to settings_path, alert: "Trash retention must be a whole number of days, at least 1."
@@ -72,6 +78,7 @@ class SettingsController < ApplicationController
   # New SMTP connections pick the change up immediately; no restart.
   def update_smtp_helo_hostname
     Setting.smtp_helo_hostname = params[:smtp_helo_hostname]
+    audit "settings.update", nil, smtp_helo_hostname: Setting.smtp_helo_hostname_override || "(cleared)"
     if (name = Setting.smtp_helo_hostname_override)
       redirect_to settings_path, notice: "SMTP hostname set to #{name}."
     else

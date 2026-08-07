@@ -1,6 +1,10 @@
 require "mail_on_rails/clamav_scanner"
 
 class EmailMessage < ApplicationRecord
+  # Raised by deliver_raw when storing the message would push the account
+  # past its storage quota (EmailAccount#quota_bytes).
+  class OverQuota < StandardError; end
+
   belongs_to :mailbox
 
   serialize :flags, coder: JSON
@@ -14,32 +18,67 @@ class EmailMessage < ApplicationRecord
   after_update :bump_modseq_on_flag_change
   after_destroy :record_tombstone
 
+  # Storage accounting: the account's used_bytes tracks the sum of its
+  # message sizes incrementally (atomic SQL increments), so the quota
+  # check on delivery is a column read, not an aggregate over raw bytes.
+  after_create { EmailAccount.update_counters(mailbox.email_account_id, used_bytes: size) }
+  after_destroy { EmailAccount.update_counters(mailbox.email_account_id, used_bytes: -size) }
+
   # Any message change (delivery, flag change, expunge) live-refreshes the
   # folder's message list, the account page's per-folder unread counts, and
   # the accounts index's unread badges.
   after_commit :broadcast_page_refreshes
 
+  # Bounds body_text at write time (in characters). The generated
+  # search_vector column re-caps in SQL, but an unbounded write could
+  # push the tsvector past Postgres's 1 MiB limit and turn a huge inbound
+  # message into a failed delivery.
+  SEARCHABLE_TEXT_LIMIT = 100_000
+
+  # Full-text search over the stored search_vector (subject, from, to,
+  # body_text). websearch_to_tsquery gives "words, "quoted phrases",
+  # OR, -exclusions" semantics and never raises on user input.
+  scope :full_text_search, ->(query) {
+    where("email_messages.search_vector @@ websearch_to_tsquery('simple', ?)", query.to_s)
+  }
+
   # Stores a raw RFC822 message into a mailbox, extracting the header
   # fields the web UI needs for listing. authenticated_as records the
   # trusted sender (nil = accepted unauthenticated / potentially spoofed).
   def self.deliver_raw(mailbox, raw, flags: [], internal_date: nil, authenticated_as: nil, auth_results: nil,
-                       scan_status: nil, virus_name: nil, spam_score: nil, spam_threshold: nil, spam_action: nil)
+                       scan_status: nil, virus_name: nil, spam_score: nil, spam_threshold: nil, spam_action: nil,
+                       enforce_quota: true)
     raw = raw.gsub(/(?<!\r)\n/, "\r\n") # normalize bare LF to CRLF
+
+    # The central storage-quota gate: every write path (SMTP DATA via the
+    # mailroom, IMAP APPEND/COPY, the composer) lands here. Same-account
+    # moves pass enforce_quota: false - they are net-zero, and refusing
+    # "move to Trash" on a full account would lock the user out of
+    # freeing space. Concurrent deliveries can overshoot by one message;
+    # a quota is a bound, not an invariant.
+    account = mailbox.email_account
+    if enforce_quota && account.quota_exceeded_by?(raw.bytesize)
+      raise OverQuota, "#{account.email} is over its storage quota"
+    end
+
     mail = Mail.read_from_string(raw) rescue nil
+    # OBJECTID (RFC 8474): content-derived, so COPY/MOVE (which re-deliver
+    # the same bytes) preserve the EMAILID.
+    email_object_id = "E#{Digest::SHA256.hexdigest(raw)[0, 24]}"
 
     mailbox.email_messages.create!(
       uid: mailbox.claim_uid!,
       raw: raw,
       size: raw.bytesize,
-      # OBJECTID (RFC 8474): content-derived, so COPY/MOVE (which
-      # re-deliver the same bytes) preserve the EMAILID.
-      email_object_id: "E#{Digest::SHA256.hexdigest(raw)[0, 24]}",
+      email_object_id: email_object_id,
       flags: flags,
       internal_date: internal_date || mail&.date&.to_time || Time.current,
       message_id: mail&.message_id.to_s.presence,
       subject: mail&.subject.to_s.presence,
       from_address: (mail&.from || []).first,
       to_addresses: (mail&.to || []).join(", "),
+      body_text: searchable_text(raw, mail: mail),
+      **thread_columns(mailbox.email_account, mail, email_object_id),
       authenticated_as: authenticated_as,
       auth_results: auth_results,
       scan_status: scan_status,
@@ -98,11 +137,12 @@ class EmailMessage < ApplicationRecord
   def move_to!(dest)
     moved = nil
     transaction do
+      # enforce_quota: false - a move within the account is net-zero.
       moved = EmailMessage.deliver_raw(dest, raw, flags: flags, internal_date: internal_date,
                                        authenticated_as: authenticated_as, auth_results: auth_results,
                                        scan_status: scan_status, virus_name: virus_name,
                                        spam_score: spam_score, spam_threshold: spam_threshold,
-                                       spam_action: spam_action)
+                                       spam_action: spam_action, enforce_quota: false)
       destroy!
     end
     moved
@@ -153,27 +193,87 @@ class EmailMessage < ApplicationRecord
     MailOnRails::ClamavScanner.enabled? && !draft? && !authored_by_owner?
   end
 
-  # RFC 5322 threading ancestry, read from the raw message rather than
-  # denormalised into a column like subject and from are: it is only ever
-  # needed to build the References of a reply.
+  # RFC 5322 threading ancestry (space-joined message-ids), denormalised
+  # into references_ids at delivery time; feeds reply building and
+  # threading.
   def references
-    Array(parsed.references).join(" ").presence
-  rescue StandardError
-    nil
+    references_ids
+  end
+
+  # The threading columns for a message about to be stored: its ancestry
+  # headers plus the thread_id they resolve to.
+  def self.thread_columns(account, mail, fallback_anchor)
+    in_reply_to = Array(mail&.in_reply_to).first.to_s.presence
+    references = Array(mail&.references).map(&:to_s).reject(&:empty?)
+    {
+      in_reply_to: in_reply_to,
+      references_ids: references.join(" ").presence,
+      thread_id: resolve_thread_id(account, references, in_reply_to, mail&.message_id.to_s.presence, fallback_anchor)
+    }
+  end
+
+  # A reply adopts the thread of any ancestor already stored in the
+  # account (RFC 8474 THREADID is account-wide, not per-mailbox, so
+  # copies and Sent counterparts land in the same thread). With no stored
+  # ancestor the id derives deterministically from the chain's root (the
+  # first reference) or the message's own id - so a thread converges on
+  # one id even when its messages arrive out of order - and a message
+  # with neither falls back to its content hash: a thread of its own.
+  def self.resolve_thread_id(account, references, in_reply_to, message_id, fallback_anchor)
+    ancestors = (references + [ in_reply_to ]).compact.uniq
+    if ancestors.any?
+      parent = joins(:mailbox).where(mailboxes: { email_account_id: account.id }, message_id: ancestors)
+                              .where.not(thread_id: nil).order(:id).first
+      return parent.thread_id if parent
+    end
+
+    "T#{Digest::SHA256.hexdigest(ancestors.first || message_id || fallback_anchor)[0, 24]}"
   end
 
   # Best-effort plain-text body for the web UI.
   def text_body
-    mail = parsed
-    part = mail.text_part || (mail unless mail.multipart?)
+    mail = begin
+      parsed
+    rescue StandardError
+      nil
+    end
+    self.class.plain_text(mail, raw)
+  end
+
+  # The body_text column's value: the body as plain text, made safe for a
+  # Postgres text column (valid UTF-8, no NULs) and bounded so the
+  # generated tsvector over it can't blow the delivery INSERT.
+  def self.searchable_text(raw, mail: nil)
+    mail ||= begin
+      Mail.read_from_string(raw)
+    rescue StandardError
+      nil
+    end
+    text = plain_text(mail, raw)
+    text.dup.force_encoding(Encoding::UTF_8).scrub.delete("\u0000")[0, SEARCHABLE_TEXT_LIMIT].to_s
+  end
+
+  # The body as displayable/searchable plain text: the text part when the
+  # message has one, the tag-stripped HTML otherwise (including single-part
+  # text/html messages), and the raw bytes past the header split when
+  # parsing failed (mail: nil included).
+  def self.plain_text(mail, raw)
+    part = mail.text_part || (mail if !mail.multipart? && mail.mime_type != "text/html")
     if part
       decoded_utf8(part)
     else
-      html = mail.html_part&.body&.decoded
+      html_part = mail.html_part || (mail if !mail.multipart? && mail.mime_type == "text/html")
+      html = html_part && decoded_utf8(html_part)
       html ? html.gsub(/<[^>]+>/, " ").squish : ""
     end
   rescue StandardError
     raw.to_s.split(/\r?\n\r?\n/, 2).last.to_s
+  end
+
+  def self.decoded_utf8(part)
+    body = part.body.decoded
+    charset = part.charset || "UTF-8"
+    body.force_encoding(charset).encode("UTF-8", invalid: :replace, undef: :replace)
   end
 
   # Cheap "does an HTML rendering exist" check for the view toggle.
@@ -221,9 +321,7 @@ class EmailMessage < ApplicationRecord
   end
 
   def decoded_utf8(part)
-    body = part.body.decoded
-    charset = part.charset || "UTF-8"
-    body.force_encoding(charset).encode("UTF-8", invalid: :replace, undef: :replace)
+    self.class.decoded_utf8(part)
   end
 
   def authored_by_owner?

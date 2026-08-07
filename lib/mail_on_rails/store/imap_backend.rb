@@ -114,6 +114,9 @@ module MailOnRails
               size: m.size,
               modseq: m.modseq,
               email_id: m.email_object_id,
+              # THREADID (RFC 8474): resolved at delivery time from the
+              # message's References/In-Reply-To ancestry.
+              thread_id: m.thread_id,
               # SAVEDATE (RFC 8514): when the row entered this mailbox -
               # COPY/MOVE create fresh rows, so created_at is exactly it.
               saved_date: m.created_at.to_i
@@ -187,8 +190,12 @@ module MailOnRails
           end
 
           internal_date = internal_date_epoch && Time.zone.at(internal_date_epoch)
-          message = EmailMessage.deliver_raw(mailbox, raw, flags: flags, internal_date: internal_date,
-                                             scan_status: scan_status)
+          begin
+            message = EmailMessage.deliver_raw(mailbox, raw, flags: flags, internal_date: internal_date,
+                                               scan_status: scan_status)
+          rescue EmailMessage::OverQuota => e
+            next { error: e.message, code: :overquota }
+          end
           { uid: message.uid, uid_validity: mailbox.uid_validity }
         end
       end
@@ -201,14 +208,31 @@ module MailOnRails
 
           src_uids = []
           dest_uids = []
-          EmailMessage.where(mailbox_id: mailbox_id, uid: uids).order(:uid).each do |m|
-            # Same bytes, same verdict - no rescan on copy.
-            copied = EmailMessage.deliver_raw(dest, m.raw, flags: m.flags, internal_date: m.internal_date,
-                                              scan_status: m.scan_status, virus_name: m.virus_name)
-            src_uids << m.uid
-            dest_uids << copied.uid
+          begin
+            # One transaction so an over-quota refusal midway leaves
+            # nothing half-copied.
+            EmailMessage.transaction do
+              EmailMessage.where(mailbox_id: mailbox_id, uid: uids).order(:uid).each do |m|
+                # Same bytes, same verdict - no rescan on copy.
+                copied = EmailMessage.deliver_raw(dest, m.raw, flags: m.flags, internal_date: m.internal_date,
+                                                  scan_status: m.scan_status, virus_name: m.virus_name)
+                src_uids << m.uid
+                dest_uids << copied.uid
+              end
+            end
+          rescue EmailMessage::OverQuota => e
+            next { error: e.message, code: :overquota }
           end
           { uid_validity: dest.uid_validity, src_uids: src_uids, dest_uids: dest_uids }
+        end
+      end
+
+      # GETQUOTA/GETQUOTAROOT (RFC 2087/9208): the account's storage usage
+      # and cap. limit_bytes nil = no quota configured.
+      def quota(account_id)
+        db do
+          account = EmailAccount.find(account_id)
+          { used_bytes: account.used_bytes, limit_bytes: account.quota_bytes }
         end
       end
 
@@ -255,6 +279,26 @@ module MailOnRails
             present = EmailMessage.where(mailbox_id: mailbox_id).pluck(:uid)
             { uids: (1...mailbox.uid_next).to_a - present, complete: false }
           end
+        end
+      end
+
+      # TEXT/BODY search pushdown (see the store contract): matches against
+      # the GIN-indexed tsvector over subject/from/to/body_text instead of
+      # shipping every raw message to the IMAP session for a substring
+      # scan. Matching is word-level (the Dovecot-style FTS trade-off the
+      # contract allows): whole words always hit, mid-word substrings may
+      # not. Scope "body" re-checks candidates against a body-only vector -
+      # the indexed match narrows first, so the recompute touches a few
+      # rows, not the mailbox.
+      def search_text(mailbox_id, query, scope)
+        db do
+          relation = EmailMessage.where(mailbox_id: mailbox_id)
+                                 .where("search_vector @@ plainto_tsquery('simple', ?)", query)
+          if scope.to_s == "body"
+            relation = relation.where("to_tsvector('simple', coalesce(body_text, '')) @@ plainto_tsquery('simple', ?)",
+                                      query)
+          end
+          { uids: relation.order(:uid).pluck(:uid) }
         end
       end
 

@@ -34,7 +34,7 @@ class EmailHtmlSanitizerTest < ActiveSupport::TestCase
     assert_equal "<p>survivor</p>", result.html
   end
 
-  test "drops style elements but keeps scrubbed inline styles" do
+  test "scrubs style blocks and inline styles through the same CSS safelist" do
     html = "<style>body { background: url(https://evil.test/x) }</style>" \
            '<div style="color: red; position: fixed; background-image: url(https://t.test/p); width: expression(alert(1))">x</div>'
     result = sanitize(html)
@@ -44,6 +44,35 @@ class EmailHtmlSanitizerTest < ActiveSupport::TestCase
     assert_not_includes result.html, "url("
     assert_not_includes result.html, "expression"
     assert_includes result.html, 'style="color:red;"'
+  end
+
+  # The <style> markup slot is pruned from the body, but its scrubbed rules
+  # come back as one style element at the top of the fragment - newsletters
+  # styled via stylesheet rules keep their look (EmailCssSanitizer has the
+  # CSS-level cases).
+  test "style rules survive scrubbed, from head and body alike" do
+    html = "<html><head><style>p { color: blue; background: url(//evil.test/x) }</style></head>" \
+           "<body><style>.footer { text-align: center }</style><p>hi</p></body></html>"
+    result = sanitize(html)
+
+    assert_includes result.html, "p { color:blue; }"
+    assert_includes result.html, ".footer { text-align:center; }"
+    assert_not_includes result.html, "evil.test"
+    assert_select_html result.html, "style"
+    assert_select_html result.html, "p"
+  end
+
+  test "a style element's media attribute becomes an @media wrapper" do
+    result = sanitize('<style media="only screen and (max-width: 600px)">p { color: red }</style><p>x</p>')
+
+    assert_includes result.html, "@media only screen and (max-width: 600px) {"
+    assert_includes result.html, "p { color:red; }"
+  end
+
+  test "a stylesheet with no surviving rules leaves no style element behind" do
+    result = sanitize("<style>@import url(https://evil.test/x.css);</style><p>x</p>")
+
+    assert_equal "<p>x</p>", result.html
   end
 
   test "unwraps unknown tags keeping their text" do
@@ -184,11 +213,13 @@ class EmailHtmlSanitizerTest < ActiveSupport::TestCase
     assert_equal 0, result.deceptive_links
   end
 
-  test "a full document is reduced to its body content" do
+  test "a full document is reduced to its body content plus scrubbed styles" do
     html = "<html><head><title>t</title><style>p{color:blue}</style></head><body><p>content</p></body></html>"
     result = sanitize(html)
 
-    assert_equal "<p>content</p>", result.html
+    assert result.html.end_with?("<p>content</p>")
+    assert_includes result.html, "p { color:blue; }"
+    assert_not_includes result.html, "<title>"
   end
 
   private

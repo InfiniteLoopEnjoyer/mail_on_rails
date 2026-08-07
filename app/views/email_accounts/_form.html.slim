@@ -13,6 +13,31 @@
     = form.label :name, "Display name", class: "mb-1 block text-sm font-semibold"
     = form.text_field :name, class: "w-full rounded-md border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5"
 
+  .mb-4
+    = form.label :quota_megabytes, "Storage quota (MB)", class: "mb-1 block text-sm font-semibold"
+    = form.number_field :quota_megabytes, min: 1, step: 1, placeholder: "Unlimited", class: "w-full rounded-md border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5"
+    p.mt-1.text-xs.text-slate-500.dark:text-slate-400 Leave blank for no limit. New mail is refused once the account is full.
+
+  fieldset.mb-4.rounded-md.border.border-slate-200.dark:border-slate-800.p-3
+    legend.px-1.text-sm.font-semibold Vacation auto-reply
+    .mb-3.flex.items-center.gap-2
+      = form.check_box :vacation_enabled, class: "size-4 accent-accent"
+      = form.label :vacation_enabled, "Send automatic replies", class: "text-sm"
+    .mb-3
+      = form.label :vacation_subject, "Reply subject", class: "mb-1 block text-sm font-semibold"
+      = form.text_field :vacation_subject, placeholder: "Automatic reply", class: "w-full rounded-md border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5"
+    .mb-3
+      = form.label :vacation_body, "Reply message", class: "mb-1 block text-sm font-semibold"
+      = form.text_area :vacation_body, rows: 4, class: "w-full rounded-md border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5"
+    .grid.grid-cols-2.gap-3
+      div
+        = form.label :vacation_starts_on, "From", class: "mb-1 block text-sm font-semibold"
+        = form.date_field :vacation_starts_on, class: "w-full rounded-md border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5"
+      div
+        = form.label :vacation_ends_on, "Until", class: "mb-1 block text-sm font-semibold"
+        = form.date_field :vacation_ends_on, class: "w-full rounded-md border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5"
+    p.mt-2.text-xs.text-slate-500.dark:text-slate-400 Each sender is answered once a week. Blank dates mean the reply runs whenever it is enabled.
+
   - if email_account.new_record?
     p.mb-4.text-xs.text-slate-500.dark:text-slate-400 A password will be generated when the account is created.
 

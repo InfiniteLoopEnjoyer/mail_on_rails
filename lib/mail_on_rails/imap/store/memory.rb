@@ -3,6 +3,7 @@
 require "digest"
 require "monitor"
 require_relative "../scram"
+require_relative "../../mime"
 
 module MailOnRails
   module Imap
@@ -52,11 +53,16 @@ module MailOnRails
         def add_account(email:, password:)
           @lock.synchronize do
             account = { id: next_id(:account), email: normalize(email), password: password.to_s,
-                        scram: Imap::Scram.derive(password.to_s), mailboxes: {} }
+                        scram: Imap::Scram.derive(password.to_s), quota_bytes: nil, mailboxes: {} }
             DEFAULT_MAILBOXES.each { |name| account[:mailboxes][name] = new_mailbox(name) }
             @accounts[account[:id]] = account
             account[:id]
           end
+        end
+
+        # Test seam: cap the account's storage (nil = unlimited).
+        def set_quota(account_id, bytes)
+          @lock.synchronize { @accounts.fetch(account_id)[:quota_bytes] = bytes }
         end
 
         # -- shared interface ---------------------------------------------------
@@ -216,7 +222,7 @@ module MailOnRails
             entries = messages.map do |m|
               entry = { uid: m[:uid], flags: m[:flags].dup, internal_date: m[:internal_date].to_i,
                         size: m[:size], modseq: m[:modseq],
-                        email_id: m[:email_id], saved_date: m[:saved_date] }
+                        email_id: m[:email_id], thread_id: m[:thread_id], saved_date: m[:saved_date] }
               entry[:raw] = m[:raw] if with_raw
               entry
             end
@@ -273,8 +279,13 @@ module MailOnRails
             mailbox = find_mailbox(account, mailbox_name)
             return { error: "no such mailbox", code: :notfound } unless mailbox
 
+            incoming = raw.gsub(/(?<!\r)\n/, "\r\n").bytesize
+            if over_quota?(account, incoming)
+              return { error: "#{account[:email]} is over its storage quota", code: :overquota }
+            end
+
             internal_date = internal_date_epoch ? Time.at(internal_date_epoch) : Time.now
-            message = deliver_raw(mailbox, raw, flags: Array(flags), internal_date: internal_date)
+            message = deliver_raw(account, mailbox, raw, flags: Array(flags), internal_date: internal_date)
             { uid: message[:uid], uid_validity: mailbox[:uid_validity] }
           end
         end
@@ -288,10 +299,15 @@ module MailOnRails
             dest = find_mailbox(account, dest_name)
             return { error: "no such mailbox", code: :notfound } unless dest
 
+            wanted = sorted(source).select { |m| uids.include?(m[:uid]) }
+            if over_quota?(account, wanted.sum { |m| m[:size] })
+              return { error: "#{account[:email]} is over its storage quota", code: :overquota }
+            end
+
             src_uids = []
             dest_uids = []
-            sorted(source).select { |m| uids.include?(m[:uid]) }.each do |m|
-              copied = deliver_raw(dest, m[:raw], flags: m[:flags].dup, internal_date: m[:internal_date])
+            wanted.each do |m|
+              copied = deliver_raw(account, dest, m[:raw], flags: m[:flags].dup, internal_date: m[:internal_date])
               src_uids << m[:uid]
               dest_uids << copied[:uid]
             end
@@ -318,6 +334,38 @@ module MailOnRails
           end
         end
 
+        # GETQUOTA/GETQUOTAROOT (RFC 2087/9208): usage is the live sum of
+        # message sizes across the account's mailboxes; limit nil = no
+        # quota. Moves stay exempt from enforcement (same-account,
+        # net-zero) - only append and copy check.
+        def quota(account_id)
+          @lock.synchronize do
+            account = @accounts.fetch(account_id) { return internal_error("unknown account") }
+            { used_bytes: used_bytes(account), limit_bytes: account[:quota_bytes] }
+          end
+        end
+
+        # TEXT/BODY search pushdown (see the store contract). The contract
+        # only promises whole-word, case-insensitive matching - the
+        # production store searches an index that tokenizes by word - but
+        # this reference implementation keeps the exact RFC 3501 semantics
+        # (case-insensitive substring over the raw message, or over its
+        # body section for scope "body"), so protocol tests running against
+        # it observe a fully conformant SEARCH.
+        def search_text(mailbox_id, query, scope)
+          @lock.synchronize do
+            mailbox = mailbox_by_id(mailbox_id)
+            return { uids: [] } unless mailbox
+
+            needle = query.to_s.downcase
+            hits = sorted(mailbox).select do |m|
+              haystack = scope.to_s == "body" ? Mime.split_header(m[:raw])[1] : m[:raw]
+              haystack.downcase.include?(needle)
+            end
+            { uids: hits.map { |m| m[:uid] } }
+          end
+        end
+
         # Atomic copy+remove (RFC 6851 MOVE): the message never exists in
         # both mailboxes from an observer's point of view.
         def move(mailbox_id, uids, dest_name)
@@ -333,7 +381,7 @@ module MailOnRails
             dest_uids = []
             moved = sorted(source).select { |m| uids.include?(m[:uid]) }
             moved.each do |m|
-              copied = deliver_raw(dest, m[:raw], flags: m[:flags].dup, internal_date: m[:internal_date])
+              copied = deliver_raw(account, dest, m[:raw], flags: m[:flags].dup, internal_date: m[:internal_date])
               src_uids << m[:uid]
               dest_uids << copied[:uid]
             end
@@ -396,6 +444,14 @@ module MailOnRails
           email.to_s.strip.downcase
         end
 
+        def used_bytes(account)
+          account[:mailboxes].each_value.sum { |m| m[:messages].sum { |msg| msg[:size] } }
+        end
+
+        def over_quota?(account, incoming_bytes)
+          (limit = account[:quota_bytes]) && used_bytes(account) + incoming_bytes > limit
+        end
+
         def next_id(kind)
           @counters[kind] += 1
         end
@@ -445,8 +501,11 @@ module MailOnRails
           mailbox[:messages].sort_by { |m| m[:uid] }
         end
 
-        def deliver_raw(mailbox, raw, flags:, internal_date:)
+        def deliver_raw(account, mailbox, raw, flags:, internal_date:)
           normalized = raw.gsub(/(?<!\r)\n/, "\r\n")
+          email_id = self.class.email_object_id(normalized)
+          headers = Mime.parse_headers(Mime.split_header(normalized)[0])
+          message_id = message_ids(headers["message-id"]).first
           message = {
             uid: mailbox[:uid_next],
             raw: normalized,
@@ -457,12 +516,37 @@ module MailOnRails
             # OBJECTID (RFC 8474): content-derived, so COPY/MOVE preserve
             # it and identical APPENDs share it. SAVEDATE (RFC 8514):
             # when the message entered *this* mailbox.
-            email_id: self.class.email_object_id(normalized),
+            email_id: email_id,
+            message_id: message_id,
+            thread_id: resolve_thread_id(account, message_ids(headers["references"]),
+                                         message_ids(headers["in-reply-to"]).first, message_id, email_id),
             saved_date: Time.now.to_i
           }
           mailbox[:uid_next] += 1
           mailbox[:messages] << message
           message
+        end
+
+        # Bare msg-ids out of a Message-Id/References/In-Reply-To header.
+        def message_ids(values)
+          values.to_a.flat_map { |v| v.scan(/<([^>]+)>/) }.flatten
+        end
+
+        # THREADID resolution, mirroring the app adapter (see the store
+        # contract): a reply adopts the thread of any ancestor stored in
+        # the account; otherwise the id derives deterministically from the
+        # chain's root reference / the message's own id / its content
+        # hash, so a thread converges even when messages arrive out of
+        # order.
+        def resolve_thread_id(account, references, in_reply_to, message_id, fallback)
+          ancestors = (references + [ in_reply_to ]).compact.uniq
+          if ancestors.any?
+            parent = account[:mailboxes].each_value.flat_map { |m| m[:messages] }
+                                        .find { |m| m[:thread_id] && ancestors.include?(m[:message_id]) }
+            return parent[:thread_id] if parent
+          end
+
+          "T#{Digest::SHA256.hexdigest(ancestors.first || message_id || fallback)[0, 24]}"
         end
 
         # "M<id>-<uidvalidity>": survives rename, never reused (ids are

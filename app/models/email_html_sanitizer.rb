@@ -6,11 +6,15 @@ require "base64"
 # so a sanitizer miss still cannot run code or touch the session.
 #
 # Policy:
-#   - allowlisted tags survive; dangerous ones (script, style, forms, frames,
+#   - allowlisted tags survive; dangerous ones (script, forms, frames,
 #     svg/mathml, media) are pruned with their contents; anything else is
 #     unwrapped so its text remains readable
 #   - allowlisted attributes survive; inline style is scrubbed through
 #     Loofah's CSS safelist (kills url(), expression(), position, behavior)
+#   - <style> blocks (head and body alike) are reduced by EmailCssSanitizer
+#     to safelist-scrubbed rules and re-emitted as one <style> element at
+#     the top of the fragment, so stylesheet-styled newsletters keep their
+#     look without keeping their tricks
 #   - links keep only absolute http/https/mailto/tel targets and always open
 #     in a new tab; a link whose visible text reads like a URL on a different
 #     host than its href gets the real destination stamped next to it (the
@@ -31,7 +35,9 @@ class EmailHtmlSanitizer
   ].to_set.freeze
 
   # Removed with their entire contents - either executable/interactive, or
-  # text that only makes sense to a machine (CSS rules, fallback markup).
+  # text that only makes sense to a machine (fallback markup). style is
+  # pruned here too, but only after its text was collected for
+  # EmailCssSanitizer - the markup slot goes, the (scrubbed) rules stay.
   PRUNED_TAGS = %w[
     script style noscript template iframe frame frameset object embed applet
     form button input select option textarea label base link meta title head
@@ -65,15 +71,34 @@ class EmailHtmlSanitizer
   end
 
   def sanitize(html)
-    body = Loofah.html5_document(html.to_s).at_xpath("//body")
+    document = Loofah.html5_document(html.to_s)
+    body = document.at_xpath("//body")
     return Result.new(html: "", remote_images: 0, deceptive_links: 0) unless body
 
+    # Collected document-wide before the scrub: newsletters put their
+    # stylesheet in <head>, which the body extraction would never see, and
+    # the scrub below prunes the <style> elements themselves.
+    stylesheet = sanitize_stylesheets(document)
     scrub(body)
     expose_deceptive_links(body)
-    Result.new(html: body.inner_html, remote_images: @remote_images, deceptive_links: @deceptive_links)
+    Result.new(html: stylesheet + body.inner_html,
+               remote_images: @remote_images, deceptive_links: @deceptive_links)
   end
 
   private
+
+  # One scrubbed <style> element for the whole message, or "" when nothing
+  # survives. A style element's media attribute scopes it in HTML, so its
+  # rules are wrapped in the equivalent @media to keep that meaning.
+  def sanitize_stylesheets(document)
+    css = document.css("style").filter_map do |style|
+      media = style["media"].to_s.strip
+      text = media.empty? ? style.text : "@media #{media} { #{style.text} }"
+      sanitized = EmailCssSanitizer.sanitize(text)
+      sanitized unless sanitized.empty?
+    end.join("\n")
+    css.empty? ? "" : "<style>\n#{css}\n</style>"
+  end
 
   def scrub(node)
     node.children.to_a.each do |child|

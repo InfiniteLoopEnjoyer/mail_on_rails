@@ -8,6 +8,10 @@
 # model rather than treated as an error.
 class DraftsController < ApplicationController
   before_action :set_message, only: %i[edit destroy]
+  # Generous - autosave fires on a timer while composing - but bounded, so
+  # a scripted client can't use the drafts endpoint as a free write amp.
+  rate_limit to: 300, within: 10.minutes, only: :create,
+             with: -> { render json: { errors: [ "Saving too quickly - try again later." ] }, status: :too_many_requests }
 
   # Continue writing a saved draft.
   def edit

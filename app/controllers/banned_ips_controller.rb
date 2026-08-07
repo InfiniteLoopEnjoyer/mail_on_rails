@@ -2,6 +2,9 @@
 # ban buttons and the manual form - no pages of its own, both actions land
 # back where they were clicked, on the index or a range drill-down).
 class BannedIpsController < ApplicationController
+  rate_limit to: 20, within: 10.minutes,
+             with: -> { redirect_to auth_attempts_path, alert: "Try again later." }
+
   def create
     banned_ip = BannedIp.new(banned_ip_params)
 
@@ -16,6 +19,7 @@ class BannedIpsController < ApplicationController
 
     synced = with_sync_alert { banned_ip.save }
     if banned_ip.persisted?
+      audit "banned_ip.create", banned_ip, note: banned_ip.note
       kicked = kick_live_connections(banned_ip)
       notice = [ ("Banned #{banned_ip.cidr}." if synced),
                  ("Dropped #{kicked} live #{"connection".pluralize(kicked)}." if kicked.positive?) ].compact.join(" ")
@@ -29,6 +33,7 @@ class BannedIpsController < ApplicationController
   def destroy
     banned_ip = BannedIp.find(params[:id])
     synced = with_sync_alert { banned_ip.destroy! }
+    audit "banned_ip.destroy", banned_ip
     redirect_back_to_attempts status: :see_other,
       notice: ("Unbanned #{banned_ip.cidr}." if synced)
   end

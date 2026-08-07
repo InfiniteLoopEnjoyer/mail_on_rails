@@ -12,6 +12,10 @@ module MemoryStoreConformance
   def create_account(email:, password:)
     store.add_account(email: email, password: password)
   end
+
+  def apply_quota(account_id, bytes)
+    store.set_quota(account_id, bytes)
+  end
 end
 
 class MemoryImapStoreTest < Minitest::Test

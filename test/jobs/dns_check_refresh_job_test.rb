@@ -8,7 +8,7 @@ class DnsCheckRefreshJobTest < ActiveJob::TestCase
     DnsCheckRefreshJob.perform_now
     domain.reload
     assert domain.dns_checked_at.present?
-    assert_equal %w[MX SPF DKIM DMARC], domain.cached_dns_checks.map(&:record)
+    assert_equal %w[MX SPF DKIM DMARC MTA-STS TLS-RPT], domain.cached_dns_checks.map(&:record)
   end
 
   test "creating a domain enqueues its own refresh" do

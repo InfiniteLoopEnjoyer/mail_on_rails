@@ -44,6 +44,28 @@ class EmailMessagesControllerTest < ActionDispatch::IntegrationTest
     assert_select "article footer span.bg-green-100", text: /Spam score/
   end
 
+  # -- .eml download -----------------------------------------------------------
+
+  test "download serves the stored bytes as message/rfc822 with an .eml filename" do
+    message = EmailMessage.deliver_raw(@account.inbox, RAW)
+
+    get download_email_account_mailbox_email_message_url(@account, message.mailbox, message)
+
+    assert_response :success
+    assert_equal "message/rfc822", response.media_type
+    assert_equal message.raw, response.body
+    assert_match(/attachment; filename="message-#{message.id}-hello\.eml"/, response.headers["Content-Disposition"])
+  end
+
+  test "download works regardless of scan status - unlike attachment downloads" do
+    message = EmailMessage.deliver_raw(@account.inbox, RAW, scan_status: "infected", virus_name: "Eicar")
+
+    get download_email_account_mailbox_email_message_url(@account, message.mailbox, message)
+
+    assert_response :success
+    assert_equal message.raw, response.body
+  end
+
   # rspamd verdicts that aren't "no action" keep the neutral slate pill, so
   # green stays reserved for a clean bill of health.
   test "a flagged spam action keeps the neutral badge without a check" do

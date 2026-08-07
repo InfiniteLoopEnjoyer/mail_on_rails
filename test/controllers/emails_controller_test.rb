@@ -113,6 +113,32 @@ class EmailsControllerTest < ActionDispatch::IntegrationTest
     assert_equal 1, drafts.email_messages.count
   end
 
+  test "an attached file is delivered as a mime part on every copy" do
+    other = EmailAccount.create!(email: "dave@example.com", password: "secret123")
+
+    post emails_url, params: { composed_email: {
+      email_account_id: @account.id, to: "dave@example.com", subject: "Report", body: "attached",
+      attachments: [ fixture_file_upload("hello.txt", "text/plain") ]
+    } }
+    assert_response :redirect
+
+    [ other.inbox, @account.find_mailbox("Sent") ].each do |mailbox|
+      mail = Mail.read_from_string(mailbox.email_messages.sole.raw)
+      assert_equal "hello.txt", mail.attachments.sole.filename
+      assert_equal file_fixture("hello.txt").read, mail.attachments.sole.decoded
+    end
+  end
+
+  test "a rejected send with an attachment re-renders instead of crashing on EmailDraft" do
+    post emails_url, params: { composed_email: {
+      email_account_id: @account.id, to: "not-an-address", subject: "Hi", body: "Hello",
+      attachments: [ fixture_file_upload("hello.txt", "text/plain") ]
+    } }
+
+    assert_response :unprocessable_entity
+    assert_select "textarea[name='composed_email[body]']", /Hello/
+  end
+
   test "threading headers survive the send" do
     post emails_url, params: { composed_email: {
       email_account_id: @account.id, to: "someone@remote.example", subject: "Re: Hi",

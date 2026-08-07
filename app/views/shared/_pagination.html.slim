@@ -1,0 +1,14 @@
+/ Newer/older pagination under a message list. url is a lambda taking
+/ the page number, so the same nav serves any paginated route.
+- if pages > 1
+  nav.mt-4.flex.items-center.justify-between.text-sm aria-label="Pagination"
+    - if page > 1
+      = link_to "\u2190 Newer", url.call(page - 1), class: "text-accent"
+    - else
+      span aria-hidden="true"
+    span.text-slate-500.dark:text-slate-400
+      | Page #{page} of #{pages} (#{count} #{local_assigns.fetch(:noun, "messages")})
+    - if page < pages
+      = link_to "Older \u2192", url.call(page + 1), class: "text-accent"
+    - else
+      span aria-hidden="true"

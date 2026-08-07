@@ -2,6 +2,10 @@ require "mail_on_rails/clamav_scanner"
 
 class EmailMessagesController < ApplicationController
   before_action :set_email_message
+  # rescan feeds the stored bytes through clamav on demand - bounded so it
+  # can't be scripted into a scanner-load amplifier.
+  rate_limit to: 10, within: 3.minutes, only: :rescan,
+             with: -> { redirect_back fallback_location: root_path, alert: "Try again later." }
 
   def show
     # Turbo prefetches links on hover; only an actual visit marks the message
@@ -75,6 +79,15 @@ class EmailMessagesController < ApplicationController
     redirect_to email_account_mailbox_path(@email_account, @mailbox), notice: notice
   end
 
+  # The message as it arrived, byte for byte: raw IS the RFC822 form, and
+  # .eml is nothing else. No scan gate - unlike a decoded attachment, an
+  # .eml is not a payload a browser will run, and getting mail *out* of
+  # the system must not depend on a scanner verdict.
+  def download
+    send_data @email_message.raw,
+              filename: "#{download_basename}.eml", type: "message/rfc822", disposition: "attachment"
+  end
+
   # Serves one MIME attachment as a download. The view only links attachments
   # on messages that pass attachments_downloadable?; enforce the same rule
   # here so a pasted URL can't fetch an unscanned or infected payload.
@@ -93,6 +106,13 @@ class EmailMessagesController < ApplicationController
 
   def message_path
     email_account_mailbox_email_message_path(@email_account, @mailbox, @email_message)
+  end
+
+  # The subject, reduced to filesystem-safe characters; the id keeps two
+  # "(no subject)" downloads from clobbering each other.
+  def download_basename
+    subject = @email_message.subject.to_s.gsub(/[^\w \-]/, "").strip.truncate(60, omission: "")
+    [ "message", @email_message.id, subject.presence ].compact.join("-").tr(" ", "-")
   end
 
   def set_email_message

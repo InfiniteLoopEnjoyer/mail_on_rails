@@ -192,6 +192,14 @@ in ascending UID order, silently skipping unknown UIDs (an unknown
 integer; `size` the stored byte size. When `with_raw` is true each entry
 also carries `raw:` with the full stored message bytes.
 
+Entries also carry `email_id:` (RFC 8474 EMAILID, content-derived),
+`thread_id:` (RFC 8474 THREADID, resolved at delivery time from the
+message's References/In-Reply-To ancestry, scoped account-wide: a reply
+adopts the thread of any stored ancestor, otherwise the id derives
+deterministically from the chain's root reference so a thread converges
+even when messages arrive out of order), and `saved_date:` (RFC 8514,
+epoch integer). Both object ids use the RFC 8474 objectid grammar.
+
 ### `store_flags(mailbox_id, uids, mode, flags)`
 
 Mode `"+"` adds, `"-"` removes, `"="` replaces. Returns
@@ -204,7 +212,9 @@ Store a message. Bare LFs in `raw` are normalized to CRLF before storage;
 `size` reflects the normalized bytes. `internal_date_epoch` nil means a
 server-chosen default (the Active Record store falls back to the
 message's Date header, then now). Returns `{ uid:, uid_validity: }`.
-`code: :notfound` for an unknown mailbox.
+`code: :notfound` for an unknown mailbox; `code: :overquota` when the
+write would exceed the account's storage quota (the IMAP server renders
+it as `NO [OVERQUOTA]`, RFC 5530).
 
 The app's adapter additionally virus-scans `raw` (on by default —
 `SMTP_CLAMAV_ADDR` defaults to the clamav accessory, `""` disables):
@@ -229,7 +239,8 @@ Copy messages (bytes, flags, internal date) into `dest_name` on the same
 account, assigning fresh UIDs in the destination. Returns
 `{ uid_validity:, src_uids:, dest_uids: }` (`uid_validity` of the
 destination; the two uid arrays correspond pairwise, ascending source
-order). `code: :notfound` for an unknown destination.
+order). `code: :notfound` for an unknown destination; `code: :overquota`
+when the copies would exceed the account's storage quota.
 
 ### `move(mailbox_id, uids, dest_name)`
 
@@ -237,6 +248,44 @@ Like `copy`, but atomically removes the source messages in the same
 operation (RFC 6851 MOVE) — a failure must leave each message in
 exactly one mailbox. Same return shape and `:notfound` semantics as
 `copy`.
+
+### `search_text(mailbox_id, query, scope)` — optional
+
+TEXT/BODY search pushdown. Optional: the IMAP server calls it behind
+`respond_to?`; without it (and for queries an index can't express —
+strings with no word characters) the server falls back to fetching raw
+bytes and scanning for an RFC-exact substring itself.
+
+`scope` is `"text"` (whole message) or `"body"` (body only, never the
+header). Returns `{ uids: [...] }` ascending; an unknown mailbox yields
+`{ uids: [] }`.
+
+Matching must be case-insensitive and hit at least whole words of the
+query (all of them, in any order or position) in the covered text:
+scope `"text"` covers at least the subject, the address headers, and
+the body's plain text; scope `"body"` covers the body only and must
+never match text that appears only in headers. A store may match more
+generously — the memory store does exact RFC 3501 substrings over the
+raw bytes — but the app's adapter matches word-level against a
+PostgreSQL tsvector (the Dovecot-style FTS trade-off: `TEXT "budget"`
+always finds "budget", `TEXT "udge"` may not).
+
+### `quota(account_id)` — optional
+
+Storage accounting for IMAP QUOTA (RFC 2087/9208). Optional: the IMAP
+server advertises `QUOTA QUOTA=RES-STORAGE` and accepts
+`GETQUOTA`/`GETQUOTAROOT` only when the store responds to it. Returns
+`{ used_bytes:, limit_bytes: }` — `used_bytes` is the sum of stored
+message sizes (CRLF-normalized) across the account, `limit_bytes` nil
+means no quota is configured (the server then reports an empty resource
+list for the root).
+
+A store with quotas must refuse `append` and `copy` with
+`code: :overquota` when the write would push `used_bytes` past
+`limit_bytes`. `move` within the account is net-zero and stays exempt —
+a full account must still be able to file mail into Trash. Contract
+hosts provide `apply_quota(account_id, bytes)` so the suite can set a
+limit however the implementation stores it.
 
 ### `expunged_since(mailbox_id, since_modseq)`
 

@@ -66,3 +66,9 @@ production:
   purge_trash:
     class: PurgeTrashJob
     schedule: every day at 3:07am
+
+  # Nightly pg_dump of the primary database onto the persistent storage
+  # volume, pruned to DB_BACKUP_KEEP_DAYS. Restore runbook: docs/backups.md.
+  database_backup:
+    class: DatabaseBackupJob
+    schedule: every day at 1:30am

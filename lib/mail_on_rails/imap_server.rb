@@ -31,7 +31,7 @@ module MailOnRails
     # mailbox - the same cap the literal reader enforces.
     # Interpolation defeats the frozen_string_literal magic comment, so
     # freeze explicitly.
-    BASE_CAPABILITIES = "IMAP4rev1 UIDPLUS LITERAL+ IDLE MOVE UNSELECT NAMESPACE SPECIAL-USE CHILDREN ESEARCH WITHIN CONDSTORE ENABLE QRESYNC ID LIST-STATUS STATUS=SIZE SEARCHRES OBJECTID SAVEDATE PREVIEW REPLACE SORT APPENDLIMIT=#{MAX_LITERAL_BYTES}".freeze
+    BASE_CAPABILITIES = "IMAP4rev1 UIDPLUS LITERAL+ IDLE MOVE UNSELECT NAMESPACE SPECIAL-USE CHILDREN ESEARCH WITHIN CONDSTORE ENABLE QRESYNC ID LIST-STATUS STATUS=SIZE SEARCHRES OBJECTID SAVEDATE PREVIEW REPLACE SORT THREAD=ORDEREDSUBJECT THREAD=REFERENCES APPENDLIMIT=#{MAX_LITERAL_BYTES}".freeze
     # How often an idling session re-checks the store for changes. The
     # store is the source of truth and other writers (delivery through the
     # Rails app, other sessions, possibly other daemon processes) don't
@@ -134,6 +134,9 @@ module MailOnRails
       # credentials.
       def capabilities
         caps = BASE_CAPABILITIES.dup
+        # QUOTA needs a store that reports usage; the memory and Active
+        # Record stores both do, but the capability stays honest either way.
+        caps << " QUOTA QUOTA=RES-STORAGE" if @store.respond_to?(:quota)
         if @tls
           caps << " AUTH=PLAIN AUTH=SCRAM-SHA-256 SASL-IR"
         else
@@ -329,6 +332,17 @@ module MailOnRails
         when "MOVE"         then require_selected(tag) { move(tag, args, uid_mode) }
         when "SEARCH"       then require_selected(tag) { search(tag, args, uid_mode) }
         when "SORT"         then require_selected(tag) { sort(tag, args, uid_mode) }
+        when "THREAD"       then require_selected(tag) { thread(tag, args, uid_mode) }
+        when "GETQUOTA", "GETQUOTAROOT", "SETQUOTA"
+          return tagged(tag, "BAD Unknown command #{name}") unless @store.respond_to?(:quota)
+
+          require_auth(tag) do
+            case name
+            when "GETQUOTA" then getquota(tag, args)
+            when "GETQUOTAROOT" then getquotaroot(tag, args)
+            else tagged tag, "NO [NOPERM] Quotas are administered in the web UI"
+            end
+          end
         when "IDLE"         then require_auth(tag) { idle(tag) }
         else tagged tag, "BAD Unknown command #{name}"
         end
@@ -344,6 +358,17 @@ module MailOnRails
         return tagged(tag, "NO No mailbox selected") unless @selected
 
         yield
+      end
+
+      # Maps a store error onto the IMAP response code (RFC 5530) the
+      # client uses to distinguish "create the mailbox and retry" from
+      # "free up space".
+      def error_response_code(result)
+        case result[:code]
+        when :notfound then "[TRYCREATE] "
+        when :overquota then "[OVERQUOTA] "
+        else ""
+        end
       end
 
       # -- session commands --------------------------------------------------
@@ -1230,7 +1255,7 @@ module MailOnRails
           when "BODY" then out << "BODY #{Mime.bodystructure(parse.call)}"
           when "BODYSTRUCTURE" then out << "BODYSTRUCTURE #{Mime.bodystructure(parse.call, extended: true)}"
           when "EMAILID"       then out << "EMAILID (#{msg[:email_id]})" if msg[:email_id]
-          when "THREADID"      then out << "THREADID NIL" # threading not implemented (RFC 8474 §5)
+          when "THREADID"      then out << (msg[:thread_id] ? "THREADID (#{msg[:thread_id]})" : "THREADID NIL")
           when "SAVEDATE"
             out << (msg[:saved_date] ? %(SAVEDATE "#{Time.at(msg[:saved_date]).strftime("%d-%b-%Y %H:%M:%S %z")}") : "SAVEDATE NIL")
           when "PREVIEW"       then out << "PREVIEW #{Mime.quote(Mime.preview(parse.call))}"
@@ -1356,8 +1381,7 @@ module MailOnRails
 
         result = @store.copy(@selected[:mailbox_id], wanted.map(&:last), Imap::Utf7.decode(dest))
         if result[:error]
-          code = result[:code] == :notfound ? "[TRYCREATE] " : ""
-          tagged tag, "NO #{code}COPY failed: #{result[:error]}"
+          tagged tag, "NO #{error_response_code(result)}COPY failed: #{result[:error]}"
         else
           copyuid = "#{result[:uid_validity]} #{result[:src_uids].join(",")} #{result[:dest_uids].join(",")}"
           tagged tag, "OK [COPYUID #{copyuid}] COPY completed"
@@ -1377,8 +1401,7 @@ module MailOnRails
 
         result = @store.move(@selected[:mailbox_id], wanted.map(&:last), Imap::Utf7.decode(dest))
         if result[:error]
-          code = result[:code] == :notfound ? "[TRYCREATE] " : ""
-          return tagged(tag, "NO #{code}MOVE failed: #{result[:error]}")
+          return tagged(tag, "NO #{error_response_code(result)}MOVE failed: #{result[:error]}")
         end
 
         # RFC 6851: COPYUID rides an untagged OK and precedes the EXPUNGEs.
@@ -1553,6 +1576,225 @@ module MailOnRails
         s
       end
 
+      # -- THREAD (RFC 5256) -------------------------------------------------------
+
+      THREAD_ALGORITHMS = %w[ORDEREDSUBJECT REFERENCES].freeze
+
+      # RFC 5256 THREAD: "<algorithm> <charset> <search keys>". Matches
+      # like SEARCH, then arranges the matches into conversation trees.
+      def thread(tag, args, uid_mode)
+        algorithm = args.shift.to_s.upcase
+        return tagged(tag, "BAD Unknown THREAD algorithm #{algorithm}") unless THREAD_ALGORITHMS.include?(algorithm)
+
+        charset = args.shift
+        unless charset.is_a?(String) && SEARCH_CHARSETS.any? { |c| charset.casecmp?(c) }
+          return tagged(tag, "NO [BADCHARSET (#{SEARCH_CHARSETS.join(" ")})] Charset not supported")
+        end
+        return tagged(tag, "BAD THREAD expects search criteria") if args.empty?
+
+        @search_modseq = false
+        hits = search_hits(args, uid_mode)
+        messages = fetch_messages(hits.map(&:last), true)
+        entries = hits.filter_map do |seq, uid|
+          (msg = messages[uid]) && thread_entry(seq, uid, msg, uid_mode)
+        end
+
+        threads = algorithm == "REFERENCES" ? references_threads(entries) : ordered_subject_threads(entries)
+        untagged "THREAD #{threads.join}".rstrip
+        tagged tag, "OK THREAD completed"
+      rescue SearchSyntaxError => e
+        tagged tag, "BAD #{e.message}"
+      end
+
+      # The facts threading needs about one matched message, read off its
+      # headers: ancestry (References, falling back to In-Reply-To), base
+      # subject, and the sent date (INTERNALDATE when unparseable, as in
+      # SORT).
+      def thread_entry(seq, uid, msg, uid_mode)
+        headers = Mime.parse_headers(Mime.split_header(msg[:raw].to_s)[0])
+        subject = headers["subject"]&.first.to_s
+        references = header_msg_ids(headers, "references")
+        references = header_msg_ids(headers, "in-reply-to").first(1) if references.empty?
+        date = begin
+          Time.parse(headers["date"]&.first.to_s).to_i
+        rescue ArgumentError, TypeError
+          msg[:internal_date]
+        end
+        { num: uid_mode ? uid : seq, uid: uid, date: date,
+          message_id: header_msg_ids(headers, "message-id").first,
+          references: references,
+          subject: base_subject(subject),
+          # A re:/fwd: prefix marks a reply for the subject-merge step
+          # (the non-reply wins a merged thread's root).
+          reply: base_subject(subject) != subject.gsub(/\s+/, " ").strip.downcase }
+      end
+
+      def header_msg_ids(headers, name)
+        headers[name].to_a.flat_map { |v| v.scan(/<([^>]+)>/) }.flatten
+      end
+
+      # ORDEREDSUBJECT ("poor man's threading"): one linear thread per
+      # base subject, messages ordered by sent date, threads by their
+      # first message's date.
+      def ordered_subject_threads(entries)
+        groups = entries.group_by { |e| e[:subject] }.values
+        groups.each { |group| group.sort_by! { |e| [ e[:date], e[:uid] ] } }
+        groups.sort_by { |group| [ group.first[:date], group.first[:uid] ] }
+              .map { |group| "(#{group.map { |e| e[:num] }.join(" ")})" }
+      end
+
+      # REFERENCES (the JWZ algorithm as RFC 5256 specifies it): build the
+      # ancestry forest from References chains - creating placeholder
+      # containers for referenced messages outside the result set - then
+      # prune the placeholders, merge root threads sharing a base subject,
+      # sort siblings by date, and render.
+      def references_threads(entries)
+        containers = Hash.new { |h, k| h[k] = { entry: nil, children: [], parent: nil } }
+        entries.each do |entry|
+          id = entry[:message_id] || "no-id-#{entry[:uid]}"
+          id = "#{id}-dup-#{entry[:uid]}" if containers[id][:entry]
+          container = containers[id]
+          container[:entry] = entry
+
+          # Link each adjacent pair of the References chain, never
+          # re-parenting an already-linked container and never
+          # introducing a loop.
+          previous = nil
+          entry[:references].each do |ref|
+            node = containers[ref]
+            if previous && !node.equal?(previous) && node[:parent].nil? && !thread_ancestor?(node, previous)
+              adopt(previous, node)
+            end
+            previous = node
+          end
+          # The message's own parent is its last reference, overriding
+          # any speculative link an earlier chain made (unless that
+          # would loop).
+          if previous && !previous.equal?(container) && !thread_ancestor?(container, previous)
+            container[:parent]&.dig(:children)&.delete(container)
+            adopt(previous, container)
+          end
+        end
+
+        roots = prune_placeholders(containers.values.select { |c| c[:parent].nil? })
+        roots = merge_threads_by_subject(roots)
+        sort_threads(roots)
+        roots.map { |root| render_thread(root) }
+      end
+
+      def adopt(parent, child)
+        child[:parent] = parent
+        parent[:children] << child
+      end
+
+      # True when +node+ is +other+ or one of its ancestors.
+      def thread_ancestor?(node, other)
+        while other
+          return true if other.equal?(node)
+
+          other = other[:parent]
+        end
+        false
+      end
+
+      # JWZ step 2: drop placeholders for messages outside the result
+      # set, promoting their children - except that a placeholder at the
+      # root keeps a multi-child sibling group together (it renders as
+      # "((a)(b))").
+      def prune_placeholders(nodes, root: true)
+        nodes.flat_map do |node|
+          node[:children] = prune_placeholders(node[:children], root: false)
+          if node[:entry]
+            [ node ]
+          elsif node[:children].empty?
+            []
+          elsif !root || node[:children].size == 1
+            node[:children].each { |c| c[:parent] = node[:parent] }
+            node[:children]
+          else
+            [ node ]
+          end
+        end
+      end
+
+      # RFC 5256 step 4: root threads sharing a base subject merge into
+      # one - under the placeholder if either is one, under the
+      # non-reply if exactly one message lacks a re:/fwd: prefix, and
+      # under a fresh placeholder when neither is clearly the parent.
+      def merge_threads_by_subject(roots)
+        table = {}
+        merged = []
+        replace = lambda do |old, new, subject|
+          merged[merged.index { |n| n.equal?(old) }] = new
+          table[subject] = new
+        end
+
+        roots.each do |root|
+          subject = thread_subject(root)
+          other = table[subject] unless subject.empty?
+          if other.nil?
+            table[subject] = root unless subject.empty?
+            merged << root
+          elsif other[:entry].nil? && root[:entry].nil?
+            root[:children].each { |c| adopt(other, c) }
+          elsif other[:entry].nil?
+            adopt(other, root)
+          elsif root[:entry].nil?
+            replace.call(other, root, subject)
+            adopt(root, other)
+          elsif other[:entry][:reply] && !root[:entry][:reply]
+            replace.call(other, root, subject)
+            adopt(root, other)
+          elsif root[:entry][:reply] && !other[:entry][:reply]
+            adopt(other, root)
+          else
+            placeholder = { entry: nil, children: [], parent: nil }
+            replace.call(other, placeholder, subject)
+            adopt(placeholder, other)
+            adopt(placeholder, root)
+          end
+        end
+        merged
+      end
+
+      # The base subject a thread is known by: its message's, or the
+      # first descendant's for a placeholder.
+      def thread_subject(node)
+        node = node[:children].first until node.nil? || node[:entry]
+        node ? node[:entry][:subject] : ""
+      end
+
+      # RFC 5256 steps 5-6: siblings sort by sent date (mailbox order as
+      # the tiebreak), recursively; the root set sorts the same way, a
+      # placeholder counting as its first (sorted) child.
+      def sort_threads(nodes)
+        nodes.each { |node| sort_threads(node[:children]) }
+        nodes.sort_by! { |node| thread_sort_key(node) }
+      end
+
+      def thread_sort_key(node)
+        node = node[:children].first while node[:entry].nil?
+        [ node[:entry][:date], node[:entry][:uid] ]
+      end
+
+      # RFC 5256 rendering: a linear descent stays in one list
+      # ("(2 3 4)"); a fork nests each branch ("(2 (3)(4))"); a
+      # parentless sibling group opens with a nested thread ("((3)(4))").
+      def render_thread(node)
+        parts = []
+        while node
+          parts << node[:entry][:num].to_s if node[:entry]
+          case node[:children].size
+          when 0 then node = nil
+          when 1 then node = node[:children].first
+          else
+            parts << node[:children].map { |child| render_thread(child) }.join
+            node = nil
+          end
+        end
+        "(#{parts.join(" ")})"
+      end
+
       # Evaluates search-key tokens against the current snapshot and
       # returns matching [seq, uid] pairs in mailbox order. Two-phase:
       # metadata keys (flags, dates, sizes, sets) run against the cheap
@@ -1695,13 +1937,10 @@ module MailOnRails
         when "CC"      then header_key("cc", toks.shift.to_s)
         when "BCC"     then header_key("bcc", toks.shift.to_s)
         when "SUBJECT" then header_key("subject", toks.shift.to_s)
-        when "TEXT"
-          value = toks.shift.to_s.downcase
-          raw_key { |_seq, msg| msg[:raw].to_s.downcase.include?(value) }
+        when "TEXT" then content_key(toks.shift.to_s, "text")
         when "BODY"
           # Unlike TEXT, BODY matches the body only, never the header.
-          value = toks.shift.to_s.downcase
-          raw_key { |_seq, msg| Mime.split_header(msg[:raw].to_s)[1].downcase.include?(value) }
+          content_key(toks.shift.to_s, "body")
         when "OLDER"   then age_key(toks.shift) { |age, seconds| age >= seconds }
         when "YOUNGER" then age_key(toks.shift) { |age, seconds| age <= seconds }
         when "SAVEDBEFORE" then saved_date_key(toks.shift) { |saved, day| saved < day }
@@ -1711,9 +1950,8 @@ module MailOnRails
           value = toks.shift.to_s
           meta_key { |_seq, msg| msg[:email_id] == value }
         when "THREADID"
-          # Threading is not implemented: THREADID never matches (RFC 8474 §5).
-          toks.shift
-          meta_key { |_seq, _msg| false }
+          value = toks.shift.to_s
+          meta_key { |_seq, msg| msg[:thread_id] == value }
         when "MODSEQ"
           # Optional entry-name/entry-type prefix ("/flags/\Seen" all) is
           # accepted and ignored - flags share one modseq per message here.
@@ -1809,6 +2047,70 @@ module MailOnRails
         end
       end
 
+      # TEXT/BODY. Pushed down to the store's indexed search when it offers
+      # one (search_text in the store contract; word-level matching), so
+      # the common "search my mail" case never ships raw bytes up to this
+      # process. Queries an FTS index can't express (no word characters -
+      # bare punctuation, the empty string) and stores without search_text
+      # take the RFC-exact substring scan instead. A store search that
+      # fails matches nothing, same as a failed fetch in search_hits.
+      def content_key(value, scope)
+        return substring_key(value, scope) unless @store.respond_to?(:search_text) && value.match?(/[[:alnum:]]/)
+
+        uids = nil
+        meta_key do |_seq, msg|
+          uids ||= @store.search_text(@selected[:mailbox_id], value, scope)[:uids] || []
+          uids.include?(msg[:uid])
+        end
+      end
+
+      # RFC 3501 TEXT/BODY semantics: case-insensitive substring over the
+      # raw message (scope "text") or its body section (scope "body").
+      def substring_key(value, scope)
+        value = value.downcase
+        raw_key do |_seq, msg|
+          haystack = msg[:raw].to_s
+          haystack = Mime.split_header(haystack)[1] if scope == "body"
+          haystack.downcase.include?(value)
+        end
+      end
+
+      # -- QUOTA (RFC 2087 / RFC 9208) ---------------------------------------------
+
+      # One quota root per account, named "" - every mailbox belongs to
+      # it. Only the STORAGE resource exists, and SETQUOTA is refused:
+      # quotas are the operator's to set, not the mail client's.
+
+      def getquota(tag, args)
+        root = args.shift
+        return tagged(tag, "BAD GETQUOTA expects a quota root") unless root.is_a?(String)
+        return tagged(tag, "NO No such quota root") unless root.empty?
+
+        untagged %(QUOTA "" #{quota_resources})
+        tagged tag, "OK GETQUOTA completed"
+      end
+
+      def getquotaroot(tag, args)
+        name = Imap::Utf7.decode(args.shift.to_s)
+        return tagged(tag, "BAD GETQUOTAROOT expects a mailbox") if name.empty?
+        return tagged(tag, "NO [NONEXISTENT] No such mailbox") if @store.status(@account_id, name)[:error]
+
+        untagged %(QUOTAROOT #{Mime.quote(Imap::Utf7.encode(name))} "")
+        untagged %(QUOTA "" #{quota_resources})
+        tagged tag, "OK GETQUOTAROOT completed"
+      end
+
+      # STORAGE counts units of 1024 octets (RFC 2087), usage rounded up
+      # so a nonzero byte count never reads as zero. An account without a
+      # configured limit reports no resources - the root exists, nothing
+      # is limited.
+      def quota_resources
+        result = @store.quota(@account_id)
+        return "()" unless result[:limit_bytes]
+
+        "(STORAGE #{(result[:used_bytes].to_i + 1023) / 1024} #{(result[:limit_bytes].to_i + 1023) / 1024})"
+      end
+
       # -- APPEND ----------------------------------------------------------------
 
       def append(tag, args)
@@ -1821,8 +2123,7 @@ module MailOnRails
 
         result = @store.append(@account_id, name, message, flags, date_epoch)
         if result[:error]
-          code = result[:code] == :notfound ? "[TRYCREATE] " : ""
-          tagged tag, "NO #{code}APPEND failed: #{result[:error]}"
+          tagged tag, "NO #{error_response_code(result)}APPEND failed: #{result[:error]}"
         else
           # An APPEND into the selected mailbox must surface as an
           # untagged EXISTS (RFC 3501 §6.3.11) before the tagged OK.
@@ -1880,8 +2181,7 @@ module MailOnRails
 
         result = @store.append(@account_id, name, message, flags, date_epoch)
         if result[:error]
-          code = result[:code] == :notfound ? "[TRYCREATE] " : ""
-          return tagged(tag, "NO #{code}REPLACE failed: #{result[:error]}")
+          return tagged(tag, "NO #{error_response_code(result)}REPLACE failed: #{result[:error]}")
         end
 
         untagged "OK [APPENDUID #{result[:uid_validity]} #{result[:uid]}] Replacement ready"

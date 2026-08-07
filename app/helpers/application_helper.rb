@@ -19,6 +19,7 @@ module ApplicationHelper
   def smtp_section?      = controller_name == "smtp"
   def imap_section?      = controller_name == "imap"
   def security_section?  = controller_name == "auth_attempts"
+  def audit_section?     = controller_name == "audit_events"
 
   # Compact duration for the connection history table: "3s", "4m 12s",
   # "2h 5m". Rollup rows carry no duration.

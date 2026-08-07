@@ -17,6 +17,10 @@ class ImapBackendStoreTest < ActiveSupport::TestCase
     MailOnRails::Store::ImapBackend.new
   end
 
+  def apply_quota(account_id, bytes)
+    EmailAccount.find(account_id).update!(quota_bytes: bytes)
+  end
+
   test "tombstone pruning raises the floor and expunged_since falls back" do
     raw = MailOnRails::Imap::Store::Contracts::Imap::RAW_CRLF
     uids = 3.times.map { store.append(account_id, "INBOX", raw, [ "\\Deleted" ], nil)[:uid] }

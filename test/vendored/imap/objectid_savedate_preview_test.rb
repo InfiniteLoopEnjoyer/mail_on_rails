@@ -66,12 +66,15 @@ class ObjectidSavedatePreviewTest < Minitest::Test
     assert_match(/\A\* SEARCH\r\n/, command(c, "e6", "SEARCH EMAILID Enosuchid"))
   end
 
-  test "threadid is nil and never matches" do
+  # THREADID behavior itself (grouping, search) is covered in
+  # thread_test.rb; here just the objectid grammar and the no-match case.
+  test "threadid is a valid objectid and an unknown id never matches" do
     @store.append(@account_id, "INBOX", RAW, [], nil)
     c = connect
     command(c, "t0", "SELECT INBOX")
-    assert_match(/\* 1 FETCH \(THREADID NIL\)/, command(c, "t1", "FETCH 1 (THREADID)"))
-    assert_match(/\A\* SEARCH\r\n/, command(c, "t2", "SEARCH THREADID T123"))
+    thread_id = command(c, "t1", "FETCH 1 (THREADID)")[/THREADID \(([^)]+)\)/, 1]
+    assert_match(/\A[A-Za-z0-9_-]{1,255}\z/, thread_id.to_s)
+    assert_match(/\A\* SEARCH\r\n/, command(c, "t2", "SEARCH THREADID Tnosuchthread"))
   end
 
   # -- SAVEDATE --------------------------------------------------------------

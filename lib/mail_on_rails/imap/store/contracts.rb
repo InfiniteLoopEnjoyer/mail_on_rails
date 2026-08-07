@@ -379,6 +379,45 @@ module MailOnRails
                                      moved[:dest_uids], false)[:messages].first[:email_id]
           end
 
+          def test_thread_ids_group_replies_and_split_strangers
+            root = "Message-Id: <root@x.test>\r\nSubject: hi\r\n\r\nhello\r\n"
+            reply = "Message-Id: <r1@x.test>\r\nIn-Reply-To: <root@x.test>\r\n" \
+                    "References: <root@x.test>\r\nSubject: Re: hi\r\n\r\nyo\r\n"
+            other = "Message-Id: <other@x.test>\r\nSubject: unrelated\r\n\r\nbye\r\n"
+            uids = [ root, reply, other ].map { |raw| store.append(account_id, "INBOX", raw, [], nil)[:uid] }
+            mailbox_id = store.select_mailbox(account_id, "INBOX")[:mailbox_id]
+
+            entries = store.fetch(mailbox_id, uids, false)[:messages]
+            thread_ids = entries.map { |e| e[:thread_id] }
+            assert thread_ids.all? { |t| t&.match?(OBJECTID_RE) }, "THREADID must use the objectid grammar"
+            assert_equal thread_ids[0], thread_ids[1], "a reply joins its ancestor's thread"
+            refute_equal thread_ids[0], thread_ids[2], "unrelated messages get their own thread"
+          end
+
+          def test_thread_ids_converge_when_a_reply_arrives_first
+            reply = "Message-Id: <r1@x.test>\r\nReferences: <root@x.test>\r\nSubject: Re: hi\r\n\r\nyo\r\n"
+            root = "Message-Id: <root@x.test>\r\nSubject: hi\r\n\r\nhello\r\n"
+            first = store.append(account_id, "INBOX", reply, [], nil)[:uid]
+            second = store.append(account_id, "INBOX", root, [], nil)[:uid]
+            mailbox_id = store.select_mailbox(account_id, "INBOX")[:mailbox_id]
+
+            entries = store.fetch(mailbox_id, [ first, second ], false)[:messages]
+            assert_equal entries[0][:thread_id], entries[1][:thread_id],
+                         "out-of-order delivery must still converge on one thread"
+          end
+
+          def test_thread_ids_are_account_wide_so_copies_stay_in_thread
+            raw = "Message-Id: <root@x.test>\r\nSubject: hi\r\n\r\nhello\r\n"
+            uid = store.append(account_id, "INBOX", raw, [], nil)[:uid]
+            mailbox_id = store.select_mailbox(account_id, "INBOX")[:mailbox_id]
+            original = store.fetch(mailbox_id, [ uid ], false)[:messages].first
+
+            copied = store.copy(mailbox_id, [ uid ], "Trash")
+            trash_id = store.select_mailbox(account_id, "Trash")[:mailbox_id]
+            copy = store.fetch(trash_id, copied[:dest_uids], false)[:messages].first
+            assert_equal original[:thread_id], copy[:thread_id]
+          end
+
           def test_fetch_reports_saved_date
             uid = store.append(account_id, "INBOX", RAW_CRLF, [], 1_000_000)[:uid]
             mailbox_id = store.select_mailbox(account_id, "INBOX")[:mailbox_id]
@@ -492,6 +531,105 @@ module MailOnRails
             assert_equal [ "\\Seen" ], copied[:flags]
 
             assert_equal :notfound, store.copy(mailbox_id, [ uid ], "Nope")[:code]
+          end
+
+          # -- search_text (optional TEXT/BODY pushdown) -----------------------
+          # The contract asks for whole-word, case-insensitive matching at
+          # minimum: scope "text" over at least the subject, address
+          # headers and body text; scope "body" over the body only. A
+          # store may match more generously (the memory store does exact
+          # RFC 3501 substrings); it must never hit body-scope on text
+          # that appears only in headers. Stores without search_text skip
+          # these - the IMAP server falls back to its own substring scan.
+
+          SEARCHABLE_RAW = "From: sender@example.test\r\nTo: rcpt@example.test\r\n" \
+                           "Subject: quarterly numbers\r\n\r\nThe kumquat budget is ready.\r\n"
+          UNRELATED_RAW = "From: other@example.test\r\nSubject: lunch\r\n\r\nSee you at noon.\r\n"
+
+          def search_seed
+            skip "store does not implement search_text" unless store.respond_to?(:search_text)
+            uid = store.append(account_id, "INBOX", SEARCHABLE_RAW, [], nil)[:uid]
+            store.append(account_id, "INBOX", UNRELATED_RAW, [], nil)
+            [ store.select_mailbox(account_id, "INBOX")[:mailbox_id], uid ]
+          end
+
+          def test_search_text_matches_whole_words_case_insensitively
+            mailbox_id, uid = search_seed
+            assert_equal [ uid ], store.search_text(mailbox_id, "KUMQUAT", "text")[:uids]
+            assert_equal [ uid ], store.search_text(mailbox_id, "kumquat", "body")[:uids]
+            assert_equal [], store.search_text(mailbox_id, "zebra", "text")[:uids]
+          end
+
+          def test_search_text_requires_every_word_of_a_multiword_query
+            mailbox_id, uid = search_seed
+            assert_equal [ uid ], store.search_text(mailbox_id, "kumquat budget", "text")[:uids]
+            assert_equal [], store.search_text(mailbox_id, "kumquat noon", "text")[:uids]
+          end
+
+          def test_search_text_body_scope_never_matches_header_only_text
+            mailbox_id, uid = search_seed
+            assert_equal [ uid ], store.search_text(mailbox_id, "quarterly", "text")[:uids]
+            assert_equal [], store.search_text(mailbox_id, "quarterly", "body")[:uids]
+          end
+
+          def test_search_text_returns_ascending_uids_and_empty_for_unknown_mailbox
+            mailbox_id, = search_seed
+            third = store.append(account_id, "INBOX", SEARCHABLE_RAW, [], nil)[:uid]
+            uids = store.search_text(mailbox_id, "kumquat", "text")[:uids]
+            assert_includes uids, third
+            assert_equal uids.sort, uids
+            assert_equal [], store.search_text(-1, "kumquat", "text")[:uids]
+          end
+
+          # -- quota (optional storage accounting) ------------------------------
+          # A store that implements quota(account_id) reports used_bytes
+          # (the sum of stored message sizes, CRLF-normalized) and
+          # limit_bytes (nil = unlimited), and refuses append/copy with
+          # code :overquota when the write would exceed the limit. Moves
+          # within the account are net-zero and stay exempt. Contract
+          # hosts provide apply_quota(account_id, bytes) to set the limit
+          # however their implementation stores it.
+
+          def quota_seed(limit_bytes)
+            skip "store does not implement quota" unless store.respond_to?(:quota)
+            skip "contract host does not provide apply_quota" unless respond_to?(:apply_quota)
+            apply_quota(account_id, limit_bytes)
+          end
+
+          def test_quota_reports_used_bytes_and_a_nil_limit_by_default
+            skip "store does not implement quota" unless store.respond_to?(:quota)
+            assert_equal({ used_bytes: 0, limit_bytes: nil }, store.quota(account_id))
+
+            2.times { store.append(account_id, "INBOX", RAW_CRLF, [], nil) }
+            assert_equal 2 * RAW_CRLF.bytesize, store.quota(account_id)[:used_bytes]
+          end
+
+          def test_append_is_refused_with_overquota_once_the_limit_is_reached
+            quota_seed(RAW_CRLF.bytesize)
+            assert_nil store.append(account_id, "INBOX", RAW_CRLF, [], nil)[:error]
+
+            result = store.append(account_id, "INBOX", RAW_CRLF, [], nil)
+            assert_equal :overquota, result[:code]
+            assert result[:error], "an over-quota refusal must carry a message"
+            assert_equal RAW_CRLF.bytesize, store.quota(account_id)[:used_bytes]
+          end
+
+          def test_copy_is_refused_with_overquota_when_the_copy_would_not_fit
+            quota_seed(RAW_CRLF.bytesize)
+            uid = store.append(account_id, "INBOX", RAW_CRLF, [], nil)[:uid]
+            mailbox_id = store.select_mailbox(account_id, "INBOX")[:mailbox_id]
+
+            assert_equal :overquota, store.copy(mailbox_id, [ uid ], "Trash")[:code]
+          end
+
+          def test_move_within_the_account_is_exempt_from_quota
+            quota_seed(RAW_CRLF.bytesize)
+            uid = store.append(account_id, "INBOX", RAW_CRLF, [], nil)[:uid]
+            mailbox_id = store.select_mailbox(account_id, "INBOX")[:mailbox_id]
+
+            result = store.move(mailbox_id, [ uid ], "Trash")
+            assert_nil result[:error], "a full account must still be able to file mail away"
+            assert_equal RAW_CRLF.bytesize, store.quota(account_id)[:used_bytes]
           end
         end
       end

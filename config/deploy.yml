@@ -114,6 +114,18 @@ servers:
         # Set number of processes dedicated to Solid Queue (default: 1)
         # JOB_CONCURRENCY: 3
 
+        # Nightly pg_dump retention (DatabaseBackupJob writes onto the
+        # storage volume; docs/backups.md covers restore and offsite
+        # copies). Defaults shown.
+        # DB_BACKUP_KEEP_DAYS: 14
+        # DB_BACKUP_DIR: /rails/storage/backups
+
+        # Prometheus: setting METRICS_TOKEN (better: as a secret in
+        # .kamal/secrets) enables GET /metrics for scrapers presenting it
+        # as a bearer token; unset, the endpoint 404s. See
+        # MetricsController for the exposed series.
+        # METRICS_TOKEN: choose-a-long-random-string
+
 # Enable SSL auto certification via Let's Encrypt and allow for multiple apps on a single web server.
 # If used with Cloudflare, set encryption mode in SSL/TLS setting to "Full" to enable CF-to-app encryption.
 #
@@ -173,6 +185,9 @@ aliases:
   shell: app exec --interactive --reuse "bash"
   logs: app logs -f
   dbc: app exec --interactive --reuse "bin/rails dbconsole --include-password"
+  # On-demand pg_dump onto the storage volume (the nightly one is
+  # DatabaseBackupJob in config/recurring.yml). Restore: docs/backups.md.
+  backup: app exec --reuse "bin/db-backup"
 
 # Certbot renewal daemon for the mail-port TLS cert (DNS-01 via Cloudflare,
 # so it never needs port 80). Runs as the same uid as the app container, so

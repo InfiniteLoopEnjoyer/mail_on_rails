@@ -1,0 +1,30 @@
+- page_title "Search #{@email_account.email}"
+
+nav.mb-2.text-sm.text-slate-500.dark:text-slate-400
+  =<> link_to "Accounts", root_path, class: "text-accent"
+  | /
+  =<> link_to @email_account.email, email_account_path(@email_account), class: "text-accent"
+  | /
+  span<> Search
+
+header.mb-4
+  h1.text-2xl.font-bold Search
+
+= form_with url: email_account_search_path(@email_account), method: :get, class: "mb-6 flex max-w-xl items-center gap-2" do |form|
+  = form.search_field :q, value: @query, placeholder: "Search mail", autofocus: true, class: "w-full rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-sm"
+  = form.submit "Search", class: "inline-block cursor-pointer whitespace-nowrap rounded-md border border-accent bg-accent px-3.5 py-1.5 text-sm font-medium text-white"
+
+- if @query.empty?
+  p.text-slate-500.dark:text-slate-400
+    | Searches subjects, addresses, and message text across every folder.
+      Quote "a phrase", use OR, or -exclude words.
+- elsif @email_messages.any?
+  p.mb-3.text-sm.text-slate-500.dark:text-slate-400
+    = "#{pluralize(@message_count, "message")} matching \"#{@query}\""
+  ul
+    - @email_messages.each do |message|
+      = render "email_messages/row", message: message, email_account: @email_account, mailbox: message.mailbox, show_mailbox: true
+  = render "shared/pagination", page: @page, pages: @pages, count: @message_count, url: ->(page) { email_account_search_path(@email_account, q: @query, page: page) }
+- else
+  p.text-slate-500.dark:text-slate-400
+    = "No messages match \"#{@query}\"."

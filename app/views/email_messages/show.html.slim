@@ -29,6 +29,8 @@ article.rounded-lg.border.border-slate-200.dark:border-slate-800.bg-white.dark:b
     .mb-3.flex.flex-wrap.items-start.justify-between.gap-3
       h1.text-xl.font-bold= @email_message.subject.presence || "(no subject)"
       .flex.flex-wrap.items-center.gap-2
+        = link_to "Download .eml", download_email_account_mailbox_email_message_path(@email_account, @mailbox, @email_message),
+                  class: "cursor-pointer rounded-md border border-slate-300 dark:border-slate-600 px-3 py-1 text-sm whitespace-nowrap text-slate-600 dark:text-slate-300 hover:border-accent hover:text-accent", data: { turbo: false }
         - if @mailbox.junk?
           = button_to "Not spam", unmark_spam_email_account_mailbox_email_message_path(@email_account, @mailbox, @email_message),
                       class: "cursor-pointer rounded-md border border-slate-300 dark:border-slate-600 px-3 py-1 text-sm whitespace-nowrap text-slate-600 dark:text-slate-300 hover:border-accent hover:text-accent"

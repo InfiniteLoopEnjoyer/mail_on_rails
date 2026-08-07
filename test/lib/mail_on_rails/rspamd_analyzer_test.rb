@@ -57,7 +57,32 @@ class RspamdAnalyzerTest < ActiveSupport::TestCase
         assert_equal "fail", result.spf
         assert_equal "fail", result.dkim
         assert_equal "fail", result.dmarc
+        assert_equal "reject", result.dmarc_policy
         assert result.spam?
+      end
+    end
+  end
+
+  # A DMARC fail under p=none reads dmarc=fail but carries no published
+  # disposition - dmarc_policy stays nil so enforcement never acts on it.
+  test "a p=none DMARC softfail carries no policy" do
+    verdict = { "action" => "no action", "symbols" => { "DMARC_POLICY_SOFTFAIL" => {} } }
+    FakeRspamd.serving(verdict) do |addr, _captured|
+      with_rspamd_at(addr) do
+        result = MailOnRails::RspamdAnalyzer.analyze(RAW)
+        assert_equal "fail", result.dmarc
+        assert_nil result.dmarc_policy
+      end
+    end
+  end
+
+  test "a p=quarantine DMARC failure carries its policy" do
+    verdict = { "action" => "no action", "symbols" => { "DMARC_POLICY_QUARANTINE" => {} } }
+    FakeRspamd.serving(verdict) do |addr, _captured|
+      with_rspamd_at(addr) do
+        result = MailOnRails::RspamdAnalyzer.analyze(RAW)
+        assert_equal "fail", result.dmarc
+        assert_equal "quarantine", result.dmarc_policy
       end
     end
   end

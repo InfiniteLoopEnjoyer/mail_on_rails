@@ -40,35 +40,40 @@ policy live in [docs/virus_scanning.md](docs/virus_scanning.md).
 
 ## Roadmap
 
-- [ ] **DMARC enforcement (inbound)** — the app computes DMARC via rspamd
-  and badges the result; go further and reject or quarantine on failure
-  (behind a flag, log-only first) rather than only badging. (Distinct from
-  the outbound-side DMARC *monitoring* already in place — see below.)
-- [ ] **Web composer outbound abuse gates** — SMTP submission has a
+- [x] **DMARC enforcement (inbound)** — the app computes DMARC via rspamd
+  and badges the result; `MAILROOM_DMARC_ENFORCE` now goes further: mail
+  that failed DMARC under the sender domain's own published p=reject or
+  p=quarantine is filed into Junk when set to `enforce` (log-only by
+  default; `0` disables; p=none failures are never acted on). Complements
+  the edge-side `SMTP_DMARC_ENFORCE` 550. (Distinct from the outbound-side
+  DMARC *monitoring* also in place — see below.)
+- [x] **Web composer outbound abuse gates** — SMTP submission has a
   per-account send quota (`Smtp::SendQuota`, RCPT-time 452) and an rspamd
   spam gate at DATA, the tripwires for a stolen SMTP password. The web
-  composer bypasses both: `ComposedEmail#deliver` queues
-  `SmtpOutboundMessage` rows directly, so a stolen *web* password can pump
-  outbound mail unmetered. Count composer recipients against the same
-  `SendQuota.shared` budget and score the built message with
-  `RspamdAnalyzer` before queueing.
-- [ ] **Sanitize `<style>` blocks instead of dropping them** —
-  `EmailHtmlSanitizer` prunes `<style>` elements entirely, so newsletters
-  that rely on stylesheet rules (rather than inline styles) render
-  degraded. Parse the stylesheet with Crass (already a transitive
-  dependency via Loofah), keep qualified rules whose declarations pass
-  `Loofah::HTML5::Scrub.scrub_css`, recurse into `@media`, drop everything
-  else (`@import`, `url()`, unknown at-rules), and re-serialize from the
-  Crass AST — never from the raw text. The sandboxed iframe stays the
-  second layer regardless.
-- [ ] **Pin GitHub Actions to commit SHAs** — `actions/checkout@v7` etc.
-  are mutable tags (the tj-actions/changed-files compromise worked by
-  retargeting tags). Pin to full SHAs with the version in a trailing
-  comment, in all three repos' workflows; Dependabot understands and
-  updates SHA pins.
-- [ ] **Rate limiting beyond auth** — Rails-native `rate_limit` covers
-  login, password reset, and the 2FA challenge; the rest of the web UI is
-  unthrottled.
+  composer now carries both: `ComposedEmail#deliver` counts each recipient
+  against the same `SendQuota.shared` budget (keyed by the account email,
+  as at RCPT) and scores the built message with `RspamdAnalyzer` before
+  queueing — only rspamd's own refusal actions refuse, and an unreachable
+  scorer fails open, mirroring the DATA gate.
+- [x] **Sanitize `<style>` blocks instead of dropping them** —
+  `EmailCssSanitizer` parses the stylesheet with Crass (already a
+  transitive dependency via Loofah), keeps qualified rules whose
+  declarations pass `Loofah::HTML5::Scrub.scrub_css`, recurses into
+  `@media`, drops everything else (`@import`, `url()`, unknown at-rules),
+  and re-serializes from the Crass AST — never from the raw text, and
+  never emitting a literal `</` (the `<style>` breakout). Stylesheets are
+  collected from head and body and re-emitted as one scrubbed `<style>`
+  element. The sandboxed iframe stays the second layer regardless.
+- [x] **Pin GitHub Actions to commit SHAs** — `actions/checkout@v7` etc.
+  were mutable tags (the tj-actions/changed-files compromise worked by
+  retargeting tags). All three repos' workflows now pin full SHAs with the
+  version in a trailing comment; Dependabot understands and updates SHA
+  pins (`github-actions` ecosystem already configured).
+- [x] **Rate limiting beyond auth** — Rails-native `rate_limit` now also
+  covers the composer (per-IP, alongside the per-account send quota),
+  drafts autosave, password-reset token use, 2FA enrollment, message
+  rescan, and the admin mutations (users, accounts, aliases, domains,
+  mailboxes, bans, settings).
 - [ ] **If the composer grows rich-text/HTML sending** — it is immune to
   the email-HTML-injection class today only because it sends text/plain
   exclusively. Before adding an HTML part: build it with a templating
@@ -81,31 +86,75 @@ policy live in [docs/virus_scanning.md](docs/virus_scanning.md).
 
 Web UI, roughly by value:
 
-- [ ] **Full-text search** — no search box anywhere; the only search is
-  IMAP SEARCH from a mail client. Postgres FTS over subject/from/body
-  would cover both the web UI and a faster IMAP SEARCH.
-- [ ] **Pagination** — a mailbox page renders every message in the folder
-  (no limit clause); large mailboxes will hurt.
-- [ ] **Attachments in the composer** — outbound mail is text-only; no
-  file input. (Attachment *download* with a ClamAV gate already works.)
+- [x] **Full-text search** — a GIN-indexed tsvector over
+  subject/from/to plus `body_text` (plain text extracted at delivery,
+  backfilled by migration) powers an account-wide search page
+  (websearch syntax: phrases, OR, `-word`) and an IMAP TEXT/BODY
+  pushdown: the store contract grew an optional `search_text` op, so
+  SEARCH resolves content keys in Postgres instead of shipping every
+  raw message to Ruby for a substring scan. FTS matches whole words
+  (the Dovecot trade-off — documented in `docs/store_contract.md`);
+  queries an index can't express, and stores without `search_text`,
+  keep the RFC-exact substring scan.
+- [x] **Pagination** — mailbox pages render 50 messages at a time
+  (newest first, Older/Newer links); an out-of-range page clamps.
+- [x] **Attachments in the composer** — a multiple-file input on the
+  composer; files become MIME parts in `ComposedEmail#build_raw` (the
+  body stays the text part), capped at 22 MB raw so the base64-encoded
+  message stays under the IMAP APPENDLIMIT (30 MiB). The built message
+  passes through the same ClamAV and rspamd gates as any other composer
+  send. Attachments travel with the send only — draft autosaves stay
+  text. (Attachment *download* with a ClamAV gate already works.)
 - [ ] **Per-account server-side filing rules** — inbound filtering is
   global only (rspamd, DMARC); no per-user "file sender X into folder Y"
   (Sieve or a simpler home-grown rule table acted on in the mailroom).
-- [ ] **Vacation autoresponder** — nothing exists.
-- [ ] **Message threading** — References/In-Reply-To are extracted but
-  unused; the list view is flat. (IMAP THREAD is also unimplemented.)
-- [ ] **Storage quotas** — no per-account quota, no enforcement at APPEND
-  or SMTP DATA, no usage display; one account can fill the disk. Pairs
-  with the IMAP QUOTA (RFC 2087) extension.
-- [ ] **.eml download / mbox export** — no way to get a message or
-  mailbox out of the system from the UI.
+- [x] **Vacation autoresponder** — per-account subject/body/date-range on
+  the account form; the mailroom fires `VacationResponder` for mail that
+  earned the INBOX (never junk/quarantine), with RFC 3834 loop
+  protections: no replies to bounces or the null sender, to
+  `Auto-Submitted`/`Precedence: bulk`/`X-Auto-Response-Suppress` mail,
+  or to `List-*` traffic; one reply per correspondent per week (an
+  atomic upsert, so concurrent deliveries can't double-reply); each
+  reply is marked `Auto-Submitted: auto-replied` and consumes a slot of
+  the account's outbound send quota.
+- [x] **Message threading** — In-Reply-To/References now land in columns
+  at delivery and resolve to an account-wide `thread_id` (a reply adopts
+  its stored ancestor's thread; with none it derives deterministically
+  from the chain root, so out-of-order arrivals converge; backfilled by
+  migration). The mailbox list shows one row per conversation (newest
+  message, count badge, unread dot if any member is unread), paginated
+  by latest activity. The same ids serve IMAP as real RFC 8474
+  THREADIDs. (IMAP THREAD — see below.)
+- [x] **Storage quotas** — per-account `quota_bytes` (blank = unlimited,
+  edited in MB on the account form) with `used_bytes` maintained
+  incrementally from message sizes. Enforced centrally in
+  `EmailMessage.deliver_raw`, which covers SMTP DATA (mailroom, which
+  skips a full recipient without blocking co-recipients), IMAP
+  APPEND/COPY (`NO [OVERQUOTA]`), and the composer; same-account moves
+  stay exempt so a full account can still file into Trash. Usage shows
+  on the account page. (IMAP QUOTA — see below.)
+- [x] **.eml download / mbox export** — "Download .eml" on the message
+  page serves the stored bytes as `message/rfc822` (no scan gate: an
+  .eml is not a browser-executable payload, and getting mail *out* must
+  not depend on a verdict). "Export mbox" on the folder page streams the
+  whole mailbox as an RFC 4155 mbox (mboxrd quoting, LF line endings),
+  one message in memory at a time — see `MboxExport`.
 - [ ] **Web Push for new mail** — the PWA service worker skeleton exists
   but is unused; clients must poll / IMAP IDLE.
 
 Protocol/delivery:
 
-- [ ] **IMAP THREAD (RFC 5256)** — SORT is done; THREAD returns NIL.
-- [ ] **IMAP QUOTA (RFC 2087)** — see storage quotas above.
+- [x] **IMAP THREAD (RFC 5256)** — `THREAD REFERENCES` (full JWZ:
+  ancestry forest, placeholder pruning, base-subject merge) and
+  `THREAD=ORDEREDSUBJECT`, advertised in CAPABILITY; the FETCH
+  `THREADID` NIL stub and the never-matching `THREADID` search key now
+  use the store's real thread ids (`fetch` entries carry `thread_id` —
+  see `docs/store_contract.md`).
+- [x] **IMAP QUOTA (RFC 2087)** — `GETQUOTA`/`GETQUOTAROOT` on a single
+  account-wide root `""` with the STORAGE resource (1024-octet units),
+  `QUOTA QUOTA=RES-STORAGE` in CAPABILITY, and `NO [OVERQUOTA]` on
+  APPEND/COPY; `SETQUOTA` is refused (limits are set in the web UI).
+  Backed by the optional store `quota` op — see `docs/store_contract.md`.
 - [ ] **DANE for outbound (RFC 7672)** — outbound TLS is opportunistic
   and unverified; TLSA validation (and honoring recipient MTA-STS
   policies, which we publish but don't check when sending) would close
@@ -117,13 +166,26 @@ Protocol/delivery:
 
 Operations:
 
-- [ ] **Backups** — no pg_dump tooling, restore procedure, or runbook in
-  the deploy config; the mail store is a single Postgres.
-- [ ] **Metrics** — no Prometheus endpoint (kamal-proxy already ships
-  one); delivery latency, queue depth, and rejection counts are
-  log-only.
-- [ ] **Audit log** — admin actions (bans, domain/user changes, settings)
-  aren't recorded anywhere queryable.
+- [x] **Backups** — `DatabaseBackupJob` (nightly, `config/recurring.yml`)
+  writes a custom-format `pg_dump` of the primary database onto the
+  persistent storage volume, pruned to `DB_BACKUP_KEEP_DAYS` (default 14)
+  only after a successful dump. On demand: `bin/kamal backup` /
+  `bin/db-backup`. Restore runbook and offsite guidance:
+  [docs/backups.md](docs/backups.md).
+- [x] **Metrics** — `GET /metrics` serves Prometheus exposition format,
+  enabled by `METRICS_TOKEN` (scrape with it as a bearer token; unset =
+  404). Series are computed on scrape from what the app already records:
+  outbound queue depth by status and due backlog, queued-to-sent latency
+  (last hour, summary sum/count), auth failures by protocol,
+  quarantined/junked counts, accounts/messages/storage, and live SMTP/
+  IMAP connection counts.
+- [x] **Audit log** — an `audit_events` table written by hooks on every
+  admin surface (users, accounts, aliases, domains, bans, settings sync
+  and knobs, DNS publish, password regens): who did what to what, from
+  where. Rows snapshot the actor's email and a subject label, so they
+  stay legible after the user or subject is deleted; they are immutable
+  and never pruned. Viewer at `/audit` (sidebar: Audit log), newest
+  first, paginated.
 
 Already in place (not TODO): PostgreSQL-backed queuing (Solid Queue plus
 the `smtp_outbound_messages` retry/backoff table), SPF/DKIM/DMARC

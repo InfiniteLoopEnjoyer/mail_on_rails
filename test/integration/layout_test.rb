@@ -24,9 +24,9 @@ class LayoutTest < ActionDispatch::IntegrationTest
     assert_select "[data-drawer-target='backdrop']"
 
     # link order: Domains, then child Mailboxes, then Users, the live
-    # SMTP/IMAP connection pages, Security, then Settings
+    # SMTP/IMAP connection pages, Security, the audit log, then Settings
     links = css_select("aside nav a").map(&:text)
-    assert_equal [ "Domains", "Mailboxes", "Users", "SMTP", "IMAP", "Security", "Settings" ], links
+    assert_equal [ "Domains", "Mailboxes", "Users", "SMTP", "IMAP", "Security", "Audit log", "Settings" ], links
   end
 
   test "mailboxes child link is active on root, domains link active on domains" do
