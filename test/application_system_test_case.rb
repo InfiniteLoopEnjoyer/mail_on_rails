@@ -27,12 +27,15 @@ class ApplicationSystemTestCase < ActionDispatch::SystemTestCase
   # string it never checked, so the fill is verified and retried here rather
   # than trusted.
   def compose(field, text)
-    locator = "composed_email[#{field}]"
     # Keystrokes sent while the document is still loading go nowhere.
     page.document.synchronize(5) do
       raise Capybara::ExpectationNotMet unless page.evaluate_script("document.readyState") == "complete"
     end
 
+    # The rich-text body is a lexxy-editor custom element, not a form field.
+    return compose_body(text) if field == "body"
+
+    locator = "composed_email[#{field}]"
     3.times do
       fill_in locator, with: text
       return if page.has_field?(locator, with: text, wait: 2)
@@ -49,6 +52,31 @@ class ApplicationSystemTestCase < ActionDispatch::SystemTestCase
       field.dispatchEvent(new Event("input", { bubbles: true }));
     JS
     assert_field locator, with: text
+  end
+
+  # Types into the Lexxy body editor. Real keystrokes into its
+  # contenteditable make the editor emit lexxy:change itself, which is the
+  # wiring these tests exist to prove (the autosave controller listens for
+  # that event, and the element's .value feeds the payload).
+  def compose_body(text)
+    editor = find("lexxy-editor[name='composed_email[body_html]']")
+    # The contenteditable only exists once Lexical has booted.
+    area = editor.find("[contenteditable]")
+
+    3.times do
+      area.click
+      area.send_keys [ :control, "a" ], text
+      return if editor.has_selector?("[contenteditable]", text: text, wait: 2)
+    end
+
+    # Same starved-runner fallback as the plain fields: assign the value and
+    # fire the event a keystroke would have.
+    page.execute_script(<<~JS, editor, text)
+      const [editor, value] = arguments;
+      editor.value = "<p>" + value + "</p>";
+      editor.dispatchEvent(new CustomEvent("lexxy:change", { bubbles: true }));
+    JS
+    assert_selector "lexxy-editor [contenteditable]", text: text
   end
 
   # Polls the field's live value rather than matching on [value=...]: a CSS

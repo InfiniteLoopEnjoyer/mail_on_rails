@@ -97,7 +97,7 @@ class DraftAutosaveTest < ApplicationSystemTestCase
 
     # The composer, not the read view, prefilled with what was written.
     assert_selector "h2", text: "Draft"
-    assert_field "composed_email[body]", with: /Started on the laptop\./
+    assert_selector "lexxy-editor [contenteditable]", text: /Started on the laptop\./
     assert_field "composed_email[to]", with: "sender@remote.test"
 
     compose("body", "Started on the laptop. Finished here.")

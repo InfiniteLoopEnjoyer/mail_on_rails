@@ -27,7 +27,7 @@ class NewEmailAutosaveTest < ApplicationSystemTestCase
     click_on "Thoughts on the proposal"
 
     assert_selector "h2", text: "Draft"
-    assert_field "composed_email[body]", with: /Been mulling this over\./
+    assert_selector "lexxy-editor [contenteditable]", text: /Been mulling this over\./
     assert_field "composed_email[to]", with: "bob@remote.test"
   end
 
