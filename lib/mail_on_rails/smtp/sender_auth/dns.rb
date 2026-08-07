@@ -105,7 +105,61 @@ module MailOnRails
           []
         end
 
+        # DNSSEC-flagged answers for the outbound DANE path. +secure+ is
+        # the response's AD bit: it is only meaningful when the configured
+        # resolver validates DNSSEC (we request it with the DO bit but
+        # trust, not verify, the validation).
+        Answer = Struct.new(:records, :secure, keyword_init: true)
+        Tlsa = Struct.new(:usage, :selector, :matching_type, :data, keyword_init: true)
+
+        # TLSA (RFC 6698) has no first-class Resolv resource; the generic
+        # type carries the raw RDATA which tlsa() unpacks itself.
+        TLSA_TYPE = Resolv::DNS::Resource::Generic.create(52, 1)
+
+        # TLSA records for a name like "_25._tcp.mx.example.com".
+        def tlsa(name)
+          records, secure = answer_with_security(name, TLSA_TYPE)
+          parsed = records.filter_map do |record|
+            data = record.data.to_s.b
+            next if data.bytesize < 4
+
+            Tlsa.new(usage: data.getbyte(0), selector: data.getbyte(1),
+                     matching_type: data.getbyte(2), data: data.byteslice(3..))
+          end
+          Answer.new(records: parsed, secure: secure)
+        end
+
+        # MX [preference, exchange] pairs sorted by preference, with the
+        # AD flag - DANE only applies below a DNSSEC-secure MX RRset.
+        def mx_answer(name)
+          records, secure = answer_with_security(name, Resolv::DNS::Resource::IN::MX)
+          pairs = records.sort_by(&:preference).map { |r| [ r.preference, r.exchange.to_s ] }
+          Answer.new(records: pairs, secure: secure)
+        end
+
         private
+
+        # Like resources(), but queries with the EDNS0 DO bit and returns
+        # [records, ad_flag]. Cached under its own key: the same name and
+        # type resolved without DNSSEC stores a different value shape.
+        def answer_with_security(name, typeclass)
+          key = "dnssec #{typeclass.name} #{name.to_s.downcase}"
+          if (cached = cache_fetch(key))
+            return cached
+          end
+
+          reply = exchange(name.to_s, typeclass, dnssec: true)
+          secure = reply.instance_variable_get(:@mail_on_rails_ad) || false
+          case reply.rcode
+          when Resolv::DNS::RCode::NoError
+            records = reply.answer.filter_map { |_owner, _ttl, record| record if record.is_a?(typeclass) }
+            cache_store(key, [ records, secure ], reply.answer.map { |_owner, ttl, _record| ttl })
+          when Resolv::DNS::RCode::NXDomain
+            cache_store(key, [ [], secure ], [])
+          else
+            raise TempError, "DNS rcode #{reply.rcode} for #{name}"
+          end
+        end
 
         def resources(name, typeclass)
           key = "#{typeclass.name} #{name.to_s.downcase}"
@@ -158,9 +212,9 @@ module MailOnRails
 
         # Asks each nameserver in turn; first decodable reply wins. Raises
         # TempError once every nameserver has timed out or errored.
-        def exchange(name, typeclass)
+        def exchange(name, typeclass, dnssec: false)
           id = rand(0x10000)
-          payload = build_query(id, name, typeclass)
+          payload = build_query(id, name, typeclass, dnssec: dnssec)
           errors = []
           @nameservers.each do |server|
             reply = udp_exchange(server, payload, id)
@@ -172,12 +226,24 @@ module MailOnRails
           raise TempError, "DNS lookup failed for #{name} (#{errors.join(", ")})"
         end
 
-        def build_query(id, name, typeclass)
+        def build_query(id, name, typeclass, dnssec: false)
           # Explicit id: the default taps a Ractor-hostile class variable.
           message = Resolv::DNS::Message.new(id)
           message.rd = 1
           message.add_question(Resolv::DNS::Name.create(absolute(name)), typeclass)
-          message.encode
+          payload = message.encode
+          dnssec ? with_edns_do(payload) : payload
+        end
+
+        # Resolv's encoder has no EDNS support, so the OPT pseudo-record
+        # (RFC 6891) asking for DNSSEC is spliced in by hand: bump ARCOUNT
+        # (header bytes 10-11) and append root name, TYPE 41, CLASS = our
+        # UDP payload size, TTL = flags with the DO bit, empty RDATA.
+        EDNS_UDP_SIZE = 1232 # the fragmentation-safe ceiling; larger answers fall back to TCP
+        def with_edns_do(payload)
+          arcount = payload.byteslice(10, 2).unpack1("n")
+          payload.byteslice(0, 10) + [ arcount + 1 ].pack("n") + payload.byteslice(12..).to_s +
+            "\x00".b + [ 41, EDNS_UDP_SIZE, 0x0000_8000, 0 ].pack("nnNn")
         end
 
         def absolute(name)
@@ -215,7 +281,11 @@ module MailOnRails
         end
 
         def decode(data)
-          Resolv::DNS::Message.decode(data)
+          message = Resolv::DNS::Message.decode(data)
+          # Resolv's decoder drops the AD (authenticated data) header bit;
+          # read it off the wire (byte 3, mask 0x20) for the DANE path.
+          message.instance_variable_set(:@mail_on_rails_ad, (data.getbyte(3) & 0x20) != 0)
+          message
         rescue Resolv::DNS::DecodeError
           nil
         end

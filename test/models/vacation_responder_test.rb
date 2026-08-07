@@ -4,7 +4,9 @@ require "mail_on_rails/smtp/send_quota"
 # The vacation autoresponder and its loop protections (RFC 3834): answer
 # real correspondence once per sender per window, never answer bounces,
 # automatic mail, or list traffic, and pay for every reply out of the
-# account's send quota.
+# account's send quota. The reply goes to the envelope return path with a
+# null envelope sender, so forged headers can't aim it at a third party
+# and the reply itself can never bounce.
 class VacationResponderTest < ActiveSupport::TestCase
   setup do
     @account = EmailAccount.create!(email: "away@example.com", password: "secret123",
@@ -32,7 +34,7 @@ class VacationResponderTest < ActiveSupport::TestCase
     assert respond
 
     queued = SmtpOutboundMessage.sole
-    assert_equal @account.email, queued.mail_from
+    assert_equal "", queued.mail_from, "auto-replies must carry the null envelope sender (RFC 3834)"
     assert_equal "friend@remote.test", queued.recipient
 
     reply = Mail.read_from_string(queued.data)
@@ -42,10 +44,19 @@ class VacationResponderTest < ActiveSupport::TestCase
     assert_equal "orig@remote.test", Array(reply.in_reply_to).first
   end
 
+  test "the reply goes to the envelope return path, not forged Reply-To or From" do
+    assert respond(inbound(from: "victim@else.test", reply_to: "other-victim@else.test"),
+                   return_path: "friend@remote.test")
+
+    queued = SmtpOutboundMessage.sole
+    assert_equal "friend@remote.test", queued.recipient
+    assert_equal "friend@remote.test", Array(Mail.read_from_string(queued.data).to).first
+  end
+
   test "a local sender gets the reply straight into their inbox" do
     local = EmailAccount.create!(email: "colleague@example.com", password: "secret123")
 
-    assert respond(inbound(from: "colleague@example.com"), return_path: "colleague@example.com")
+    assert respond(inbound(from: "colleague@example.com"), return_path: "Colleague@example.com")
 
     message = local.inbox.email_messages.sole
     assert_equal "Out of office", message.subject
@@ -61,6 +72,15 @@ class VacationResponderTest < ActiveSupport::TestCase
       assert respond, "a fresh window earns a fresh reply"
     end
     assert_equal 2, SmtpOutboundMessage.count
+  end
+
+  test "case and +tag variants of one mailbox share a single window slot" do
+    assert respond(inbound, return_path: "friend@remote.test")
+    assert_not respond(inbound, return_path: "Friend@Remote.Test")
+    assert_not respond(inbound, return_path: "friend+anything@remote.test")
+    assert_not respond(inbound, return_path: "FRIEND+x2@remote.test")
+    assert_equal 1, SmtpOutboundMessage.count
+    assert_equal "friend@remote.test", VacationReply.sole.sender
   end
 
   test "a disabled or out-of-range vacation stays silent" do
@@ -93,14 +113,12 @@ class VacationResponderTest < ActiveSupport::TestCase
     assert respond(inbound(headers: { "Auto-Submitted" => "no" })), "Auto-Submitted: no is human mail"
   end
 
-  test "the account never answers itself and honors Reply-To" do
+  test "the account never answers itself or its aliases" do
     assert_not respond(inbound(from: @account.email), return_path: @account.email)
 
     @account.email_aliases.create!(email: "me@example.com")
-    assert_not respond(inbound(from: "me@example.com"), return_path: "me@example.com")
-
-    assert respond(inbound(reply_to: "replies@remote.test"))
-    assert_equal "replies@remote.test", SmtpOutboundMessage.sole.recipient
+    assert_not respond(inbound(from: "me@example.com"), return_path: "Me@example.com")
+    assert_equal 0, SmtpOutboundMessage.count
   end
 
   test "a reply consumes a send quota slot and an exhausted quota skips the reply" do
@@ -111,6 +129,26 @@ class VacationResponderTest < ActiveSupport::TestCase
       assert_not respond(inbound, quota: quota), "an empty quota must silence the responder"
     end
     assert_equal 1, SmtpOutboundMessage.count
+  end
+
+  test "an exhausted quota does not burn the correspondent's claim" do
+    exhausted = MailOnRails::Smtp::SendQuota.new(limit: 1, window: 3600)
+    assert exhausted.consume(@account.email), "drain the only slot"
+    assert_not respond(inbound, quota: exhausted)
+    assert_equal 0, VacationReply.count, "no claim row may be written when nothing was sent"
+
+    assert respond, "the correspondent still earns a reply once quota frees up"
+    assert_equal 1, SmtpOutboundMessage.count
+  end
+
+  test "repeat mail inside the window does not touch the quota" do
+    quota = MailOnRails::Smtp::SendQuota.new(limit: 2, window: 3600)
+    assert respond(inbound, quota: quota)
+    assert_not respond(inbound, quota: quota)
+    assert_not respond(inbound, quota: quota)
+
+    assert respond(inbound, return_path: "second@remote.test", quota: quota),
+           "the repeat messages above must not have consumed the remaining slot"
   end
 
   test "a missing subject falls back to an Automatic reply marker" do

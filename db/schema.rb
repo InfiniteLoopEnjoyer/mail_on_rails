@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_07_143754) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_07_153000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -243,6 +243,18 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_07_143754) do
     t.index ["email_account_id"], name: "index_mailboxes_on_email_account_id"
   end
 
+  create_table "mta_sts_policies", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.string "domain", null: false
+    t.datetime "fetched_at", null: false
+    t.integer "max_age", null: false
+    t.string "mode", null: false
+    t.text "mx_patterns", null: false
+    t.string "sts_id", null: false
+    t.datetime "updated_at", null: false
+    t.index ["domain"], name: "index_mta_sts_policies_on_domain", unique: true
+  end
+
   create_table "sessions", force: :cascade do |t|
     t.datetime "created_at", null: false
     t.string "ip_address"
@@ -274,6 +286,19 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_07_143754) do
     t.integer "status", default: 0, null: false
     t.datetime "updated_at", null: false
     t.index ["status", "next_attempt_at"], name: "index_smtp_outbound_messages_on_status_and_next_attempt_at"
+  end
+
+  create_table "tls_rpt_events", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.string "failure_detail"
+    t.datetime "occurred_at", null: false
+    t.string "policy_domain", null: false
+    t.string "policy_type", null: false
+    t.string "receiving_mx"
+    t.string "result_type"
+    t.datetime "updated_at", null: false
+    t.index ["occurred_at"], name: "index_tls_rpt_events_on_occurred_at"
+    t.index ["policy_domain", "occurred_at"], name: "index_tls_rpt_events_on_policy_domain_and_occurred_at"
   end
 
   create_table "users", force: :cascade do |t|

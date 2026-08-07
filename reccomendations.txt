@@ -1,0 +1,288 @@
+# Security Audit Report: mail_on_rails
+
+This is a security review of the full codebase, with emphasis on SMTP/IMAP hardening and data-leak paths. No code was changed.
+
+---
+
+## Executive Summary
+
+The project shows strong security engineering overall: TLS 1.2+ with AEAD ciphers, mandatory encryption before credentials on both protocols, layered auth throttling, anti-abuse limits on SMTP, cross-account isolation tests, HTML mail sandboxing, parameterized SQL, and removal of the old internal HTTP API.
+
+The most serious **exploitable** issue is the **vacation auto-responder backscatter** path (documented in the README roadmap). The largest **architectural** gap is **no RBAC** — every signed-in web user is a full admin. **IMAP also lacks several accept-side protections that SMTP already has**, which creates an abuse asymmetry.
+
+---
+
+## Critical / High Severity
+
+### 1. Vacation responder backscatter (exploitable)
+
+**Location:** `app/models/vacation_responder.rb`, `app/models/vacation_reply.rb`
+
+**Issue:** Auto-replies are sent to `Reply-To` or `From`, which unauthenticated senders control. The validated SMTP envelope return path is checked for bounce suppression but **never used as the reply destination**, and is never compared to header addresses.
+
+**Impact:**
+- An attacker can make a vacationing account send mail to arbitrary third parties.
+- Replies are DKIM-signed under your domain (`OutboundDeliverer#signed`), so they are DMARC-aligned and more likely to reach inboxes.
+- Dedup in `VacationReply.claim` is **case-sensitive** and does not normalize `+tags`, so “one reply per correspondent per week” is bypassable.
+- Fan-out: up to `MAX_RECIPIENTS` (100) vacationing accounts on one message can each reply to the same victim.
+
+The README acknowledges this explicitly. This is the highest-priority real vulnerability.
+
+---
+
+### 2. No authorization model on the web UI (full admin for any session)
+
+**Location:** All authenticated controllers; notably `app/controllers/emails_controller.rb`, `app/controllers/email_accounts_controller.rb`, `app/controllers/domains_controller.rb`, `app/controllers/users_controller.rb`
+
+**Issue:** Any authenticated `User` can:
+- Read/send as **any** `EmailAccount`
+- Create/delete domains and publish DNS to Cloudflare
+- Manage users and reset passwords
+- View all mail, exports, audit data, live connections
+
+**Impact:** A single compromised web session (phishing, stolen laptop, weak password without 2FA) compromises the entire mail system. This is documented as intentional for single-operator use but is a serious risk if multiple people share access.
+
+---
+
+### 3. IMAP missing SMTP-equivalent accept-side protections
+
+**SMTP has** (`lib/mail_on_rails/smtp/server.rb`, `smtp_server.rb`):
+- Per-IP connection cap (`SMTP_MAX_CONN_PER_IP`, default 10)
+- Per-IP connection rate limiting / tarpit (`SMTP_CONN_RATE`)
+- Per-IP auth lockout at accept time (`SMTP_AUTH_LOCKOUT_FAILURES`, default 10)
+
+**IMAP has** (`lib/mail_on_rails/imap/server.rb`):
+- Process-wide connection cap only (`MAIL_ON_RAILS_IMAP_MAX_CONN`, default 100)
+- **No** per-IP connection limit
+- **No** connection rate limiting
+- **No** accept-side auth throttle (only DB-backed `AuthThrottle` inside `Store::Base#authenticate`)
+
+**Impact:** IMAP is a softer target for connection floods and distributed credential guessing. Each failed login still costs a bcrypt check until DB throttling kicks in, but an attacker can open many parallel connections from many IPs more cheaply than against SMTP’s layered defenses.
+
+---
+
+### 4. Outbound delivery: TLS without certificate verification
+
+**Location:** `app/models/outbound_deliverer.rb` line 71
+
+```ruby
+smtp = Net::SMTP.new(host, port, starttls: :auto, tls_verify: false)
+```
+
+**Impact:** Outbound mail uses opportunistic STARTTLS but does **not** verify remote MX certificates. A network-positioned attacker can MITM delivery. The README lists DANE/MTA-STS client enforcement as future work. Inbound MTA-STS is published but in **`testing`** mode (`app/models/mta_sts.rb`), so peers are not yet required to use verified TLS to you either.
+
+---
+
+### 5. IMAP TLS can silently disappear on misconfiguration
+
+**Location:** `lib/mail_on_rails/imap/tls.rb` vs `lib/mail_on_rails/smtp/tls.rb`
+
+**SMTP:** If `SMTP_TLS_CERT` / `SMTP_TLS_KEY` are set but invalid, boot fails with `TLS::Error` — fail-closed.
+
+**IMAP:** `TLS.material` rescues all errors and returns `nil`, logging a warning. Implicit-TLS listeners are then skipped; only plaintext+STARTTLS remains (or plaintext only if TLS never loads).
+
+**Impact:** A cert renewal or permission problem could leave IMAP serving without the intended TLS material, with the process still reporting healthy. SMTP is stricter; IMAP should match that behavior in production.
+
+---
+
+### 6. Database backups contain full mail and secrets metadata
+
+**Location:** `app/jobs/database_backup_job.rb`, `docs/backups.md`
+
+**Issue:** Nightly `pg_dump` includes:
+- All RFC822 message bodies (`email_messages.raw`)
+- Password digests, encrypted SCRAM/TOTP/DKIM material
+- Session and audit data
+
+Backups live on the **same persistent volume** as the app; offsite copy is manual.
+
+**Impact:** Disk compromise, backup theft, or a volume snapshot leak exposes the entire mailstore. No at-rest encryption of backup files is implemented.
+
+---
+
+## Medium Severity
+
+### 7. Metrics endpoint exposure surface
+
+**Location:** `app/controllers/metrics_controller.rb`, `config/routes.rb`
+
+Bearer `METRICS_TOKEN` gating is implemented correctly (`secure_compare`, 404 when unset). However:
+- No network ACL in the app (documented — relies on firewall/VPN)
+- Exposes aggregate counts: accounts, messages, storage bytes, auth failure tallies, live connection counts
+
+**Impact:** Token leak gives operational intelligence useful for targeted attacks. Not a direct data leak of message content.
+
+---
+
+### 8. Authenticated spam paths fail open when rspamd is down
+
+**Locations:** `lib/mail_on_rails/smtp_server.rb` (`submission_spam_verdict`), `app/models/composed_email.rb`
+
+Authenticated submission (SMTP and web composer) **allows** mail when rspamd is unavailable. ClamAV on inbound is fail-closed (451); rspamd on outbound is fail-open by design.
+
+**Impact:** A compromised account + rspamd outage = unrestricted spam from your IP.
+
+---
+
+### 9. IMAP APPEND / web import accept unscanned mail when ClamAV is down
+
+**Locations:** `lib/mail_on_rails/store/imap_backend.rb`, `app/controllers/mailboxes_controller.rb`
+
+Authenticated writes store messages flagged `unscanned` rather than refusing them.
+
+**Impact:** Malware can enter the store via IMAP APPEND or web import during scanner outages. Inbound SMTP still rejects (451) or quarantines. Defense-in-depth gap on authenticated write paths.
+
+---
+
+### 10. Cloudflare API token scope
+
+**Location:** `app/models/cloudflare_dns.rb`, `.kamal/secrets-common`
+
+Token needs `Zone:Read` + `DNS:Edit`. A leaked token enables DNS hijack (MX, SPF, DKIM TXT), which is catastrophic for a mail host.
+
+**Mitigation in code:** `DnsPublisher` is conservative (won’t overwrite existing MX/SPF/DMARC). **Mitigation in ops:** token should be zone-scoped and rotated.
+
+---
+
+### 11. Development seeds use trivial passwords
+
+**Location:** `db/seeds.rb`
+
+`password123` for admin and mail accounts in **development only**. Safe if `Rails.env.development?` is always true when seeds run; dangerous if seeds are ever run elsewhere.
+
+---
+
+### 12. Audit and auth-attempt logs retain identifying data indefinitely
+
+**Locations:** `app/models/audit_event.rb`, `app/models/auth_attempt.rb`
+
+- Audit events: never pruned; store `user_email`, `ip`, JSON `details`
+- Auth attempts: usernames and IPs retained (30-day default retention); **passwords explicitly never stored** (well documented)
+
+**Impact:** DB breach exposes who tried to log in and what admins did. Not a live credential leak, but a privacy/forensics liability.
+
+---
+
+### 13. CSP `style-src 'unsafe-inline'` (required for mail rendering)
+
+**Location:** `config/initializers/content_security_policy.rb`, `app/views/email_messages/show.html.slim`
+
+Email HTML renders in a **sandboxed iframe** (`sandbox="allow-popups allow-popups-to-escape-sandbox"`) with Loofah-based sanitization. CSP allows inline styles for newsletter compatibility.
+
+**Impact:** If the sanitizer misses something, impact is contained to the iframe (no scripts, opaque origin). Residual risk is phishing styling / deceptive links (partially mitigated by `EmailHtmlSanitizer#expose_deceptive_links`).
+
+---
+
+### 14. SCRAM without channel binding
+
+**Location:** `lib/mail_on_rails/imap/scram.rb`, IMAP `authenticate_scram`
+
+SCRAM-SHA-256 is implemented correctly (`valid_proof?` uses `fixed_length_secure_compare`), but channel binding (`tls-server-end-point`) is rejected. A stolen SCRAM proof could theoretically be replayed on another TLS session to the same server (narrow scenario).
+
+---
+
+## Low Severity / Informational
+
+| Area | Assessment |
+|------|------------|
+| **Password storage** | bcrypt for `User` and `EmailAccount`; SCRAM verifier keys encrypted at rest |
+| **Web session** | Signed `httponly` `same_site: :lax` cookie; `reset_session` on login; idle timeout (default 24h) |
+| **2FA** | TOTP + WebAuthn; pending 2FA state in encrypted session with 5-minute deadline; rate limited |
+| **Password reset** | No user enumeration; rate limited; token invalidates on password change |
+| **CSRF** | Enabled everywhere except `/metrics` (bearer-only, intentional) |
+| **SQL injection** | ActiveRecord parameterized queries; FTS uses bound `?` parameters |
+| **Internal API** | Retired; routes return 404 (`config/routes.rb`, integration tests) |
+| **Action Mailbox ingress** | Hard-pinned to 404 |
+| **SMTP smuggling** | CRLF handling, dot-stuffing, size caps, line limits |
+| **STARTTLS injection (IMAP)** | Pre-TLS buffer discarded on upgrade (CVE-2011-0411 class) |
+| **Header injection** | `Store::SmtpBackend#sanitize_header` strips CR/LF; trusted headers stripped from DATA |
+| **Cross-account IMAP isolation** | Extensively tested (`test/vendored/imap/cross_account_isolation_test.rb`) |
+| **Re-auth on IMAP** | Second LOGIN/AUTHENTICATE rejected after authentication |
+| **SASL authzid** | Ignored; session bound to authcid only |
+| **Generated passwords** | `SecureRandom.base58(36)` — strong |
+| **Logging** | `filter_parameter_logging` covers passwords, tokens, OTP, etc.; SMTP AUTH redacted in trace mode |
+| **Docker** | Non-root `rails` user (uid 1000) |
+| **CI** | Brakeman, bundler-audit, importmap audit, Trivy |
+| **Secrets in repo** | No committed `.env`; `master.key` gitignored; credentials encrypted |
+| **Host header** | `config.hosts` set from `MAIL_ON_RAILS_WEB_HOST` in production |
+| **ReDoS** | Global `Regexp.timeout` (default 3s) |
+
+---
+
+## SMTP Security Posture (Detailed)
+
+**Strengths:**
+- AUTH only advertised over TLS (`auth_offered?` requires `@tls`)
+- Submission role requires auth before `MAIL FROM`; sender must match authenticated identity
+- MX role: no relay without auth; local-only recipients; SPF/DKIM/DMARC at DATA; DNSBL at MAIL FROM
+- TLS 1.2+, AEAD ciphers only (`ECDHE+AESGCM:ECDHE+CHACHA20`)
+- Cert hot-reload on mtime change
+- Per-IP connection cap, rate limit, auth lockout
+- ClamAV fail-closed on inbound DATA (550 infected, 451 scanner down)
+- Message size limits, recipient caps, protocol error budget
+- Credential redaction in debug traces
+
+**Residual risks:**
+- Port 25 accepts unauthenticated mail without requiring TLS (normal for MX; mitigated by sender auth + virus scan)
+- `SMTP_SENDER_AUTH=0` disables SPF/DKIM/DMARC (warned at boot)
+- `SMTP_DMARC_ENFORCE` only accepts literal `"1"` (misconfiguration warned)
+- rspamd fail-open on authenticated submission
+
+---
+
+## IMAP Security Posture (Detailed)
+
+**Strengths:**
+- `LOGINDISABLED` until TLS; `[PRIVACYREQUIRED]` if LOGIN/AUTHENTICATE attempted in cleartext
+- SCRAM-SHA-256 preferred; verifier material never includes plaintext password
+- Throttled callers denied SCRAM salt (`scram_credentials` checks `AuthThrottle` first)
+- `MAX_LITERAL_BYTES` (30 MiB), `MAX_LINE` (64 KiB default)
+- Literal overflow handling without stream desync
+- Cross-account isolation enforced in store layer
+- APPEND virus scan when ClamAV enabled
+
+**Gaps vs SMTP:**
+- No per-IP connection limit
+- No connection rate limiting
+- No accept-side auth lockout
+- TLS boot failure is fail-open (see finding #5)
+- APPEND/import fail-open on scanner outage (see finding #9)
+
+---
+
+## Data Leak Paths Reviewed
+
+| Path | Verdict |
+|------|---------|
+| HTTP responses / views | No `html_safe` in app views; mail in sandboxed iframe |
+| Logs (production) | Emails/IPs in operational logs; params filtered |
+| `auth_attempts` table | Usernames only, never passwords |
+| `/metrics` | Aggregates only |
+| `audit_events` | Admin actions, emails, IPs — intentional |
+| Database | Full mail in `email_messages.raw` — expected; DKIM/SCRAM/TOTP encrypted |
+| Backups | Full DB dump on local volume |
+| Live connections UI | Peer IP, username, HELO — admin-only |
+| Password reset email | Standard flow; no enumeration |
+| Flash `generated_password` | Shown once in UI after create/reset |
+
+---
+
+## Recommendations (Priority Order)
+
+1. **Fix vacation responder backscatter** — reply to validated envelope return path; normalize addresses before dedup; null envelope sender; move quota check before `claim` (all outlined in README).
+2. **Add RBAC** if more than one person uses the admin UI.
+3. **Align IMAP accept-side controls with SMTP** — per-IP conn limit, rate limit, accept-side auth lockout.
+4. **Make IMAP TLS boot fail-closed** when explicit cert paths are set (match SMTP behavior).
+5. **Enable outbound TLS verification** (and DANE/MTA-STS client checks) for delivery integrity.
+6. **Encrypt and offsite database backups**; treat backup files as secret.
+7. **Restrict `/metrics` at the network layer** and rotate `METRICS_TOKEN`.
+8. **Switch MTA-STS to `enforce`** once TLS is stable.
+9. **Consider raising SCRAM iterations** above RFC 7677 minimum (4096) for new passwords.
+
+---
+
+## What Is Already Well Secured
+
+The codebase demonstrates mature thinking in many areas: SMTP/IMAP protocol hardening, credential handling, session management, mail HTML isolation, removal of internal HTTP APIs, parameterized queries, comprehensive vendored protocol tests including cross-account isolation, and explicit documentation of known risks in the README.
+
+The gaps above are mostly **known and documented** (vacation backscatter, RBAC, DANE) or **asymmetric hardening** (IMAP vs SMTP abuse controls), rather than silent oversights.

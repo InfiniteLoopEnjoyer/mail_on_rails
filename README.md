@@ -76,62 +76,18 @@ Web UI, roughly by value:
 
 Protocol/delivery:
 
-- [ ] **Vacation responder backscatter (RFC 3834 §4)** — the auto-reply is
-  addressed from the `Reply-To`/`From` headers
-  (`VacationResponder#reply_address`), which any unauthenticated sender
-  sets freely. `bounce?` does validate the *envelope* return path, but
-  that address is never used as the destination and the two are never
-  compared — so a stranger can make a vacationing account send mail to a
-  third party who never contacted us. Because the reply is queued with
-  `mail_from: account.email`, `OutboundDeliverer#signed` DKIM-signs it
-  under our domain and it leaves our IP: fully DMARC-aligned backscatter
-  that reaches the victim's inbox rather than their spam folder, with the
-  reputation damage landing on us.
-
-  The per-correspondent window does not bound this. `VacationReply.claim`
-  stores the address verbatim into a case-sensitive unique index, so
-  `victim@x.com` and `Victim@x.com` are separate rows, and `+`-tagging
-  yields unlimited variants that all reach the same real mailbox — "one
-  reply per correspondent per week" is really one reply per *spelling*.
-  Fan-out compounds it: the dedup is per-account, so a single message
-  addressed to 100 vacationing accounts (`MAX_RECIPIENTS`) yields 100
-  replies to the same victim. The only real ceiling today is `SendQuota`
-  (~200/hour/account, genuinely shared with submission because
-  `SOLID_QUEUE_IN_PUMA` runs the mailroom inside the SMTP process).
-  Work, roughly in order of value:
-
-  - address the reply to the validated envelope return path instead of
-    `Reply-To`/`From`. This alone removes attacker control of the
-    destination and makes the address-variant bypass moot, since the
-    return path is the one address the sending MTA must be able to
-    receive at;
-  - normalize (downcase, optionally strip `+` tags) before
-    `VacationReply.claim`, backed by a `citext` column or a functional
-    index so the uniqueness constraint means what it reads as;
-  - move `claim` after the quota check — today an exhausted quota has
-    already written a fresh `last_sent_at`, so a genuine correspondent
-    gets no reply *and* is then suppressed for the full seven days;
-  - send with a null envelope sender (`MAIL FROM:<>`) as RFC 3834
-    requires, so the auto-reply is itself unbounceable and a dead victim
-    address stops generating bounces back to the vacationing user;
-  - prune `vacation_replies` past the window. Nothing sweeps the table
-    today (only `dependent: :delete_all` on account destroy), so an
-    attacker cycling addresses grows it without limit.
-
-  The loop protections themselves are sound and should survive the
-  rework: null-sender and daemon suppression,
-  `Auto-Submitted`/`Precedence`/`X-Auto-Response-Suppress`/`List-*`
-  checks, the self-address check, junk and quarantine never earning a
-  reply, and local delivery going straight to the inbox so replies can't
-  re-enter the mailroom and ping-pong.
-- [ ] **DANE for outbound (RFC 7672)** — outbound TLS is opportunistic
-  and unverified; TLSA validation (and honoring recipient MTA-STS
-  policies, which we publish but don't check when sending) would close
-  the active-MITM gap on delivery.
-- [ ] **TLS-RPT sending** — we ingest reports at `tls-rpt@` but never
-  generate reports about our own inbound TLS failures.
-- [ ] **ARC sealing (RFC 8617)** — forwarded/relayed mail carries no
-  chain of custody.
+- [ ] **ARC chain validation (RFC 8617)** — `ArcSealer` can seal a
+  message as instance 1 (`cv=none`) with the domain's DKIM key, but
+  nothing forwards mail today, so it is unwired groundwork for the
+  filing-rules roadmap item's forward action. Extending an *existing*
+  chain honestly (`cv=pass`, instance N+1) additionally needs an ARC
+  chain validator, which does not exist yet.
+- [ ] **DANE-TA name checks against TLSA base domain aliases** — DANE
+  verification implements both usable usages (DANE-EE(3) ignoring
+  name/expiry per RFC 7671 §5.1, DANE-TA(2) with chain, name and
+  validity checks), but only matches the MX hostname itself, not the
+  full RFC 7672 §3.2.3 candidate-name set (CNAME-expanded names,
+  next-hop domain). Rarely load-bearing; noted for completeness.
 
 Operations:
 
@@ -140,7 +96,21 @@ Operations:
   ([docs/backups.md](docs/backups.md)), not an automated push.
 
 Already in place (not TODO): PostgreSQL-backed queuing (Solid Queue plus
-the `smtp_outbound_messages` retry/backoff table), SPF/DKIM/DMARC
+the `smtp_outbound_messages` retry/backoff table), **verified outbound
+TLS** — DANE (RFC 7672: DNSSEC-secure TLSA records make TLS mandatory
+and pin the certificate chain, no cleartext fallback; needs a
+DNSSEC-validating resolver, `MAIL_ON_RAILS_DANE=0` disables) and MTA-STS
+(RFC 8461: recipient policies are fetched, cached for their `max_age`,
+and in enforce mode restrict delivery to policy-matched MX hosts over
+WebPKI-verified TLS; `MAIL_ON_RAILS_MTA_STS=0` disables), with every
+attempt's TLS outcome recorded and **TLS-RPT reports** (RFC 8460) mailed
+daily to recipient domains that publish a `_smtp._tls` rua (we also
+still ingest reports for our own domains at `tls-rpt@`), the
+**RFC 3834-hardened vacation responder** (replies go to the validated
+envelope return path with a null envelope sender, claim keys are
+case/`+tag`-normalized, quota-exhausted attempts don't burn the
+correspondent's weekly slot, and the claim table is pruned daily),
+SPF/DKIM/DMARC
 verification of inbound mail (rspamd) and virus scanning (ClamAV,
 consulted at SMTP DATA time so infected mail is rejected before
 acceptance), **spam-action routing** (rspamd-flagged mail is filed into

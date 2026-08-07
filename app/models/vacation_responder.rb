@@ -13,10 +13,14 @@ require "mail_on_rails/smtp/send_quota"
 #   - each reply consumes a slot of the account's outbound send quota, so
 #     a vacationing account is bounded exactly like a sending one.
 #
-# The reply itself is marked Auto-Submitted: auto-replied (so other
-# compliant responders won't answer it back) and rides the normal
-# outbound path: SmtpOutboundMessage for remote senders, direct INBOX
-# delivery for local ones.
+# The reply is addressed to the envelope return path (RFC 3834 section 4)
+# - the one address the sending MTA had to be able to receive at - never
+# to the freely forgeable Reply-To/From headers, so a stranger can't aim
+# our DKIM-signed auto-replies at a third party. It is sent with the null
+# envelope sender, so the reply is itself unbounceable, and marked
+# Auto-Submitted: auto-replied (so other compliant responders won't
+# answer it back). It rides the normal outbound path: SmtpOutboundMessage
+# for remote senders, direct INBOX delivery for local ones.
 module VacationResponder
   REPLY_WINDOW = 7.days
 
@@ -29,20 +33,29 @@ module VacationResponder
     return false unless account.vacation_active?
     return false if bounce?(return_path) || auto_generated?(mail) || list_traffic?(mail)
 
-    recipient = reply_address(mail)
-    return false if recipient.blank? || own_address?(account, recipient)
-    return false unless VacationReply.claim(account, recipient, window: REPLY_WINDOW)
+    recipient = return_path.to_s.strip.delete("<>")
+    return false if own_address?(account, recipient)
+
+    # The free pre-check keeps repeat mail from a within-window
+    # correspondent from burning quota slots; the atomic claim comes
+    # after the quota so an exhausted quota doesn't suppress the
+    # correspondent for the whole window without ever replying.
+    claim_key = VacationReply.normalize(recipient)
+    return false if VacationReply.replied_recently?(account, claim_key, window: REPLY_WINDOW)
 
     if quota && !quota.consume(account.email)
       Rails.logger.warn "[mail_on_rails] vacation reply from #{account.email} skipped: send quota exhausted"
       return false
     end
+    return false unless VacationReply.claim(account, claim_key, window: REPLY_WINDOW)
 
     raw = build_reply(account, mail, recipient)
     if (inbox = local_inbox(recipient))
       EmailMessage.deliver_raw(inbox, raw, authenticated_as: account.email)
     else
-      SmtpOutboundMessage.create!(mail_from: account.email, recipient: recipient,
+      # Null envelope sender per RFC 3834: an undeliverable auto-reply
+      # must vanish, not bounce back to the vacationing account.
+      SmtpOutboundMessage.create!(mail_from: "", recipient: recipient,
                                   data: raw, next_attempt_at: Time.current)
     end
     Rails.logger.info "[mail_on_rails] vacation reply sent from #{account.email} to #{recipient}"
@@ -72,19 +85,15 @@ module VacationResponder
     %w[List-Id List-Post List-Unsubscribe].any? { |name| header(mail, name).present? }
   end
 
-  # Where the reply goes: Reply-To when the sender set one, else From.
-  def reply_address(mail)
-    Array(mail.reply_to).first.presence || Array(mail.from).first.presence
-  end
-
   def own_address?(account, address)
     normalized = address.to_s.strip.downcase
     account.email == normalized || account.email_aliases.exists?(email: normalized)
   end
 
   def local_inbox(recipient)
-    local = EmailAccount.find_by(email: recipient) ||
-            EmailAlias.find_by(email: recipient)&.email_account
+    address = recipient.to_s.downcase
+    local = EmailAccount.find_by(email: address) ||
+            EmailAlias.find_by(email: address)&.email_account
     local&.inbox
   end
 

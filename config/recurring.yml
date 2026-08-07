@@ -52,6 +52,25 @@ production:
     command: "ClosedConnection.prune!"
     schedule: every day at 4:43am
 
+  # Yesterday's outbound TLS outcomes, reported to every recipient
+  # domain that publishes a TLS-RPT policy (RFC 8460).
+  send_tls_rpt_reports:
+    class: SendTlsRptReportsJob
+    schedule: every day at 1:10am
+
+  # Reports only ever look one day back; the event log's write rate is
+  # set by outbound volume, so retention is enforced daily.
+  prune_tls_rpt_events:
+    command: "TlsRptEvent.prune!"
+    schedule: every day at 4:57am
+
+  # Vacation claim rows past the reply window no longer suppress
+  # anything; the write rate is set by whoever mails the vacationing
+  # account, so retention is enforced rather than assumed.
+  prune_vacation_replies:
+    command: "VacationReply.prune!"
+    schedule: every day at 4:51am
+
   # Refresh the cached MX/SPF/DKIM/DMARC statuses behind the domains
   # index pills (Domain#dns_checks). The domain page still checks live on
   # every view and writes through to the same cache.
