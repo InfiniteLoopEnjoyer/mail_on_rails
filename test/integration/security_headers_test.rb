@@ -22,6 +22,20 @@ class SecurityHeadersTest < ActionDispatch::IntegrationTest
     assert_match(%r{connect-src 'self' ws://}, policy)
   end
 
+  test "responses carry Permissions-Policy and Referrer-Policy" do
+    get new_session_path
+
+    permissions = response.headers["Permissions-Policy"]
+    assert permissions.present?, "Permissions-Policy header missing"
+    %w[camera microphone geolocation usb payment].each do |feature|
+      assert_match(/#{feature}=\(\)/, permissions)
+    end
+    # WebAuthn must stay usable: the passkey feature is not denied.
+    assert_no_match(/publickey-credentials-get=\(\)/, permissions)
+
+    assert_equal "same-origin", response.headers["Referrer-Policy"]
+  end
+
   # The email iframe is srcdoc-embedded, so its content is governed by the
   # page's own policy - which must therefore tolerate what the sanitizer
   # legitimately lets through (inline styles, data: images).

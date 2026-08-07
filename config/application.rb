@@ -20,6 +20,22 @@ module MailOnRails
     # be reloaded in development.
     config.autoload_lib(ignore: %w[assets tasks mail_on_rails puma])
 
+    # Referrer-Policy: tighter than Rails' strict-origin-when-cross-origin
+    # default - an admin UI's paths leak nothing to any external site. Links
+    # inside displayed mail already carry rel=noreferrer from the sanitizer;
+    # this covers the app chrome.
+    #
+    # Permissions-Policy: deny browser features this UI never uses. Set as a
+    # plain header because Rails' permissions_policy DSL still emits the
+    # obsolete Feature-Policy name (actionpack constants), which browsers
+    # ignore. WebAuthn's publickey-credentials-get is deliberately absent
+    # (stays at its browser default); usb blocks WebUSB only, not security
+    # keys.
+    config.action_dispatch.default_headers = config.action_dispatch.default_headers.merge(
+      "Referrer-Policy" => "same-origin",
+      "Permissions-Policy" => "camera=(), microphone=(), geolocation=(), usb=(), payment=()"
+    )
+
     # Configuration for the application, engines, and railties goes here.
     #
     # These settings can be overridden in specific environments using the files
