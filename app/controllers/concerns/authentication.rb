@@ -26,7 +26,23 @@ module Authentication
     end
 
     def find_session_by_cookie
-      Session.find_by(id: cookies.signed[:session_id]) if cookies.signed[:session_id]
+      return unless (id = cookies.signed[:session_id])
+      session = Session.find_by(id: id)
+      return unless session
+
+      if session.expired?
+        session.destroy
+        cookies.delete(:session_id)
+        return
+      end
+
+      # Sliding renewal: refresh the activity stamp and the cookie horizon,
+      # but at most once per TOUCH_INTERVAL.
+      if session.last_active_at < Session::TOUCH_INTERVAL.ago
+        session.touch_activity!
+        set_session_cookie(session)
+      end
+      session
     end
 
     def request_authentication
@@ -64,10 +80,24 @@ module Authentication
     end
 
     def start_new_session_for(user)
+      # Rotate the Rack session on the privilege change (fixation
+      # hardening), keeping only the post-login destination across it. The
+      # 2FA stash was already consumed by the time we get here.
+      return_to = session[:return_to_after_authenticating]
+      reset_session
+      session[:return_to_after_authenticating] = return_to if return_to
+
       user.sessions.create!(user_agent: request.user_agent, ip_address: request.remote_ip).tap do |session|
         Current.session = session
-        cookies.signed.permanent[:session_id] = { value: session.id, httponly: true, same_site: :lax }
+        set_session_cookie(session)
       end
+    end
+
+    def set_session_cookie(session)
+      cookies.signed[:session_id] = {
+        value: session.id, httponly: true, same_site: :lax,
+        expires: Session.cookie_lifetime.from_now
+      }
     end
 
     def terminate_session
