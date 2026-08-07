@@ -52,6 +52,36 @@ class SessionsControllerTest < ActionDispatch::IntegrationTest
     assert_equal "throttled", attempt.outcome
   end
 
+  test "signing in returns to the originally requested page" do
+    get users_path
+    assert_redirected_to new_session_path
+
+    post session_path, params: { email_address: @user.email_address, password: "password" }
+
+    assert_redirected_to users_path
+  end
+
+  # A hostile Host header must not poison the post-login redirect: only the
+  # path is stored, and url_from refuses anything that isn't same-origin.
+  test "a crafted Host header cannot turn the post-login redirect into an open redirect" do
+    get users_path, headers: { "Host" => "evil.example" }
+
+    post session_path, params: { email_address: @user.email_address, password: "password" }
+
+    assert_response :redirect
+    assert_no_match %r{\Ahttps?://evil\.example}, response.location
+    assert_equal "/users", URI.parse(response.location).path
+  end
+
+  test "a non-GET request does not set the post-login return path" do
+    delete user_path(@user)
+    assert_redirected_to new_session_path
+
+    post session_path, params: { email_address: @user.email_address, password: "password" }
+
+    assert_redirected_to root_path
+  end
+
   test "destroy" do
     sign_in_as(User.take)
 

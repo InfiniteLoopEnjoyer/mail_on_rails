@@ -30,12 +30,17 @@ module Authentication
     end
 
     def request_authentication
-      session[:return_to_after_authenticating] = request.url
+      # Store only the path+query (host-independent), and only for GETs - a
+      # non-GET couldn't be replayed by redirect anyway.
+      session[:return_to_after_authenticating] = request.fullpath if request.get?
       redirect_to new_session_path
     end
 
     def after_authentication_url
-      session.delete(:return_to_after_authenticating) || root_url
+      # url_from rejects anything not same-origin: absolute URLs to other
+      # hosts and protocol-relative "//evil.example/..." (which fullpath can
+      # still produce for a crafted request line).
+      url_from(session.delete(:return_to_after_authenticating)) || root_url
     end
 
     # Password accepted but a second factor is required: park the user id in
