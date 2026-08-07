@@ -2,7 +2,7 @@
 
 require "socket"
 require "timeout"
-require_relative "config"
+require_relative "../netserv/config"
 
 module MailOnRails
   module Smtp
@@ -28,7 +28,7 @@ module MailOnRails
       # spec[:clamav_addr]/[:clamav_timeout] override these (the test
       # seam). Unset/empty addr disables scanning.
       ADDR = ENV["SMTP_CLAMAV_ADDR"].to_s.strip.freeze
-      TIMEOUT = Smtp::Config.int("SMTP_CLAMAV_TIMEOUT", 10, min: 1)
+      TIMEOUT = Netserv::Config.int("SMTP_CLAMAV_TIMEOUT", 10, min: 1)
 
       def self.enabled? = !ADDR.empty?
 

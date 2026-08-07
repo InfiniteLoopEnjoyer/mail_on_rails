@@ -1,16 +1,16 @@
 # frozen_string_literal: true
 
 module MailOnRails
-  module Smtp
+  module Netserv
     # Per-IP lockout for repeated authentication failures. A session can only
     # count its own attempts (MAX_AUTH_ATTEMPTS per connection), so a client
     # that reconnects gets a fresh allowance - and every guess costs the host
     # app an HTTP credential check. This throttle spans connections.
     #
-    # Lives on the accept side: worker Ractors are isolated, so shared abuse
-    # state cannot live in sessions. Workers report failures upward (directly
-    # in thread mode, over a pipe in Ractor mode) and the accept loop refuses
-    # connections from locked-out IPs outright with a 421. Tempfail semantics
+    # Lives on the accept side, where the state is shared across every
+    # connection: sessions report failures upward through on_auth_failure
+    # and the accept loop refuses connections from locked-out IPs outright
+    # with the protocol's locked_line. Tempfail semantics
     # are deliberate: if a NAT/shared IP hosts both an abuser and a
     # legitimate sender, the legitimate mail is delayed for the lockout
     # window, never lost.

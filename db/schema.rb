@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_07_153000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_07_194501) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -219,6 +219,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_07_153000) do
     t.index ["mailbox_id", "uid"], name: "index_email_messages_on_mailbox_id_and_uid", unique: true
     t.index ["mailbox_id"], name: "index_email_messages_on_mailbox_id"
     t.index ["message_id"], name: "index_email_messages_on_message_id"
+    t.index ["scan_status"], name: "index_email_messages_on_unscanned", where: "((scan_status)::text = 'unscanned'::text)"
     t.index ["search_vector"], name: "index_email_messages_on_search_vector", using: :gin
   end
 

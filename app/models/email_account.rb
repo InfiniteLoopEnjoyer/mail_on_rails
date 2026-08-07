@@ -4,7 +4,16 @@ class EmailAccount < ApplicationRecord
   has_secure_password
   include GeneratedPassword
 
-  SCRAM_ITERATIONS = 4096 # RFC 7677 minimum; the heavy PBKDF2 runs client-side
+  # PBKDF2-SHA256 cost served to SCRAM clients. The heavy derivation runs
+  # client-side once per authentication (tens of ms native), but the
+  # stored key it produces is offline-crackable if the rows and their
+  # encryption key both leak - and 4096, RFC 7677's 2015-era floor, does
+  # not slow that attack meaningfully. 100k sits well above MongoDB's 15k
+  # SCRAM default while staying unnoticeable at login. Stored per row and
+  # served back from there, so existing accounts keep their old cost
+  # until the next password change. Keep in step with
+  # MailOnRails::Imap::Scram::ITERATIONS.
+  SCRAM_ITERATIONS = 100_000
 
   # The stored/server keys are password-verifier material - not the
   # password, but worth encrypting at rest like otp_secret.

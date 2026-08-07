@@ -6,5 +6,5 @@
 # satisfying the IMAP store contract (MailOnRails::Imap::Store::Contracts) -
 # in this app, the ActiveRecord-backed MailOnRails::Store::ImapBackend.
 require_relative "imap/version"
-require_relative "imap/server"
+require_relative "netserv/server"
 require_relative "imap_server"

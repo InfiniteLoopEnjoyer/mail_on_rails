@@ -2,7 +2,7 @@
 
 require "socket"
 require "logger"
-require_relative "config"
+require_relative "../netserv/config"
 require_relative "../smtp_server"
 require_relative "tls"
 
@@ -38,7 +38,7 @@ module MailOnRails
         logger.info "[mail_on_rails] config OK: ports #{specs.map { |s| s[:port] }.join("/")} on #{host}, " \
                     "hostname #{specs.first[:hostname]}, TLS #{tls_summary}"
         true
-      rescue TLS::Error, Config::Error => e
+      rescue TLS::Error, Netserv::Config::Error => e
         logger.error "[mail_on_rails] config error: #{e.message}"
         false
       end
@@ -93,7 +93,7 @@ module MailOnRails
         ]
         ports = specs.map { |s| s[:port] }
         unless ports.uniq.size == ports.size
-          raise Config::Error, "listener ports must be distinct, got #{ports.join(", ")}"
+          raise Netserv::Config::Error, "listener ports must be distinct, got #{ports.join(", ")}"
         end
 
         specs
@@ -107,7 +107,7 @@ module MailOnRails
       end
 
       def env_port(name, default)
-        Config.port(name, default)
+        Netserv::Config.port(name, default)
       end
 
       def default_logger

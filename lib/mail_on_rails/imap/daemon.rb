@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "logger"
+require_relative "../netserv/config"
 require_relative "../imap_server"
 require_relative "tls"
 
@@ -43,10 +44,16 @@ module MailOnRails
       end
 
       def listeners(host)
-        [
+        specs = [
           { host: host, port: env_port("MAIL_ON_RAILS_IMAP_PORT", 1143), tls: :starttls },
           { host: host, port: env_port("MAIL_ON_RAILS_IMAPS_PORT", 1993), tls: :implicit }
         ]
+        ports = specs.map { |s| s[:port] }
+        unless ports.uniq.size == ports.size
+          raise Netserv::Config::Error, "listener ports must be distinct, got #{ports.join(", ")}"
+        end
+
+        specs
       end
 
       # Hash of plain strings (PEMs or file paths); nil if unavailable.
@@ -57,7 +64,7 @@ module MailOnRails
       end
 
       def env_port(name, default)
-        Integer(ENV.fetch(name, default))
+        Netserv::Config.port(name, default)
       end
 
       def default_logger

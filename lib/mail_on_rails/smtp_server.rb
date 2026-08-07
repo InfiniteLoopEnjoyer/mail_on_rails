@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 require "time"
-require "mail_on_rails/smtp/config"
-require "mail_on_rails/smtp/server"
+require "mail_on_rails/netserv/config"
+require "mail_on_rails/netserv/server"
+require "mail_on_rails/smtp/tls"
 require "mail_on_rails/smtp/session_helpers"
 require "mail_on_rails/smtp/sender_auth"
 require "mail_on_rails/smtp/dnsbl"
@@ -27,7 +28,7 @@ module MailOnRails
   # Accepted messages are persisted through the store's SMTP interface -
   # the ActiveRecord-backed Store::SmtpBackend in the app, Store::Memory in
   # tests.
-  class SmtpServer < Smtp::Server
+  class SmtpServer < Netserv::Server
     # 1 MB under clamd's 25 MB StreamMaxLength: the app-side rescan streams
     # the message with our added headers, and a max-size message must not
     # blow the scanner's cap (which fails closed as a 451, forever).
@@ -40,7 +41,7 @@ module MailOnRails
     # Per-session budget for 5xx syntax/state errors: a legitimate client
     # never accumulates these, a fuzzer or spam cannon does.
     MAX_PROTOCOL_ERRORS = 8
-    MAX_CONNECTIONS = Smtp::Config.int("SMTP_MAX_CONN", 100, min: 1)
+    MAX_CONNECTIONS = Netserv::Config.int("SMTP_MAX_CONN", 100, min: 1)
     # Per-IP anti-abuse, enforced on the accept side (ConnLimiter /
     # AuthThrottle): concurrent-connection cap per peer IP, and a lockout
     # after repeated failed AUTHs (which otherwise cost the host app an HTTP
@@ -49,14 +50,14 @@ module MailOnRails
     # authenticated senders lives session-side instead (Smtp::SendQuota,
     # consumed at RCPT) - the abuse it bounds, one stolen credential worked
     # from many IPs, is invisible to everything keyed by peer address.
-    MAX_CONNECTIONS_PER_IP = Smtp::Config.int("SMTP_MAX_CONN_PER_IP", 10)
-    AUTH_LOCKOUT_FAILURES = Smtp::Config.int("SMTP_AUTH_LOCKOUT_FAILURES", 10)
-    AUTH_LOCKOUT_SECONDS = Smtp::Config.int("SMTP_AUTH_LOCKOUT_SECONDS", 900, min: 1)
+    MAX_CONNECTIONS_PER_IP = Netserv::Config.int("SMTP_MAX_CONN_PER_IP", 10)
+    AUTH_LOCKOUT_FAILURES = Netserv::Config.int("SMTP_AUTH_LOCKOUT_FAILURES", 10)
+    AUTH_LOCKOUT_SECONDS = Netserv::Config.int("SMTP_AUTH_LOCKOUT_SECONDS", 900, min: 1)
     # Sliding-window connection rate per peer IP; connections over the
     # budget are tarpitted with an escalating pre-banner delay (see
-    # Smtp::RateLimiter). 0 disables.
-    CONN_RATE_LIMIT = Smtp::Config.int("SMTP_CONN_RATE", 60)
-    CONN_RATE_WINDOW = Smtp::Config.int("SMTP_CONN_RATE_WINDOW", 60, min: 1)
+    # Netserv::RateLimiter). 0 disables.
+    CONN_RATE_LIMIT = Netserv::Config.int("SMTP_CONN_RATE", 60)
+    CONN_RATE_WINDOW = Netserv::Config.int("SMTP_CONN_RATE_WINDOW", 60, min: 1)
     # Protocol tracing default; per-listener spec[:trace] overrides. Read
     # at load time - in the app these files load from the Puma plugin, with
     # the environment already set.
@@ -74,6 +75,10 @@ module MailOnRails
     def listener_label(spec) = "#{spec[:port]}/#{spec[:tls]}/#{spec[:role]}"
 
     def session_class = Session
+
+    def tls_module = Smtp::TLS
+
+    def denylist_env = "SMTP_DENYLIST_FILE"
 
     class Session
       include Smtp::SessionHelpers

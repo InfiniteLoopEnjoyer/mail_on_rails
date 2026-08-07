@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module MailOnRails
-  module Smtp
+  module Netserv
     # Caps the number of simultaneously open connections a server will handle,
     # bounding thread and file-descriptor use under a connection flood - both
     # process-wide and per peer IP, so a single address cannot hold every

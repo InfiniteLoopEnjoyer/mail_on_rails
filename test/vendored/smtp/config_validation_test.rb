@@ -4,14 +4,14 @@ require "test_helper"
 require "tmpdir"
 require "logger"
 require "stringio"
-require "mail_on_rails/smtp/config"
+require "mail_on_rails/netserv/config"
 require "mail_on_rails/smtp/daemon"
 
 # Boot-time configuration validation: a bad value must name itself and
 # fail the boot / the Daemon.check_config preflight, and
 # legal-but-almost-certainly-wrong settings must warn.
 class ConfigValidationTest < Minitest::Test
-  Config = MailOnRails::Smtp::Config
+  Config = MailOnRails::Netserv::Config
   Daemon = MailOnRails::Smtp::Daemon
 
   ENV_PATTERN = /\A(SMTPS?_|RAILS_INBOUND_EMAIL_)/

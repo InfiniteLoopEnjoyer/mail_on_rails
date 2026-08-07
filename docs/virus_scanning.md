@@ -43,7 +43,12 @@ both readers - there is no separate switch to fall out of sync.
 App-side review copies land in the account's auto-created `Quarantine`
 mailbox — visible in the web UI, hidden from IMAP `LIST`, deduped by
 Message-ID across sender retries; a later clean delivery sweeps stale
-`unscanned` copies (never `infected` ones). There are deliberately no
+review copies (never `infected` ones). `unscanned` is never a terminal
+state: `RescanUnscannedMessagesJob` (hourly, `config/recurring.yml`)
+rescans every such row once clamd is back and records the verdict in
+place — no re-filing, whether clean or infected, since these rows are
+either quarantine review copies or the owner's own writes; attachment
+downloads stay locked until a real verdict lands. There are deliberately no
 post-acceptance bounce emails: senders learn of rejection from their own
 MTA (no backscatter). One extra gate rides on the app scan: mail to a
 domain's `dmarc@` ingestion account is only parsed for aggregate reports

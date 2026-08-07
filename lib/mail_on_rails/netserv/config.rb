@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module MailOnRails
-  module Smtp
+  module Netserv
     # Typed ENV reads with actionable failure messages. Misconfiguration is
     # a top cause of deployment outages: a bad value must name itself and
     # fail the boot (or `bin/server --check-config`), not surface as a bare

@@ -126,6 +126,15 @@ jobs:
       - name: Install libvips
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvips
 
+      # DatabaseBackupJobTest shells out to pg_dump, which refuses to dump
+      # a server newer than itself - the runner ships the v16 client while
+      # the service container (and production) run postgres 17. PGDG has
+      # the matching client.
+      - name: Install PostgreSQL 17 client
+        run: |
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y --no-install-recommends postgresql-client-17
+
       - name: Run tests
         env:
           RAILS_ENV: test

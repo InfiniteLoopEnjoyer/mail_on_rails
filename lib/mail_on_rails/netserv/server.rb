@@ -6,13 +6,15 @@ require_relative "conn_limiter"
 require_relative "auth_throttle"
 require_relative "rate_limiter"
 require_relative "denylist"
-require_relative "tls"
 
 module MailOnRails
-  module Smtp
-    # Listener scaffolding for the SMTP server: one accept thread per
-    # listener spec, one thread per connection, connection caps, per-IP
-    # anti-abuse state, and TLS material handling.
+  module Netserv
+    # Listener scaffolding shared by the SMTP and IMAP servers: one accept
+    # thread per listener spec, one thread per connection, connection caps,
+    # per-IP anti-abuse state, and TLS material handling. Keeping this in
+    # one place means the flood, lockout and TLS-accept behavior cannot
+    # drift apart between the two protocols (it did once: the IMAP fork
+    # missed every per-IP protection SMTP grew).
     #
     # Sessions do not run on the accept threads. Each accepted socket gets
     # its own thread: the tarpit delay the RateLimiter handed out is slept
@@ -26,9 +28,11 @@ module MailOnRails
     # the per-IP auth-failure lockout, the per-IP connection rate and the
     # admin ban list stay exact process-wide.
     #
-    # Subclasses define MAX_CONNECTIONS and the protocol specifics:
-    # protocol_name, busy_line (sent when the connection cap is hit),
-    # listener_label(spec) and session_class.
+    # Subclasses define MAX_CONNECTIONS (plus the per-IP constants below)
+    # and the protocol specifics: protocol_name, busy_line (sent when the
+    # connection cap is hit), listener_label(spec), session_class,
+    # tls_module (the protocol's TLS module - each reads its own env
+    # prefix), and optionally locked_line and denylist_env.
     class Server
       # Reap dead peers at the TCP layer (Postal's timings): first probe
       # after 50s idle, then every 10s, gone after 5 unanswered probes -
@@ -74,7 +78,7 @@ module MailOnRails
                                      window: self.class::AUTH_LOCKOUT_SECONDS)
         @rate = RateLimiter.new(limit: self.class::CONN_RATE_LIMIT,
                                 window: self.class::CONN_RATE_WINDOW)
-        @denylist = Denylist.new(ENV["SMTP_DENYLIST_FILE"])
+        @denylist = Denylist.new(denylist_env && ENV[denylist_env])
         # Lifecycle state shared between the accept threads, the connection
         # threads, and the host's boot/shutdown calls.
         @lifecycle = Mutex.new
@@ -89,7 +93,7 @@ module MailOnRails
       def run
         # Build the context at boot so TLS problems surface here, not on
         # the first connection.
-        @tls = @tls_material && TLS::ContextProvider.new(@tls_material)
+        @tls = @tls_material && tls_module::ContextProvider.new(@tls_material)
 
         active = @listeners.reject { |spec| spec[:tls] == :implicit && @tls.nil? }
         @lifecycle.synchronize do
@@ -132,8 +136,8 @@ module MailOnRails
       # the stragglers' sockets - which raises in their blocked reads and
       # unwinds them through their normal ensure paths. Store operations
       # already in progress complete either way (only socket IO raises), so
-      # nothing is half-written; a sender cut mid-DATA never got its 250
-      # and retries. No goodbye line is written: sessions may be mid-TLS,
+      # nothing is half-written; an interrupted client reconnects or, for
+      # SMTP, retries. No goodbye line is written: sessions may be mid-TLS,
       # and a concurrent write on their SSL socket from this thread is not
       # safe.
       def shutdown(drain: 5)
@@ -260,7 +264,7 @@ module MailOnRails
         ctx = @tls&.context
         if spec[:tls] == :implicit && ctx
           socket.timeout = spec[:handshake_timeout] || HANDSHAKE_TIMEOUT if socket.respond_to?(:timeout=)
-          socket = TLS.accept(socket, ctx)
+          socket = tls_module.accept(socket, ctx)
         end
         session = session_class.new(socket, @store, spec, ctx)
         # Sessions that support it report failed AUTHs so the per-IP
@@ -341,6 +345,10 @@ module MailOnRails
       # Sent to connections from locked-out IPs; protocol subclasses may
       # override with a more specific message.
       def locked_line = busy_line
+
+      # Name of the env var holding the protocol's banned_ips file path;
+      # nil (the default) leaves the admin denylist off.
+      def denylist_env = nil
     end
   end
 end

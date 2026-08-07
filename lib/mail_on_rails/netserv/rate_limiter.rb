@@ -3,7 +3,7 @@
 require "ipaddr"
 
 module MailOnRails
-  module Smtp
+  module Netserv
     # Per-IP sliding-window connection rate, answered with an escalating
     # tarpit delay rather than a refusal. Completes the per-IP anti-abuse
     # set: ConnLimiter caps concurrent connections, AuthThrottle locks out

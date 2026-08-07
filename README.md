@@ -7,11 +7,18 @@ submission), IMAP, and a web UI, with mail stored in PostgreSQL.
 
 One container runs everything: Puma serves the web UI and Solid Queue,
 and the `:mail_on_rails` Puma plugin boots the SMTP server (MX +
-authenticated submission, STARTTLS/implicit TLS, AUTH, DoS caps) and the
-IMAP server on background threads in the same process.
+authenticated submission) and the IMAP server on background threads in
+the same process. Both servers run on shared listener scaffolding
+(`lib/mail_on_rails/netserv`) carrying the accept-side protections:
+process-wide and per-IP connection caps, a per-IP connection-rate
+tarpit, a per-IP lockout after repeated failed authentications, the
+admin IP denylist, and fail-closed TLS when explicit cert paths are
+configured (`SMTP_*` / `MAIL_ON_RAILS_IMAP_*` env knobs, `0` disables
+any of them).
 
 The protocol servers are Rails-free and vendored under
-`lib/mail_on_rails/smtp*` and `lib/mail_on_rails/imap`; each speaks to a
+`lib/mail_on_rails/smtp*`, `lib/mail_on_rails/imap` and
+`lib/mail_on_rails/netserv`; each speaks to a
 **store** (interface in `docs/store_contract.md`) whose Active
 Record-backed implementations are this app's. Inbound mail is
 SPF/DKIM/DMARC-verified and virus-scanned at SMTP DATA time (infected →
@@ -113,7 +120,14 @@ correspondent's weekly slot, and the claim table is pruned daily),
 SPF/DKIM/DMARC
 verification of inbound mail (rspamd) and virus scanning (ClamAV,
 consulted at SMTP DATA time so infected mail is rejected before
-acceptance), **spam-action routing** (rspamd-flagged mail is filed into
+acceptance; authenticated writes that fail open during a scanner outage
+are swept hourly by `RescanUnscannedMessagesJob` until every `unscanned`
+row has a real verdict), **IMAP/SMTP accept-side parity** (per-IP
+connection caps, connection-rate tarpit and auth lockout on both
+protocols, from the shared `netserv` scaffolding), a **configurable
+published MTA-STS mode** (`MAIL_ON_RAILS_MTA_STS_MODE`, `testing` by
+default — flip to `enforce` once TLS-RPT comes back clean and the policy
+id self-bumps on the next DNS publish), **spam-action routing** (rspamd-flagged mail is filed into
 Junk instead of INBOX, with mark/unmark spam in the web UI), outbound
 DKIM signing plus the SMTP-side abuse tripwires (send quota, rspamd DATA
 gate, IP/range bans enforced at every edge), **dynamic domain

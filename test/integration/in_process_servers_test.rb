@@ -51,6 +51,7 @@ class InProcessServersTest < ActiveSupport::TestCase
     SmtpOutboundMessage.delete_all
     AuthAttempt.delete_all
     AuthThrottle.delete_all
+    ClosedConnection.delete_all
     EmailAccount.where(email: EMAIL).destroy_all
   end
 

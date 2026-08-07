@@ -61,7 +61,15 @@ servers:
         # TLS for the mail listeners: the certbot accessory (below) renews
         # into /etc/letsencrypt on the host, mounted read-only into this
         # container. Both servers re-read the PEMs on mtime change, so a
-        # renewal needs no restart.
+        # renewal needs no restart. With these set, unusable material is
+        # fatal at boot on both protocols - explicitly configured TLS
+        # never degrades to plaintext.
+        #
+        # Accept-side abuse caps (per-IP connection cap, connection-rate
+        # tarpit, auth lockout) default on for both protocols; tune or
+        # disable (0) with SMTP_MAX_CONN_PER_IP / SMTP_CONN_RATE /
+        # SMTP_AUTH_LOCKOUT_FAILURES and their MAIL_ON_RAILS_IMAP_*
+        # equivalents.
         MAIL_ON_RAILS_TLS_CERT: /etc/letsencrypt/live/mail.example.com/fullchain.pem
         MAIL_ON_RAILS_TLS_KEY: /etc/letsencrypt/live/mail.example.com/privkey.pem
         SMTP_TLS_CERT: /etc/letsencrypt/live/mail.example.com/fullchain.pem

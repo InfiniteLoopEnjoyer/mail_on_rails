@@ -14,7 +14,11 @@ module MailOnRails
     module Scram
       DIGEST = "SHA256"
       KEY_LENGTH = 32
-      ITERATIONS = 4096 # RFC 7677 minimum; the expensive PBKDF2 runs client-side
+      # Default derivation cost (the app's EmailAccount::SCRAM_ITERATIONS
+      # mirrors this): well above RFC 7677's 4096 floor, which no longer
+      # slows an offline attack on a leaked stored key meaningfully. The
+      # expensive PBKDF2 runs client-side, once per authentication.
+      ITERATIONS = 100_000
 
       module_function
 

@@ -29,6 +29,14 @@ production:
     class: ScanPendingDmarcReportsJob
     schedule: every hour at minute 41
 
+  # Authenticated writes (IMAP APPEND, web import, composer copies) fail
+  # open during a clamd outage and land as scan_status "unscanned", with
+  # attachment downloads locked. A scanner outage must not leave them
+  # that way forever; this gets every such row a real verdict.
+  rescan_unscanned_messages:
+    class: RescanUnscannedMessagesJob
+    schedule: every hour at minute 35
+
   # Auth throttle counters are only read for live windows and blocks; this
   # keeps the table from growing without bound under a sustained attack.
   prune_auth_throttles:

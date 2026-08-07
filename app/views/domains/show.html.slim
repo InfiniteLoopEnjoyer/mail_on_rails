@@ -67,7 +67,7 @@ p.mb-6.text-xs.text-slate-500.dark:text-slate-400
   ' . Aggregate reports are delivered to
   code<>= @domain.dmarc_address
   '  (auto-created) and parsed automatically.
-  ' MTA-STS senders fetch the policy (currently mode: #{MtaSts::MODE}) from
+  ' MTA-STS senders fetch the policy (currently mode: #{MtaSts.mode}) from
   code<> https://mta-sts.#{@domain.name}/.well-known/mta-sts.txt
   ' - publishing creates that CNAME, and this app serves the file; the
   ' host must also be listed under the kamal proxy's hosts so it gets a

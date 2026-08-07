@@ -216,9 +216,9 @@ class MailroomMailbox < ApplicationMailbox
                       "#{" (#{verdict[:virus]})" if verdict[:virus]}"
   end
 
-  # A clean delivery supersedes "unscanned" review copies of the same
-  # message left behind by 451 tempfails (clamd was down, the sender
-  # retried, the retry scanned clean). Never touches "infected" rows.
+  # A clean delivery supersedes review copies of the same message left
+  # behind by 451 tempfails (clamd was down, the sender retried, the
+  # retry scanned clean). Never touches "infected" rows.
   def sweep_stale_unscanned(account)
     mid = mail.message_id.to_s.presence
     return unless mid
@@ -226,8 +226,12 @@ class MailroomMailbox < ApplicationMailbox
     mailbox = account.find_mailbox(Mailbox::QUARANTINE)
     return unless mailbox
 
-    swept = mailbox.email_messages.where(message_id: mid, scan_status: "unscanned").delete_all
-    Rails.logger.info "[mail_on_rails] swept #{swept} stale unscanned quarantine copies for #{account.email}" if swept.positive?
+    # "clean" is included because RescanUnscannedMessagesJob may have
+    # upgraded the stale copy's verdict before the sender's 451-retry
+    # landed; a superseded review copy is swept either way. "infected"
+    # copies are never touched - that verdict must not be discarded.
+    swept = mailbox.email_messages.where(message_id: mid, scan_status: %w[unscanned clean]).delete_all
+    Rails.logger.info "[mail_on_rails] swept #{swept} stale quarantine copies for #{account.email}" if swept.positive?
   end
 
   def header_values(name)

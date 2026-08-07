@@ -3,7 +3,7 @@
 require "test_helper"
 require "tmpdir"
 require "fileutils"
-require "mail_on_rails/imap/denylist"
+require "mail_on_rails/netserv/denylist"
 
 # The banned_ips file reader: matching, fail-soft parsing, and the
 # mtime-driven reload contract (see Denylist).
@@ -19,7 +19,7 @@ class DenylistTest < Minitest::Test
 
   # ttl 0 stats on every call, so tests never wait out the throttle.
   def denylist(ttl: 0)
-    MailOnRails::Imap::Denylist.new(@path, ttl: ttl)
+    MailOnRails::Netserv::Denylist.new(@path, ttl: ttl)
   end
 
   def write(content, mtime: nil)
@@ -28,8 +28,8 @@ class DenylistTest < Minitest::Test
   end
 
   test "disabled without a path" do
-    assert_not MailOnRails::Imap::Denylist.new(nil).banned?("203.0.113.7")
-    assert_not MailOnRails::Imap::Denylist.new("").banned?("203.0.113.7")
+    assert_not MailOnRails::Netserv::Denylist.new(nil).banned?("203.0.113.7")
+    assert_not MailOnRails::Netserv::Denylist.new("").banned?("203.0.113.7")
   end
 
   test "a missing file means no bans" do

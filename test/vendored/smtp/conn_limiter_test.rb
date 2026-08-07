@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
 require "test_helper"
-require "mail_on_rails/smtp/conn_limiter"
+require "mail_on_rails/netserv/conn_limiter"
 
 class ConnLimiterTest < Minitest::Test
-  Limiter = MailOnRails::Smtp::ConnLimiter
+  Limiter = MailOnRails::Netserv::ConnLimiter
 
   test "process-wide cap acquires and releases" do
     limiter = Limiter.new(2)

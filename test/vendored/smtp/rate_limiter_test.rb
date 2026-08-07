@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
 require "test_helper"
-require "mail_on_rails/smtp/rate_limiter"
+require "mail_on_rails/netserv/rate_limiter"
 
 class RateLimiterTest < Minitest::Test
-  Limiter = MailOnRails::Smtp::RateLimiter
+  Limiter = MailOnRails::Netserv::RateLimiter
 
   def limiter(limit: 3, window: 60, **kwargs)
     @now = 0.0

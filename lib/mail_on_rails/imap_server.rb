@@ -5,7 +5,9 @@ require "date"
 require "time"
 require "securerandom"
 require "mail_on_rails/imap/scram"
-require "mail_on_rails/imap/server"
+require "mail_on_rails/netserv/config"
+require "mail_on_rails/netserv/server"
+require "mail_on_rails/imap/tls"
 require "mail_on_rails/imap/session_helpers"
 require "mail_on_rails/imap/utf7"
 require "mail_on_rails/imap/version"
@@ -23,7 +25,7 @@ module MailOnRails
   # Listens on a plaintext+STARTTLS port and an
   # implicit-TLS port; credentials are refused until the channel is
   # encrypted (LOGINDISABLED advertised in the clear).
-  class ImapServer < Imap::Server
+  class ImapServer < Netserv::Server
     FLAGS = "\\Answered \\Flagged \\Deleted \\Seen \\Draft"
     MAX_LITERAL_BYTES = 30 * 1024 * 1024
     # Base capabilities; STARTTLS/LOGINDISABLED/AUTH are appended per-state.
@@ -36,12 +38,24 @@ module MailOnRails
     # store is the source of truth and other writers (delivery through the
     # Rails app, other sessions, possibly other daemon processes) don't
     # share this process, so polling it is the only complete update source.
-    IDLE_POLL_SECONDS = Integer(ENV.fetch("MAIL_ON_RAILS_IMAP_IDLE_POLL", 30))
+    IDLE_POLL_SECONDS = Netserv::Config.int("MAIL_ON_RAILS_IMAP_IDLE_POLL", 30, min: 1)
     # Cap on a single (non-literal) command line, so a client can't exhaust
     # memory by sending endless bytes with no CRLF. Bulk data uses {n} IMAP
     # literals, which are bounded separately by MAX_LITERAL_BYTES.
-    MAX_LINE = Integer(ENV.fetch("MAIL_ON_RAILS_IMAP_MAX_LINE", 65_536))
-    MAX_CONNECTIONS = Integer(ENV.fetch("MAIL_ON_RAILS_IMAP_MAX_CONN", 100))
+    MAX_LINE = Netserv::Config.int("MAIL_ON_RAILS_IMAP_MAX_LINE", 65_536, min: 1024)
+    MAX_CONNECTIONS = Netserv::Config.int("MAIL_ON_RAILS_IMAP_MAX_CONN", 100, min: 1)
+    # Per-IP anti-abuse, enforced on the accept side (Netserv::ConnLimiter /
+    # AuthThrottle / RateLimiter), mirroring the SMTP server's SMTP_* set:
+    # concurrent-connection cap per peer IP, a lockout after repeated failed
+    # LOGIN/AUTHENTICATE attempts (which otherwise cost a bcrypt check each,
+    # MAX_AUTH_ATTEMPTS per connection, fresh on every reconnect), and a
+    # sliding-window connection rate answered with a pre-greeting tarpit.
+    # 0 disables any of them.
+    MAX_CONNECTIONS_PER_IP = Netserv::Config.int("MAIL_ON_RAILS_IMAP_MAX_CONN_PER_IP", 10)
+    AUTH_LOCKOUT_FAILURES = Netserv::Config.int("MAIL_ON_RAILS_IMAP_AUTH_LOCKOUT_FAILURES", 10)
+    AUTH_LOCKOUT_SECONDS = Netserv::Config.int("MAIL_ON_RAILS_IMAP_AUTH_LOCKOUT_SECONDS", 900, min: 1)
+    CONN_RATE_LIMIT = Netserv::Config.int("MAIL_ON_RAILS_IMAP_CONN_RATE", 60)
+    CONN_RATE_WINDOW = Netserv::Config.int("MAIL_ON_RAILS_IMAP_CONN_RATE_WINDOW", 60, min: 1)
     MAX_AUTH_ATTEMPTS = 3
 
     private
@@ -50,9 +64,15 @@ module MailOnRails
 
     def busy_line = "* BYE Too many connections"
 
+    def locked_line = "* BYE Too many failed authentication attempts, try later"
+
     def listener_label(spec) = "#{spec[:port]}/#{spec[:tls]}"
 
     def session_class = Session
+
+    def tls_module = Imap::TLS
+
+    def denylist_env = "MAIL_ON_RAILS_IMAP_DENYLIST_FILE"
 
     # Splits a command line (with literals already inlined as separate
     # elements) into tokens: strings, :lparen and :rparen.
@@ -100,6 +120,10 @@ module MailOnRails
     class Session
       include Imap::SessionHelpers
 
+      # Set by Server when per-IP auth throttling is active: a no-arg
+      # callable invoked once per failed authentication attempt.
+      attr_writer :on_auth_failure
+
       def initialize(socket, store, spec, tls_ctx)
         @socket = socket
         @store = store
@@ -109,6 +133,7 @@ module MailOnRails
         @account_id = nil
         @username = nil
         @idling = false
+        @on_auth_failure = nil
         @auth_attempts = 0
         @selected = nil
         @uids = []
@@ -541,9 +566,15 @@ module MailOnRails
       end
 
       # Shared failed-auth accounting for LOGIN/AUTHENTICATE paths that
-      # don't go through the store's password check.
+      # don't go through the store's password check. Reported to the
+      # accept-side per-IP throttle before the reply is written, so a
+      # lockout is in force by the time the client can react to the NO -
+      # same ordering as the SMTP session. Store-throttled and store-error
+      # outcomes never come through here: the credentials were not checked,
+      # so they must not count toward the lockout.
       def auth_failure(tag, user)
         @auth_attempts += 1
+        @on_auth_failure&.call
         @store.log(:warn, "IMAP auth failed for #{user.to_s.empty? ? "(empty)" : user} (#{peer_ip}, attempt #{@auth_attempts}/#{MAX_AUTH_ATTEMPTS})")
         tagged tag, "NO [AUTHENTICATIONFAILED] Invalid credentials"
         disconnect_if_attempts_exhausted

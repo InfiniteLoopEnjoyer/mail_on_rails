@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require_relative "config"
+require_relative "../netserv/config"
 
 module MailOnRails
   module Smtp
@@ -24,8 +24,8 @@ module MailOnRails
     class SendQuota
       # Read at load time (in the app these files load from the Puma
       # plugin, with the environment already set). 0 disables.
-      LIMIT = Config.int("SMTP_SEND_QUOTA", 200)
-      WINDOW = Config.int("SMTP_SEND_QUOTA_WINDOW", 3600, min: 1)
+      LIMIT = Netserv::Config.int("SMTP_SEND_QUOTA", 200)
+      WINDOW = Netserv::Config.int("SMTP_SEND_QUOTA_WINDOW", 3600, min: 1)
       SWEEP_THRESHOLD = 1_000 # purge idle accounts when the table grows past this
 
       # The process-wide quota, or nil when disabled by SMTP_SEND_QUOTA=0.

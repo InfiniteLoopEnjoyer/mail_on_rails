@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "ipaddr"
-require_relative "config"
+require_relative "../netserv/config"
 require_relative "sender_auth/dns"
 
 module MailOnRails
@@ -25,7 +25,7 @@ module MailOnRails
       # Parsed at load - in the app these files load from the Puma plugin,
       # with the environment already set. Empty means disabled.
       ZONES = ENV["SMTP_RBLS"].to_s.split(/[\s,]+/).reject(&:empty?).freeze
-      CACHE_TTL = Config.int("SMTP_RBL_CACHE_TTL", 600, min: 1)
+      CACHE_TTL = Netserv::Config.int("SMTP_RBL_CACHE_TTL", 600, min: 1)
       SWEEP_THRESHOLD = 10_000 # purge expired verdicts when the cache grows past this
 
       # The process-wide checker, or nil when no zones are configured.

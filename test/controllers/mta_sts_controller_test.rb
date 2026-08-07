@@ -7,7 +7,7 @@ class MtaStsControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :success
     assert_match %r{\Atext/plain}, response.content_type
-    assert_equal "version: STSv1\r\nmode: #{MtaSts::MODE}\r\nmx: mail.host.test\r\nmax_age: #{MtaSts::MAX_AGE}\r\n", response.body
+    assert_equal "version: STSv1\r\nmode: #{MtaSts.mode}\r\nmx: mail.host.test\r\nmax_age: #{MtaSts.max_age}\r\n", response.body
   ensure
     ENV.delete("SMTP_HELO_HOST")
   end

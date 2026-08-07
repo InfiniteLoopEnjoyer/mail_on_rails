@@ -204,9 +204,9 @@ class ServerDispatchTest < Minitest::Test
     assert_predicate accepted.getsockopt(:SOCKET, :KEEPALIVE), :bool
     skip "no TCP_KEEP* constants on this platform" unless Socket.const_defined?(:TCP_KEEPIDLE)
 
-    assert_equal MailOnRails::Imap::Server::KEEPALIVE_IDLE, accepted.getsockopt(:TCP, :KEEPIDLE).int
-    assert_equal MailOnRails::Imap::Server::KEEPALIVE_INTERVAL, accepted.getsockopt(:TCP, :KEEPINTVL).int
-    assert_equal MailOnRails::Imap::Server::KEEPALIVE_PROBES, accepted.getsockopt(:TCP, :KEEPCNT).int
+    assert_equal MailOnRails::Netserv::Server::KEEPALIVE_IDLE, accepted.getsockopt(:TCP, :KEEPIDLE).int
+    assert_equal MailOnRails::Netserv::Server::KEEPALIVE_INTERVAL, accepted.getsockopt(:TCP, :KEEPINTVL).int
+    assert_equal MailOnRails::Netserv::Server::KEEPALIVE_PROBES, accepted.getsockopt(:TCP, :KEEPCNT).int
   end
 
   private

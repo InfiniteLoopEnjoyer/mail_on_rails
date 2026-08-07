@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
 require "test_helper"
-require "mail_on_rails/smtp/auth_throttle"
+require "mail_on_rails/netserv/auth_throttle"
 
 class AuthThrottleTest < Minitest::Test
-  Throttle = MailOnRails::Smtp::AuthThrottle
+  Throttle = MailOnRails::Netserv::AuthThrottle
   IP = "192.0.2.1"
 
   def setup
