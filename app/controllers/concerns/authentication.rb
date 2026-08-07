@@ -46,9 +46,11 @@ module Authentication
     end
 
     def request_authentication
-      # Store only the path+query (host-independent), and only for GETs - a
-      # non-GET couldn't be replayed by redirect anyway.
-      session[:return_to_after_authenticating] = request.fullpath if request.get?
+      # Store only the path+query (host-independent), and only for
+      # GET/HEAD - a non-idempotent request couldn't be replayed by
+      # redirect anyway. (HEAD included for Brakeman's verb-confusion
+      # check; browsers only ever land here with GET.)
+      session[:return_to_after_authenticating] = request.fullpath if request.get? || request.head?
       redirect_to new_session_path
     end
 
