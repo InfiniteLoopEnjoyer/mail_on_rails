@@ -22,7 +22,13 @@ module MailOnRails
       def initialize(**kwargs)
         super
         @logs = StringIO.new
+      end
+
+      def run
         disable_sender_verification
+        super
+      ensure
+        restore_sender_verification
       end
 
       def run_round(index)
@@ -62,6 +68,13 @@ module MailOnRails
         singleton = MailOnRails::Smtp::SenderAuth.singleton_class
         @sender_auth_original = MailOnRails::Smtp::SenderAuth.method(:verify)
         singleton.define_method(:verify) { |**| nil }
+      end
+
+      def restore_sender_verification
+        return unless @sender_auth_original
+
+        MailOnRails::Smtp::SenderAuth.singleton_class.define_method(:verify, @sender_auth_original)
+        @sender_auth_original = nil
       end
 
       def run_profile(profile)
