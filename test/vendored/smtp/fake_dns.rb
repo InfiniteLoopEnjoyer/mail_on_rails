@@ -12,10 +12,8 @@ class FakeDns
   attr_reader :port
 
   def initialize(&responder)
-    @udp = UDPSocket.new
-    @udp.bind("127.0.0.1", 0)
+    @udp, @tcp = bind_same_port
     @port = @udp.addr[1]
-    @tcp = TCPServer.new("127.0.0.1", @port)
     @responder = responder
     @threads = [ Thread.new { udp_loop }, Thread.new { tcp_loop } ]
   end
@@ -27,6 +25,22 @@ class FakeDns
   end
 
   private
+
+  # The OS hands us a free UDP port, but the TCP port with the same number
+  # may belong to someone else (the namespaces are independent), so retry
+  # with a fresh UDP port until both sides bind.
+  def bind_same_port
+    attempts = 0
+    begin
+      udp = UDPSocket.new
+      udp.bind("127.0.0.1", 0)
+      [ udp, TCPServer.new("127.0.0.1", udp.addr[1]) ]
+    rescue Errno::EADDRINUSE
+      udp.close
+      raise if (attempts += 1) >= 10
+      retry
+    end
+  end
 
   def reply_bytes(data, via)
     query = Resolv::DNS::Message.decode(data)
