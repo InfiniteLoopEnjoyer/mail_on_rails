@@ -28,6 +28,18 @@ module MailOnRails
   class ImapServer < Netserv::Server
     FLAGS = "\\Answered \\Flagged \\Deleted \\Seen \\Draft"
     MAX_LITERAL_BYTES = 30 * 1024 * 1024
+    # A single command may chain several literals (e.g. LOGIN with two
+    # literal arguments, or a SEARCH with literal strings), but only a
+    # handful legitimately. Bound both the number of literals and their
+    # combined octets per command so a client can't accumulate unbounded
+    # memory in read_command by streaming an endless run of tiny (often
+    # LITERAL+) literals before a single command is ever dispatched.
+    MAX_COMMAND_LITERALS = 256
+    # Guards against a maliciously deep SEARCH key (nested parens / NOT /
+    # OR) recursing parse_search_key into a SystemStackError, which - not
+    # being a StandardError - would escape the command handler and kill the
+    # session thread. A legitimate search nests only a few levels.
+    MAX_SEARCH_DEPTH = 64
     # Base capabilities; STARTTLS/LOGINDISABLED/AUTH are appended per-state.
     # APPENDLIMIT=<n> (RFC 7889) advertises one upload limit for every
     # mailbox - the same cap the literal reader enforces.
@@ -229,9 +241,17 @@ module MailOnRails
         return nil unless line
 
         parts = [ line ]
+        literal_count = 0
+        literal_octets = 0
         while (m = parts.last.match(/\{(\d+)(\+)?\}\r\n\z/))
           size = m[1].to_i
-          if size > MAX_LITERAL_BYTES
+          literal_count += 1
+          literal_octets += size
+          # A single over-size literal, too many literals in one command, or
+          # too many octets in aggregate: all refuse the same way, draining
+          # any LITERAL+ payload so the stream stays framed.
+          if size > MAX_LITERAL_BYTES || literal_count > MAX_COMMAND_LITERALS ||
+             literal_octets > MAX_LITERAL_BYTES
             return refuse_literal(parts.first, size, non_sync: !m[2].nil?)
           end
           @socket.write("+ OK\r\n") unless m[2] # synchronizing literal
@@ -485,9 +505,22 @@ module MailOnRails
         yield unless line
 
         text = line.chomp("\r\n")
-        return tagged(tag, "BAD Authentication cancelled") && nil if text == "*"
+        return cancel_auth(tag) if text == "*"
 
         text
+      end
+
+      # A "*" cancellation still costs a per-connection attempt. Otherwise a
+      # client could loop AUTHENTICATE/cancel without bound, and for SCRAM
+      # each loop first drives a store credential lookup (line ordering in
+      # authenticate_scram) that the throttle never sees - it only trips on
+      # *recorded* failures. Counting the cancel here caps the loop at
+      # MAX_AUTH_ATTEMPTS and hangs the connection up like a real failure.
+      def cancel_auth(tag)
+        @auth_attempts += 1
+        tagged tag, "BAD Authentication cancelled"
+        disconnect_if_attempts_exhausted
+        nil
       end
 
       # Server side of SCRAM-SHA-256 (RFC 5802/7677), no channel binding.
@@ -1908,13 +1941,15 @@ module MailOnRails
            .join(",")
       end
 
-      def parse_search_key(toks, uid_mode)
+      def parse_search_key(toks, uid_mode, depth = 0)
+        raise SearchSyntaxError, "SEARCH key nested too deeply" if depth > MAX_SEARCH_DEPTH
+
         tok = toks.shift
         return nil if tok.nil?
 
         if tok == :lparen
           keys = []
-          keys << parse_search_key(toks, uid_mode) until toks.empty? || toks.first == :rparen
+          keys << parse_search_key(toks, uid_mode, depth + 1) until toks.empty? || toks.first == :rparen
           toks.shift
           keys.compact!
           return SearchKey.new(keys.any?(&:raw?), ->(seq, msg) { keys.all? { |k| k.call(seq, msg) } })
@@ -1938,13 +1973,13 @@ module MailOnRails
         when "KEYWORD" then flag_key(toks.shift.to_s)
         when "UNKEYWORD" then negate(flag_key(toks.shift.to_s))
         when "NOT"
-          key = parse_search_key(toks, uid_mode)
+          key = parse_search_key(toks, uid_mode, depth + 1)
           raise SearchSyntaxError, "NOT expects a search key" if key.nil?
 
           negate(key)
         when "OR"
-          a = parse_search_key(toks, uid_mode)
-          b = parse_search_key(toks, uid_mode)
+          a = parse_search_key(toks, uid_mode, depth + 1)
+          b = parse_search_key(toks, uid_mode, depth + 1)
           raise SearchSyntaxError, "OR expects two search keys" if a.nil? || b.nil?
 
           SearchKey.new(a.raw? || b.raw?, ->(seq, msg) { a.call(seq, msg) || b.call(seq, msg) })

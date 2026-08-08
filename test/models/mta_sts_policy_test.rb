@@ -131,4 +131,41 @@ class MtaStsPolicyTest < ActiveSupport::TestCase
     assert_not policy.mx_match?("a.b.backup.example.com"), "wildcard matches only one label"
     assert_not policy.mx_match?("evil.com")
   end
+
+  # A hostile mta-sts.<domain> (an attacker's own recipient domain, valid
+  # cert and all) must not be able to stream an unbounded body into a
+  # delivery worker: fetch_policy_body reads in chunks and aborts the moment
+  # the running total crosses MAX_POLICY_BYTES, rather than buffering the
+  # whole response before checking its size.
+  test "an oversized policy body is aborted mid-stream, not buffered whole" do
+    chunks_yielded = 0
+    fake_response = Object.new
+    fake_response.define_singleton_method(:is_a?) { |klass| klass == Net::HTTPOK }
+    fake_response.define_singleton_method(:read_body) do |&blk|
+      loop do
+        chunks_yielded += 1
+        raise "read streamed past the cap (#{chunks_yielded} chunks)" if chunks_yielded > 100
+        blk.call("x" * 16_384)
+      end
+    end
+
+    fake_http = Object.new
+    %i[use_ssl= open_timeout= read_timeout= max_retries=].each do |setter|
+      fake_http.define_singleton_method(setter) { |_| }
+    end
+    fake_http.define_singleton_method(:request_get) { |_path, &blk| blk.call(fake_response) }
+
+    original = Net::HTTP.method(:new)
+    Net::HTTP.singleton_class.define_method(:new) { |*_args| fake_http }
+    begin
+      error = assert_raises(MtaStsPolicy::FetchError) { MtaStsPolicy.fetch_policy_body("example.com") }
+      assert_match(/too large/, error.message)
+    ensure
+      Net::HTTP.singleton_class.define_method(:new, original)
+    end
+
+    max_chunks = (MtaStsPolicy::MAX_POLICY_BYTES / 16_384) + 2
+    assert_operator chunks_yielded, :<=, max_chunks,
+      "the read must abort near the cap, not stream unboundedly"
+  end
 end

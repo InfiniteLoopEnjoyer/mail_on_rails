@@ -171,4 +171,31 @@ class SmtpParserAbuseTest < Minitest::Test
       assert_match(/\A250/, command(client, "NOOP"), "session must be usable after garbage AUTH")
     end
   end
+
+  # A command line is read only up to its CRLF, so a bare LF/CR/NUL embedded
+  # earlier survives into the MAIL FROM address capture. Left unchecked it is
+  # stored verbatim as the envelope sender and forges lines in the single-line
+  # log sinks that print it. It must be refused, and must not set envelope
+  # state (so a clean MAIL FROM afterwards still starts a fresh transaction).
+  def test_control_bytes_in_mail_from_address_are_rejected_without_setting_state
+    with_session do |client|
+      read_reply(client)
+      assert_match(/\A250/, command(client, "EHLO test"))
+      [ "a@b.test\nX-Injected: evil", "a@b.test\rEVIL", "a@b.test\x00evil" ].each do |addr|
+        assert_match(/\A501/, command(client, "MAIL FROM:<#{addr}>"),
+                     "control byte in #{addr.inspect} must be refused")
+      end
+      assert_match(/\A250/, command(client, "MAIL FROM:<a@b.test>"),
+                   "a rejected MAIL FROM must not have set envelope state")
+    end
+  end
+
+  def test_control_bytes_in_rcpt_to_address_are_rejected
+    with_session do |client|
+      read_reply(client)
+      command(client, "EHLO test")
+      assert_match(/\A250/, command(client, "MAIL FROM:<a@b.test>"))
+      assert_match(/\A501/, command(client, "RCPT TO:<victim@example.test\nBcc: evil@x.test>"))
+    end
+  end
 end

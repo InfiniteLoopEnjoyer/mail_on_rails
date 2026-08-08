@@ -74,11 +74,21 @@ class MtaStsPolicy < ApplicationRecord
     http.open_timeout = HTTP_TIMEOUT
     http.read_timeout = HTTP_TIMEOUT
     http.max_retries = 0
-    response = http.get("/.well-known/mta-sts.txt")
-    raise FetchError, "HTTP #{response.code}" unless response.is_a?(Net::HTTPOK)
-    raise FetchError, "policy body too large" if response.body.to_s.bytesize > MAX_POLICY_BYTES
+    body = +""
+    http.request_get("/.well-known/mta-sts.txt") do |response|
+      raise FetchError, "HTTP #{response.code}" unless response.is_a?(Net::HTTPOK)
 
-    response.body.to_s
+      # Stream and cap: Net::HTTP#get would buffer the whole body before any
+      # size check, so a hostile mta-sts.<domain> - an attacker's own
+      # recipient domain, valid cert and all - could stream gigabytes into a
+      # delivery worker before the MAX_POLICY_BYTES gate ever ran. Reading in
+      # chunks lets us abort the moment the cap is crossed.
+      response.read_body do |chunk|
+        body << chunk
+        raise FetchError, "policy body too large" if body.bytesize > MAX_POLICY_BYTES
+      end
+    end
+    body
   rescue OpenSSL::SSL::SSLError => e
     raise FetchError, "TLS: #{e.message}"
   rescue Timeout::Error, IOError, SystemCallError, SocketError, Net::ProtocolError => e

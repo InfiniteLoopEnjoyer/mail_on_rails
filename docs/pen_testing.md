@@ -47,6 +47,10 @@ at production without explicit approval.
 | IMAP pen-test scenarios | `test/vendored/imap/pen_test.rb` |
 | Full-stack wire tests | `test/integration/pen_test.rb`, `test/integration/in_process_servers_test.rb` |
 | Auth throttling / lockout | `test/vendored/smtp/auth_throttle_test.rb`, `test/vendored/imap/accept_hardening_test.rb` |
+| IMAP literal/search DoS caps | `test/vendored/imap/imap_session_test.rb` (chained-literal flood, aggregate octet cap, deep-search-key, SASL-cancel cap) |
+| SMTP envelope control-byte injection | `test/vendored/smtp/smtp_parser_abuse_test.rb` (control bytes in MAIL FROM / RCPT TO) |
+| Web second-factor brute force | `test/controllers/two_factor/challenges_controller_test.rb` (durable throttle + attempt logging) |
+| MTA-STS policy fetch DoS | `test/models/mta_sts_policy_test.rb` (oversized body aborted mid-stream) |
 
 Add a regression test in the matching suite whenever manual testing finds a bug.
 
@@ -248,6 +252,62 @@ Check: no SSLv3/TLS1.0, sensible cipher order, valid chain, OCSP stapling if
 expected.
 
 ---
+
+## Audit log — 2026-08-08
+
+A full-surface review (web controllers/auth, SMTP, IMAP, SSRF/DNS/DoS).
+**Fixed, with regression tests:**
+
+- **IMAP chained-literal memory DoS (pre-auth).** `read_command` accumulated
+  an unbounded run of literals before dispatch; a flood of tiny `LITERAL+`
+  literals exhausted memory. Now capped per command by count
+  (`MAX_COMMAND_LITERALS`) and aggregate octets.
+- **IMAP SASL-cancel cap bypass.** A `*` cancellation didn't count toward the
+  per-connection `MAX_AUTH_ATTEMPTS`, so `AUTHENTICATE SCRAM`/cancel could loop
+  forever — each SCRAM loop driving a store credential lookup the throttle
+  never saw. Cancellation now costs an attempt.
+- **IMAP deep-search-key stack exhaustion.** A deeply nested `SEARCH` key could
+  recurse into `SystemStackError` (not a `StandardError`, so it killed the
+  session thread). Bounded by `MAX_SEARCH_DEPTH`, rejected as a syntax error.
+- **SMTP envelope/log injection.** A bare `LF`/`CR`/`NUL` in `MAIL FROM` /
+  `RCPT TO` (the command is read only to its CRLF) reached the stored envelope
+  sender and the single-line log sinks. Control bytes are now refused `501`.
+- **Web second-factor brute force.** The TOTP challenge had only an ephemeral
+  per-IP cache limit and never recorded to the durable, account-scoped
+  `AuthThrottle`/`AuthAttempt` — an attacker holding the password could grind
+  the code space by rotating source IPs. The second factor now inherits the
+  same durable budget the password stage uses.
+- **MTA-STS policy-fetch DoS.** `Net::HTTP#get` buffered the whole body before
+  the `MAX_POLICY_BYTES` check, so a hostile `mta-sts.<recipient-domain>` could
+  stream gigabytes into a delivery worker. The body is now read in chunks and
+  aborted at the cap.
+
+**Residual recommendations (not yet actioned — decide and schedule):**
+
+- **SMTP bare-newline in DATA.** Bare `LF`/`CR` in a message body is stored
+  verbatim (asserted intentional today). Inbound *termination* is strict, so
+  this server can't be smuggled *into*; the risk is a stored bare-LF message
+  re-framed by a downstream MTA on outbound relay (CVE-2023-51764 class).
+  Consider rejecting/normalizing bare newlines like Postfix's default
+  `smtpd_forbid_bare_newline=yes`. Has deliverability trade-offs — a policy
+  call, not a silent change.
+- **SMTP per-IP lockout vs. connection parallelism.** `AuthThrottle.locked?` is
+  checked only at accept, so up to `MAX_CONNECTIONS_PER_IP` already-open
+  sessions keep their full per-connection attempt budget past the IP lockout.
+  Re-check the throttle inside `verify_credentials`.
+- **SMTP slowloris.** `read_timeout` is per-read, not a session deadline; a peer
+  trickling bytes holds a connection (and its `ConnLimiter` slot) indefinitely.
+  Add an absolute per-session deadline / minimum-throughput check.
+- **Web step-up re-auth.** Disabling 2FA, removing a passkey, and rotating a
+  password need only a live session cookie — no password/factor re-prompt.
+  Add a short "sudo" re-auth window for these state changes.
+- **No web RBAC.** Every authenticated web session is full admin (documented
+  roadmap item); one password-only account is the whole server's blast radius.
+  Enforce `MAIL_ON_RAILS_REQUIRE_2FA=1` until per-role scoping lands.
+- **SSRF defense-in-depth.** MTA-STS host and outbound MX/A targets aren't
+  filtered against RFC1918/link-local/loopback (WebPKI + no-redirects makes the
+  MTA-STS path non-exfiltrating today). `SpamhausDrop`/rspamd share the
+  full-body-read pattern but hit operator-set endpoints. Optional hardening.
 
 ## What not to do
 

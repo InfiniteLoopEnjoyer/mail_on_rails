@@ -12,6 +12,14 @@ class TwoFactor::ChallengesController < ApplicationController
   rate_limit to: 10, within: 3.minutes, only: %i[ webauthn_options webauthn ], name: "webauthn",
     with: -> { render json: { error: "Try again later." }, status: :too_many_requests }
   before_action :set_user
+  # The verification endpoints inherit the same durable, account-scoped
+  # brute-force budget the password stage uses (SessionsController#create).
+  # The ephemeral per-IP rate_limit above resets when the attacker rotates
+  # source IPs; AuthThrottle counts per account too and survives restarts,
+  # so an attacker who already has the password can't grind the ~1e6 TOTP
+  # space by hopping IPs. webauthn_options only mints a challenge, so it is
+  # deliberately left out.
+  before_action :enforce_second_factor_throttle, only: %i[ totp webauthn ]
 
   def new
   end
@@ -33,6 +41,7 @@ class TwoFactor::ChallengesController < ApplicationController
     stored.update!(sign_count: credential.sign_count)
     render json: { location: complete_sign_in }
   rescue WebAuthn::Error, ActiveRecord::RecordNotFound, ActionController::ParameterMissing
+    record_second_factor_failure
     render json: { error: "Passkey verification failed." }, status: :unprocessable_entity
   end
 
@@ -40,11 +49,36 @@ class TwoFactor::ChallengesController < ApplicationController
     if @user.verify_otp(params[:code])
       redirect_to complete_sign_in
     else
+      record_second_factor_failure
       redirect_to new_two_factor_challenge_path, alert: "That code didn't work. Try again."
     end
   end
 
   private
+    # Refuse a verification attempt once the account (or its source IP) has
+    # burned its failure budget, before any code/proof is checked - mirrors
+    # the pre-bcrypt gate in SessionsController#create.
+    def enforce_second_factor_throttle
+      return unless AuthThrottle.check(ip: request.remote_ip, email: @user.email_address)
+
+      AuthAttempt.record(ip: request.remote_ip, username: @user.email_address,
+                         source: "web", outcome: "throttled")
+      message = "Too many attempts. Try again later."
+      if request.format.json?
+        render json: { error: message }, status: :too_many_requests
+      else
+        redirect_to new_two_factor_challenge_path, alert: message
+      end
+    end
+
+    # A wrong TOTP code or failed passkey proof counts against the durable
+    # throttle and shows up in the attempt log next to the mail edges.
+    def record_second_factor_failure
+      AuthThrottle.record_failure(ip: request.remote_ip, email: @user.email_address)
+      AuthAttempt.record(ip: request.remote_ip, username: @user.email_address,
+                         source: "web", outcome: "bad_credentials")
+    end
+
     def set_user
       @user = pending_second_factor_user
       return if @user

@@ -95,6 +95,40 @@ class TwoFactor::ChallengesControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to new_session_path
   end
 
+  # A wrong second factor must count against the durable, account-scoped
+  # AuthThrottle and land in the attempt log, exactly like the password
+  # stage and the mail edges - otherwise an attacker holding the password
+  # could grind the ~1e6 TOTP space by rotating source IPs past the
+  # ephemeral per-IP cache limiter.
+  test "wrong TOTP code records a durable throttle failure and a web attempt" do
+    start_challenge
+    assert_not AuthThrottle.exists?(scope: AuthThrottle::ACCOUNT, key: @user.email_address)
+
+    assert_difference -> { AuthAttempt.where(source: "web").count }, 1 do
+      post totp_two_factor_challenge_path, params: { code: "000000" }
+    end
+    assert_redirected_to new_two_factor_challenge_path
+    assert AuthThrottle.exists?(scope: AuthThrottle::ACCOUNT, key: @user.email_address),
+      "a wrong second factor must count against the durable account throttle"
+  end
+
+  # Once the account's failure budget is spent, the challenge is refused
+  # before the code is even checked - a correct code no longer signs in.
+  test "a throttled account is refused at the TOTP challenge before the code is checked" do
+    start_challenge
+    AuthThrottle.max_failures_per_account.times do
+      AuthThrottle.record_failure(ip: "203.0.113.9", email: @user.email_address)
+    end
+    assert AuthThrottle.check(ip: "198.51.100.5", email: @user.email_address),
+      "the account should be blocked after exhausting its budget"
+
+    post totp_two_factor_challenge_path, params: { code: ROTP::TOTP.new(@user.otp_secret).now }
+
+    assert_redirected_to new_two_factor_challenge_path
+    assert_equal "Too many attempts. Try again later.", flash[:alert]
+    assert_nil cookies[:session_id].presence, "a valid code must not sign in while throttled"
+  end
+
   test "passkey assertion completes sign-in" do
     client = register_passkey
 

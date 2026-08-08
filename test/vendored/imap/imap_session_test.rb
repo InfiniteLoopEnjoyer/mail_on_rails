@@ -673,4 +673,77 @@ class ImapSessionTest < Minitest::Test
 
     assert_equal 0, @store.status(@account_id, "INBOX")[:messages]
   end
+
+  # -- pen-test regressions --------------------------------------------------
+
+  # A command may chain literals, but read_command must not accumulate an
+  # unbounded run of them before dispatch. A flood of tiny (LITERAL+)
+  # literals is the memory-exhaustion primitive: each is well under
+  # MAX_LITERAL_BYTES, so only the per-command count cap stops it.
+  def test_chained_literal_flood_is_refused_before_exhausting_memory
+    with_imap_const(:MAX_COMMAND_LITERALS, 3) do
+      with_session do |client|
+        client.gets("\r\n") # greeting
+        # One literal on the command line, then a run of LITERAL+ literals
+        # past the cap; the trailing "A\r\n" feeds the last marker its octet
+        # and ends the drain on a non-literal line.
+        client.write("a1 LOGIN {1+}\r\n" + ("A{1+}\r\n" * 4) + "A\r\n")
+        assert_match(/\Aa1 NO \[TOOBIG\]/, read_until_tagged(client, "a1"))
+        # Session survives and is still usable.
+        assert_match(/\Aa2 OK/, command(client, "a2", "NOOP"))
+        command(client, "a3", "LOGOUT")
+      end
+    end
+  end
+
+  # Several individually-legal literals whose sizes sum past MAX_LITERAL_BYTES
+  # are refused in aggregate, not accepted one by one.
+  def test_aggregate_literal_octets_are_capped
+    with_max_literal(100) do
+      with_session do |client|
+        client.gets("\r\n") # greeting
+        client.write("a1 LOGIN {60+}\r\n#{"A" * 60}{60+}\r\n#{"B" * 60}\r\n")
+        assert_match(/\Aa1 NO \[TOOBIG\]/, read_until_tagged(client, "a1"))
+        assert_match(/\Aa2 OK/, command(client, "a2", "NOOP"))
+        command(client, "a3", "LOGOUT")
+      end
+    end
+  end
+
+  # A "*" SASL cancellation must cost a per-connection auth attempt, so a
+  # client can't loop AUTHENTICATE/cancel forever (for SCRAM each loop drives
+  # a store credential lookup the throttle never sees).
+  def test_repeated_authenticate_cancellation_exhausts_the_attempt_cap
+    with_session do |client|
+      client.gets("\r\n") # greeting
+      2.times do |i|
+        client.write("c#{i} AUTHENTICATE PLAIN\r\n")
+        assert_equal "+ \r\n", client.gets("\r\n")
+        client.write("*\r\n")
+        assert_match(/\Ac#{i} BAD Authentication cancelled/, client.gets("\r\n"))
+      end
+      # Third cancellation hits MAX_AUTH_ATTEMPTS and drops the connection.
+      client.write("c2 AUTHENTICATE PLAIN\r\n")
+      assert_equal "+ \r\n", client.gets("\r\n")
+      client.write("*\r\n")
+      assert_match(/\Ac2 BAD Authentication cancelled/, client.gets("\r\n"))
+      assert_match(/\A\* BYE/, client.gets("\r\n"))
+      assert_nil(begin client.gets("\r\n") rescue Errno::ECONNRESET; nil end)
+    end
+  end
+
+  # A maliciously deep SEARCH key must not recurse into a SystemStackError
+  # (which, not being a StandardError, would kill the session thread). It is
+  # rejected as a syntax error and the session survives.
+  def test_deeply_nested_search_key_is_rejected_not_fatal
+    with_imap_const(:MAX_SEARCH_DEPTH, 5) do
+      with_session do |client|
+        login_and_select(client)
+        nested = "#{"(" * 12}ALL#{")" * 12}"
+        assert_match(/\Aa1 BAD/, command(client, "a1", "SEARCH #{nested}"))
+        assert_match(/\Aa2 OK/, command(client, "a2", "NOOP"))
+        command(client, "a3", "LOGOUT")
+      end
+    end
+  end
 end

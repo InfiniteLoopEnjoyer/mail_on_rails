@@ -381,6 +381,14 @@ module MailOnRails
           return reply 530, "Authentication required"
         end
 
+        # A command line is read only up to its CRLF, but a bare CR/LF/NUL
+        # embedded earlier survives into arg (and into the [^>]* capture
+        # below). Left unchecked it would be stored verbatim as the envelope
+        # sender and forge lines in the ~dozen single-line log sinks that
+        # print it. Valid MAIL arguments are printable ASCII, so reject any
+        # control byte outright.
+        return error_reply 501, "Syntax: MAIL FROM:<address>" if arg.to_s.match?(/[[:cntrl:]]/)
+
         unless arg =~ /\AFROM:\s*<([^>]*)>\s*(.*)\z/im
           return error_reply 501, "Syntax: MAIL FROM:<address>"
         end
@@ -439,6 +447,11 @@ module MailOnRails
       def rcpt_to(arg)
         return error_reply 503, "Need MAIL command first" unless @mail_from
         return reply 452, "Too many recipients" if @rcpt_to.size >= MAX_RECIPIENTS
+
+        # Same control-byte guard as mail_from: a bare CR/LF/NUL in the
+        # recipient is log-injection material (the reject path logs
+        # <#{recipient}> before refusing) and has no place in a real address.
+        return error_reply 501, "Syntax: RCPT TO:<address>" if arg.to_s.match?(/[[:cntrl:]]/)
 
         unless arg =~ /\ATO:\s*<([^>]+)>\s*(.*)\z/im
           return error_reply 501, "Syntax: RCPT TO:<address>"
