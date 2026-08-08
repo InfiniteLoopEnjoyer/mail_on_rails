@@ -58,4 +58,59 @@ class MetricsControllerTest < ActionDispatch::IntegrationTest
     assert_includes body, %(mail_on_rails_live_connections{protocol="smtp"} 0)
     assert_includes body, "# TYPE mail_on_rails_outbound_queue gauge"
   end
+
+  def with_allow_ips(value)
+    previous = ENV["METRICS_ALLOW_IPS"]
+    value ? ENV["METRICS_ALLOW_IPS"] = value : ENV.delete("METRICS_ALLOW_IPS")
+    yield
+  ensure
+    previous ? ENV["METRICS_ALLOW_IPS"] = previous : ENV.delete("METRICS_ALLOW_IPS")
+  end
+
+  # Integration-test requests arrive from 127.0.0.1.
+  test "METRICS_ALLOW_IPS admits a listed scraper address" do
+    with_token do
+      with_allow_ips("10.1.2.3, 127.0.0.0/8") { scrape }
+      assert_response :success
+    end
+  end
+
+  test "an off-list caller gets the same 404 as an unset token, even with the right bearer" do
+    with_token do
+      with_allow_ips("10.0.0.0/8") { scrape }
+      assert_response :not_found
+    end
+  end
+
+  test "an unparseable allowlist entry fails closed instead of opening the endpoint" do
+    with_token do
+      with_allow_ips("not-an-ip") { scrape }
+      assert_response :not_found
+    end
+  end
+
+  def with_rspamd_addr(value)
+    previous = ENV["SMTP_RSPAMD_ADDR"]
+    value ? ENV["SMTP_RSPAMD_ADDR"] = value : ENV.delete("SMTP_RSPAMD_ADDR")
+    yield
+  ensure
+    previous ? ENV["SMTP_RSPAMD_ADDR"] = previous : ENV.delete("SMTP_RSPAMD_ADDR")
+  end
+
+  test "rspamd_up is absent when rspamd is not configured" do
+    with_rspamd_addr(nil) do
+      with_token { scrape }
+    end
+    assert_response :success
+    assert_not_includes response.body, "mail_on_rails_rspamd_up"
+  end
+
+  test "rspamd_up reports 0 when the configured worker is unreachable" do
+    # A closed port on localhost: connection refused, not a hang.
+    with_rspamd_addr("127.0.0.1:1") do
+      with_token { scrape }
+    end
+    assert_response :success
+    assert_includes response.body, "mail_on_rails_rspamd_up 0"
+  end
 end

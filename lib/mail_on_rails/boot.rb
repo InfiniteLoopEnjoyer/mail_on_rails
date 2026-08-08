@@ -18,6 +18,7 @@ module MailOnRails
     # server that dies logs the error and its thread ends; the Puma
     # process carries on serving web requests.
     def start_servers(protocols: [ :imap, :smtp ])
+      require_explicit_tls!(protocols) if Rails.env.production?
       @handles = {}
 
       if protocols.include?(:imap)
@@ -84,6 +85,25 @@ module MailOnRails
     # The servers read/generate their self-signed dev certs here.
     def tls_dir
       Rails.root.join("storage", "tls").to_s
+    end
+
+    # Production must never serve mail on the self-signed development
+    # fallback: clients would either refuse the cert or train users to
+    # click through warnings, and both failure modes look "up" from the
+    # deploy's point of view. Each protocol reads its own env pair (the
+    # TLS modules fail closed on their own once these are set), so a
+    # missing pair here fails the boot - and with it the deploy's health
+    # check - instead of quietly generating storage/tls/selfsigned.crt.
+    def require_explicit_tls!(protocols)
+      missing = []
+      missing << "MAIL_ON_RAILS_TLS_CERT/MAIL_ON_RAILS_TLS_KEY" if protocols.include?(:imap) &&
+        !(ENV["MAIL_ON_RAILS_TLS_CERT"] || ENV["MAIL_ON_RAILS_TLS_KEY"])
+      missing << "SMTP_TLS_CERT/SMTP_TLS_KEY" if protocols.include?(:smtp) &&
+        !(ENV["SMTP_TLS_CERT"] || ENV["SMTP_TLS_KEY"])
+      return if missing.empty?
+
+      raise "production requires explicit TLS material for the mail servers " \
+            "(self-signed fallback is development-only): set #{missing.join(" and ")}"
     end
 
     # The name SMTP sessions announce, resolved per connection so a

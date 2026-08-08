@@ -79,6 +79,24 @@ module MailOnRails
       Integer(ENV.fetch("SMTP_RSPAMD_TIMEOUT", DEFAULT_TIMEOUT))
     end
 
+    # True when the configured worker answers GET /ping. Exists for
+    # /metrics (mail_on_rails_rspamd_up): authenticated submission fails
+    # open when rspamd is down, so an outage should be alertable instead
+    # of passing silently. Deliberately short timeout - a Prometheus
+    # scrape must not hang on a dead worker.
+    def up?(addr = self.addr, timeout: 2)
+      return false if addr.empty?
+
+      uri = endpoint(addr)
+      http = Net::HTTP.new(uri.host, uri.port || DEFAULT_PORT)
+      http.open_timeout = timeout
+      http.read_timeout = timeout
+      http.use_ssl = uri.scheme == "https"
+      http.request(Net::HTTP::Get.new("/ping")).is_a?(Net::HTTPSuccess)
+    rescue Timeout::Error, SystemCallError, IOError, SocketError, Net::ProtocolError
+      false
+    end
+
     # Analyze a message. The keyword facts come from the edge-stamped headers
     # and are passed to rspamd so SPF/DMARC (which need the live connection)
     # can run app-side. addr/timeout default to the env config and exist for

@@ -26,6 +26,37 @@ volume (regenerated from the primary's `banned_ips` table by `bin/kamal
 app exec --reuse "bin/rails runner 'BannedIpsFile.sync!'"` or the
 Settings page's Sync button).
 
+## Encryption
+
+A dump holds every message body, all password digests, and the encrypted
+DKIM/SCRAM/TOTP material - treat backup files as secrets. With
+`DB_BACKUP_ENCRYPTION_KEY` set (generate once: `openssl rand -hex 32`,
+store it as a Kamal secret next to the other deploy secrets), the job
+streams the dump through AES-256-GCM and writes `.dump.enc` files; the
+plaintext never touches disk. The key lives only in the container
+environment while the ciphertext lives on the storage volume, so a leaked
+volume snapshot or stolen disk no longer yields the mail store by itself.
+
+Two consequences to plan for:
+
+- **Escrow the key offsite** (password manager, secrets vault). Losing it
+  means losing every backup; rotating it only affects future dumps, so
+  keep old keys until their dumps age out.
+- **Decrypt before pg_restore**:
+
+  ```sh
+  DB_BACKUP_ENCRYPTION_KEY=<64 hex> bin/db-backup-decrypt <file>.dump.enc
+  ```
+
+  `bin/db-backup-decrypt` is standalone (ruby + openssl, no Rails, no
+  database), so it runs anywhere the ciphertext was copied to. It prints
+  the output path (input minus `.enc`), refuses to overwrite, and fails
+  loudly on a wrong key or tampered/truncated file (the GCM tag
+  authenticates the whole stream).
+
+Unset, the job writes plain `.dump` files as before (the development
+default) and logs a warning at each production run.
+
 ## Taking a backup by hand
 
 ```sh
@@ -67,7 +98,14 @@ retry; nothing is lost upstream).
    ls /var/lib/docker/volumes/mail_on_rails_storage/_data/backups/
    ```
 
-3. **Restore into the postgres accessory.** The dump is custom-format, so
+3. **Decrypt if needed.** A `.dump.enc` file must be decrypted first
+   (anywhere with ruby - the host works):
+
+   ```sh
+   DB_BACKUP_ENCRYPTION_KEY=<64 hex> bin/db-backup-decrypt <dump-file>.enc
+   ```
+
+4. **Restore into the postgres accessory.** The dump is custom-format, so
    `pg_restore --clean` drops and recreates the objects inside the
    existing database:
 
@@ -82,7 +120,7 @@ retry; nothing is lost upstream).
    so `db:prepare` creates the four empty databases, stop it again, then
    run the same pg_restore.
 
-4. **Start the app:**
+5. **Start the app:**
 
    ```sh
    bin/kamal app boot -d prod
@@ -92,7 +130,7 @@ retry; nothing is lost upstream).
    and recreates cache/queue/cable if they were lost. `/up` turns healthy
    only after the mail listeners are bound.
 
-5. **Verify.** Sign in to the web UI, open an account with mail, and run
+6. **Verify.** Sign in to the web UI, open an account with mail, and run
    `bin/kamal backup -d prod` once so the newest backup postdates the
    restore. If bans were lost with the machine, resync the file from the
    Settings page.

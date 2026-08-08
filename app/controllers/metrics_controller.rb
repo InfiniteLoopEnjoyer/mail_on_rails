@@ -1,3 +1,5 @@
+require "mail_on_rails/rspamd_analyzer"
+
 # Prometheus exposition endpoint (/metrics), following kamal-proxy's
 # promhttp precedent. Everything is computed on scrape from what the app
 # already records - no in-process counters to lose on restart:
@@ -13,7 +15,12 @@
 #
 # Auth: Prometheus can't do cookies, so the endpoint is enabled by
 # setting METRICS_TOKEN and scraping with that bearer token. Unset =
-# 404, indistinguishable from the route not existing.
+# 404, indistinguishable from the route not existing. METRICS_ALLOW_IPS
+# (comma-separated IPs/CIDRs) additionally pins the endpoint to the
+# scraper's addresses, so a leaked token alone stops being enough - the
+# metrics are operational intelligence (queue depths, auth-failure
+# rates, live connections) worth keeping from an attacker casing the
+# server. Off-network callers get the same 404 as an unset token.
 class MetricsController < ApplicationController
   allow_unauthenticated_access
   # No session, no CSRF surface; the bearer token is the whole gate.
@@ -21,7 +28,7 @@ class MetricsController < ApplicationController
 
   def show
     token = ENV["METRICS_TOKEN"].to_s
-    head :not_found and return if token.empty?
+    head :not_found and return if token.empty? || !allowed_ip?
     head :unauthorized and return unless authorized?(token)
 
     render plain: render_metrics, content_type: "text/plain; version=0.0.4; charset=utf-8"
@@ -32,6 +39,24 @@ class MetricsController < ApplicationController
   def authorized?(token)
     presented = request.authorization.to_s.delete_prefix("Bearer ").strip
     ActiveSupport::SecurityUtils.secure_compare(presented, token)
+  end
+
+  # remote_ip is trustworthy here: kamal-proxy overwrites X-Forwarded-For
+  # with the socket peer, so a client can't spoof its way in. An entry
+  # that fails to parse is treated as matching nothing (fail closed) -
+  # a typo must not silently open the endpoint to everyone.
+  def allowed_ip?
+    entries = ENV["METRICS_ALLOW_IPS"].to_s.split(",").map(&:strip).reject(&:empty?)
+    return true if entries.empty?
+
+    ip = IPAddr.new(request.remote_ip)
+    entries.any? do |entry|
+      IPAddr.new(entry).include?(ip)
+    rescue IPAddr::Error
+      false
+    end
+  rescue IPAddr::Error
+    false
   end
 
   def render_metrics
@@ -70,6 +95,17 @@ class MetricsController < ApplicationController
     emit out, "mail_on_rails_live_connections", :gauge,
          "Open connections on the in-process mail listeners.",
          %i[smtp imap].map { |proto| [ { protocol: proto }, live_connections(proto) ] }
+
+    # Only when rspamd is configured - a hardwired 0 on setups that never
+    # enabled it would page about a service that isn't supposed to exist.
+    # Worth alerting on: authenticated submission fails OPEN when rspamd
+    # is down, so "rspamd_up == 0 and outbound volume climbing" is the
+    # signature of a compromised account spamming unchecked.
+    if MailOnRails::RspamdAnalyzer.enabled?
+      emit out, "mail_on_rails_rspamd_up", :gauge,
+           "1 when the configured rspamd worker answers /ping.",
+           [ [ {}, MailOnRails::RspamdAnalyzer.up? ? 1 : 0 ] ]
+    end
 
     out
   end

@@ -49,11 +49,26 @@ policy live in [docs/virus_scanning.md](docs/virus_scanning.md).
 
 The Prometheus endpoint is bearer-token gated (`METRICS_TOKEN`; when the
 variable is unset the route answers 404). The token alone shouldn't be
-the only wall: kamal-proxy has no per-path ACLs, so either scrape over a
-private network/VPN or restrict the HTTPS port to the scraper's address
-at the droplet/cloud-firewall layer. Rotate `METRICS_TOKEN`
-periodically — update the deploy secret and the scraper config, then
-redeploy.
+the only wall: set `METRICS_ALLOW_IPS` (comma-separated IPs/CIDRs) so the
+app itself 404s any caller that isn't your scraper, and additionally
+scrape over a private network/VPN or restrict the HTTPS port to the
+scraper's address at the droplet/cloud-firewall layer (kamal-proxy has no
+per-path ACLs). Rotate `METRICS_TOKEN` periodically — update the deploy
+secret and the scraper config, then redeploy.
+
+When rspamd is configured, `/metrics` includes `mail_on_rails_rspamd_up`.
+Alert on it: authenticated submission **fails open** when rspamd is down
+(deliberately — an outage must not block all outbound mail), so
+`rspamd_up == 0` combined with climbing outbound volume is the signature
+of a compromised account spamming unchecked.
+
+## Multi-user deployments
+
+Until RBAC lands (see roadmap), every signed-in user is a full admin, so
+each account's login is the whole system's perimeter. For any deployment
+with more than one user, set `MAIL_ON_RAILS_REQUIRE_2FA=1`: users
+without a second factor are parked on 2FA enrollment (authenticator app
+or passkey) and can't reach anything else until one is registered.
 
 ## Roadmap
 

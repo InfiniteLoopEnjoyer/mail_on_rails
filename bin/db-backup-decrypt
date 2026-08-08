@@ -1,0 +1,56 @@
+#!/usr/bin/env ruby
+# Decrypts a .dump.enc written by DatabaseBackupJob back into a plain
+# pg_dump custom-format file for pg_restore:
+#
+#   DB_BACKUP_ENCRYPTION_KEY=<64 hex> bin/db-backup-decrypt backup.dump.enc [output.dump]
+#
+# Standalone on purpose - needs only ruby + openssl, no Rails, no
+# database - so it runs on the offsite/restore machine where only the
+# copied ciphertext and the escrowed key exist. Output defaults to the
+# input path minus ".enc". See docs/backups.md for the restore runbook.
+require "openssl"
+
+# Must mirror DatabaseBackupJob::MAGIC / CIPHER.
+MAGIC = "MORBKUP1"
+CIPHER = "aes-256-gcm"
+IV_LENGTH = 12
+TAG_LENGTH = 16
+
+def abort_usage(message)
+  abort "#{message}\nusage: DB_BACKUP_ENCRYPTION_KEY=<64 hex> #{$PROGRAM_NAME} <backup.dump.enc> [output.dump]"
+end
+
+input = ARGV[0] or abort_usage "no input file given"
+output = ARGV[1] || (input.end_with?(".enc") ? input.delete_suffix(".enc") : abort_usage("input does not end in .enc; give an explicit output path"))
+abort_usage "refusing to overwrite #{output}" if File.exist?(output)
+
+hex = ENV["DB_BACKUP_ENCRYPTION_KEY"].to_s
+abort_usage "DB_BACKUP_ENCRYPTION_KEY must be 64 hex characters" unless hex.match?(/\A\h{64}\z/)
+
+File.open(input, "rb") do |from|
+  ciphertext_length = from.size - MAGIC.bytesize - IV_LENGTH - TAG_LENGTH
+  abort "#{input}: too short to be a #{MAGIC} backup" if ciphertext_length.negative?
+  abort "#{input}: bad magic (not a DatabaseBackupJob encrypted dump)" unless from.read(MAGIC.bytesize) == MAGIC
+
+  cipher = OpenSSL::Cipher.new(CIPHER).decrypt
+  cipher.key = [ hex ].pack("H*")
+  cipher.iv = from.read(IV_LENGTH)
+
+  File.open(output, "wb") do |to|
+    remaining = ciphertext_length
+    while remaining.positive?
+      chunk = from.read([ remaining, 1 << 20 ].min)
+      to.write(cipher.update(chunk))
+      remaining -= chunk.bytesize
+    end
+    cipher.auth_tag = from.read(TAG_LENGTH)
+    # final verifies the GCM tag over everything already written; a wrong
+    # key or a tampered/truncated file dies here.
+    to.write(cipher.final)
+  end
+rescue OpenSSL::Cipher::CipherError
+  File.delete(output) if File.exist?(output)
+  abort "#{input}: decryption failed - wrong DB_BACKUP_ENCRYPTION_KEY or corrupted file"
+end
+
+puts output

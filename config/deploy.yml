@@ -128,11 +128,29 @@ servers:
         # DB_BACKUP_KEEP_DAYS: 14
         # DB_BACKUP_DIR: /rails/storage/backups
 
+        # Backup encryption: with this set (as a Kamal secret - generate
+        # with `openssl rand -hex 32`, escrow it offsite), dumps are
+        # AES-256-GCM encrypted (.dump.enc) so the storage volume never
+        # holds the mail store in the clear; bin/db-backup-decrypt
+        # recovers them for pg_restore. Unset = plain dumps + a nightly
+        # warning in the log. See docs/backups.md.
+        # DB_BACKUP_ENCRYPTION_KEY: (in .kamal/secrets)
+
         # Prometheus: setting METRICS_TOKEN (better: as a secret in
         # .kamal/secrets) enables GET /metrics for scrapers presenting it
         # as a bearer token; unset, the endpoint 404s. See
-        # MetricsController for the exposed series.
+        # MetricsController for the exposed series. METRICS_ALLOW_IPS
+        # (comma-separated IPs/CIDRs) additionally pins the endpoint to
+        # your scraper's addresses - token possession alone then no
+        # longer suffices from elsewhere.
         # METRICS_TOKEN: choose-a-long-random-string
+        # METRICS_ALLOW_IPS: 10.0.0.0/8
+
+        # Multi-user deployments: park users without a second factor on
+        # 2FA enrollment until they register one - every session is full
+        # admin until RBAC lands, so one password-only account is the
+        # whole system's weakest link.
+        # MAIL_ON_RAILS_REQUIRE_2FA: 1
 
 # Enable SSL auto certification via Let's Encrypt and allow for multiple apps on a single web server.
 # If used with Cloudflare, set encryption mode in SSL/TLS setting to "Full" to enable CF-to-app encryption.
