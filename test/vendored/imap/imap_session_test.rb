@@ -587,6 +587,36 @@ class ImapSessionTest < Minitest::Test
     end
   end
 
+  # A sequence set spanning to the top of the uint32 range must never be
+  # materialized as four billion numbers - a hostile client could
+  # otherwise turn one command into an allocation DoS. Two safe outcomes,
+  # both asserted here: an out-of-range *message-sequence* range is
+  # refused outright, while a *UID* range (which RFC 3501 says tolerates
+  # non-existent UIDs) clips to what actually exists. The complement of
+  # the star-set tests, which cap at the mailbox's own size.
+  def test_a_huge_sequence_range_is_bounded_not_enumerated
+    with_session do |client|
+      client.gets("\r\n")
+      command(client, "h1", "LOGIN #{EMAIL} #{PASSWORD}")
+      command(client, "h2", "SELECT INBOX")
+
+      # Message-sequence range past EXISTS: refused, not enumerated.
+      fetch = command(client, "h3", "FETCH 1:4294967295 (UID)")
+      assert_match(/\Ah3 BAD/, fetch, "an out-of-range message-sequence range is refused")
+      assert_match(/out of range/i, fetch)
+
+      # UID range: clips to the single existing UID and completes.
+      uid = command(client, "h4", "UID FETCH 1:4294967295 (FLAGS)")
+      assert_match(/\A\* 1 FETCH \(.*FLAGS/, uid)
+      assert_match(/h4 OK/, uid)
+      refute_match(/\* 2 FETCH/, uid, "nothing beyond the mailbox may be enumerated")
+
+      # UID SEARCH over the same huge range: the one message, no crash.
+      assert_match(/\A\* SEARCH 1\r\nh5 OK/, command(client, "h5", "UID SEARCH UID 1:4294967295"))
+      command(client, "h6", "LOGOUT")
+    end
+  end
+
   def test_empty_mailbox_star_sets_and_search_are_harmless
     with_session do |client|
       client.gets("\r\n")

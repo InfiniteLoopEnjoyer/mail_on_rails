@@ -51,3 +51,5 @@
 
 # Production DB dumps pulled via mail_on_rails:remote:db.
 *.dump
+
+recommendations.txt

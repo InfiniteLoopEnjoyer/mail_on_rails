@@ -69,6 +69,34 @@ class SmtpSessionTest < Minitest::Test
     singleton.define_method(:verify, original)
   end
 
+  # Pins SenderAuth.verify to a fixed verdict (no live DNS), so a test can
+  # drive the DATA-time DMARC branch on a real MX wire session.
+  def stubbing_sender_verification(result)
+    singleton = MailOnRails::Smtp::SenderAuth.singleton_class
+    original = MailOnRails::Smtp::SenderAuth.method(:verify)
+    singleton.define_method(:verify) { |**| result }
+    yield
+  ensure
+    singleton.define_method(:verify, original)
+  end
+
+  # A verdict whose From: domain published p=reject and nothing aligned.
+  def dmarc_reject_result(from_domain: "remote.test")
+    MailOnRails::Smtp::SenderAuth::Result.new(
+      spf: { result: :fail, domain: from_domain },
+      dkim: [],
+      dmarc: { result: :fail, policy: :reject, from_domain: from_domain }
+    )
+  end
+
+  def with_dmarc_enforcement(value)
+    previous = ENV["SMTP_DMARC_ENFORCE"]
+    value ? ENV["SMTP_DMARC_ENFORCE"] = value : ENV.delete("SMTP_DMARC_ENFORCE")
+    yield
+  ensure
+    previous ? ENV["SMTP_DMARC_ENFORCE"] = previous : ENV.delete("SMTP_DMARC_ENFORCE")
+  end
+
   # Full EHLO -> DATA exchange for one message; returns the final reply.
   def deliver_message(client)
     read_reply(client)
@@ -121,6 +149,56 @@ class SmtpSessionTest < Minitest::Test
 
     message = @store.inbound_messages.last
     assert_nil message[:auth_results], "a skipped verification must not stamp a verdict"
+  end
+
+  # SMTP_DMARC_ENFORCE=1 turns a p=reject DMARC failure into a hard 550 at
+  # DATA time, and nothing is spooled. Only the verdict layer was tested
+  # before; this drives the actual wire reply.
+  def test_mx_session_rejects_spoofed_sender_under_dmarc_enforcement
+    with_dmarc_enforcement("1") do
+      stubbing_sender_verification(dmarc_reject_result(from_domain: "remote.test")) do
+        with_session(spec_extra: { sender_auth: true }) do |client|
+          read_reply(client)
+          command(client, "EHLO client.test")
+          command(client, "MAIL FROM:<sender@remote.test>")
+          command(client, "RCPT TO:<#{EMAIL}>")
+          command(client, "DATA")
+          client.write(RAW)
+          reply = command(client, ".")
+          assert_match(/\A550 5\.7\.1 /, reply)
+          assert_match(/DMARC/i, reply)
+          assert_match(/remote\.test/, reply, "the reply should name the failing domain")
+          command(client, "QUIT")
+        end
+      end
+    end
+
+    assert_empty @store.inbound_messages, "a DMARC-rejected message must not be spooled"
+  end
+
+  # The default (enforcement off): the same failing verdict is recorded on
+  # the stored message, not rejected - the documented fail-open that lets
+  # operators watch verdicts before flipping the switch.
+  def test_mx_session_records_but_does_not_reject_dmarc_failure_when_enforcement_is_off
+    with_dmarc_enforcement(nil) do
+      stubbing_sender_verification(dmarc_reject_result(from_domain: "remote.test")) do
+        with_session(spec_extra: { sender_auth: true }) do |client|
+          read_reply(client)
+          command(client, "EHLO client.test")
+          command(client, "MAIL FROM:<sender@remote.test>")
+          command(client, "RCPT TO:<#{EMAIL}>")
+          command(client, "DATA")
+          client.write(RAW)
+          assert_match(/\A250 OK: queued/, command(client, "."))
+          command(client, "QUIT")
+        end
+      end
+    end
+
+    message = @store.inbound_messages.last
+    assert message, "the message must be spooled when enforcement is off"
+    assert_match(/dmarc=fail/, message[:auth_results].to_s,
+                 "the failing verdict must still be stamped for review")
   end
 
   # spec[:hostname] as a callable: the unified app passes a proc that
@@ -331,6 +409,42 @@ class SmtpSessionTest < Minitest::Test
       token = [ "\0specials@example.test\0#{special}" ].pack("m0")
       assert_match(/\A235/, command(client, "AUTH PLAIN #{token}"))
       assert_match(/\A250/, command(client, "MAIL FROM:<specials@example.test>"))
+      command(client, "QUIT")
+    end
+  end
+
+  # The server ties the envelope sender to the login on submission
+  # (smtp_server.rb): a compromised or careless client cannot send as
+  # someone else once authenticated. Only the matching-sender happy path
+  # was tested before; this pins the 550.
+  def test_submission_rejects_mail_from_that_does_not_match_the_authenticated_account
+    with_session(role: :submission, spec_extra: { tls: :implicit }) do |client|
+      read_reply(client)
+      command(client, "EHLO client.test")
+      token = [ "\0#{EMAIL}\0#{PASSWORD}" ].pack("m0")
+      assert_match(/\A235/, command(client, "AUTH PLAIN #{token}"))
+
+      reply = command(client, "MAIL FROM:<someone-else@example.test>")
+      assert_match(/\A550 /, reply)
+      assert_match(/must match authenticated account/i, reply)
+
+      # The rejection is per-command, not fatal: the matching sender still works.
+      assert_match(/\A250/, command(client, "MAIL FROM:<#{EMAIL}>"),
+                   "a mismatched sender must not poison the session")
+      command(client, "QUIT")
+    end
+  end
+
+  # An authorized authzid the account owns still has to match: casing
+  # differences are folded, but a different local part is refused.
+  def test_submission_sender_match_is_case_insensitive
+    with_session(role: :submission, spec_extra: { tls: :implicit }) do |client|
+      read_reply(client)
+      command(client, "EHLO client.test")
+      token = [ "\0#{EMAIL}\0#{PASSWORD}" ].pack("m0")
+      assert_match(/\A235/, command(client, "AUTH PLAIN #{token}"))
+      assert_match(/\A250/, command(client, "MAIL FROM:<#{EMAIL.upcase}>"),
+                   "sender match folds case")
       command(client, "QUIT")
     end
   end
