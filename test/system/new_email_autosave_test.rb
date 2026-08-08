@@ -22,9 +22,20 @@ class NewEmailAutosaveTest < ApplicationSystemTestCase
     assert_includes saved.flags, "\\Draft"
     assert_match(/Been mulling this over\./, saved.raw)
 
-    # Navigate away and back in through the folder.
+    # Navigate away and back in through the folder. On a starved runner the
+    # click can land between find and click and do nothing (the same race
+    # accept_turbo_confirm retries): the page then just sits on the list.
+    # Re-click unless the composer visibly opened; once it has, the row is
+    # gone from the page, so a missing link is itself proof we navigated.
     visit email_account_mailbox_url(@account, @drafts)
-    click_on "Thoughts on the proposal"
+    3.times do
+      begin
+        click_on "Thoughts on the proposal"
+      rescue Capybara::ElementNotFound
+        break
+      end
+      break if page.has_selector?("h2", text: "Draft", wait: 10)
+    end
 
     assert_selector "h2", text: "Draft"
     assert_selector "lexxy-editor [contenteditable]", text: /Been mulling this over\./

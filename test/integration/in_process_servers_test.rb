@@ -29,7 +29,7 @@ class InProcessServersTest < ActiveSupport::TestCase
     @saved_env = @env_keys.to_h { |k| [ k, ENV[k] ] }
 
     ENV["MAIL_ON_RAILS_HOST"] = "127.0.0.1"
-    @imap_port, @imaps_port, @smtp_port, @submission_port, @smtps_port = 5.times.map { free_port }
+    @imap_port, @imaps_port, @smtp_port, @submission_port, @smtps_port = free_ports(5)
     ENV["MAIL_ON_RAILS_IMAP_PORT"] = @imap_port.to_s
     ENV["MAIL_ON_RAILS_IMAPS_PORT"] = @imaps_port.to_s
     ENV["SMTP_PORT"] = @smtp_port.to_s
@@ -146,12 +146,14 @@ class InProcessServersTest < ActiveSupport::TestCase
 
   private
 
-  # Bind-then-close to find a free ephemeral port; the tiny reuse race is
+  # All sockets stay bound until every port is issued: bind-then-close one
+  # at a time lets the kernel hand the same port out twice, and the daemon
+  # refuses duplicate listener ports. The tiny reuse race after close is
   # acceptable on loopback in a test.
-  def free_port
-    server = TCPServer.new("127.0.0.1", 0)
-    port = server.addr[1]
-    server.close
-    port
+  def free_ports(count)
+    servers = Array.new(count) { TCPServer.new("127.0.0.1", 0) }
+    servers.map { |s| s.addr[1] }
+  ensure
+    servers&.each(&:close)
   end
 end
