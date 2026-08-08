@@ -22,7 +22,24 @@ at production without explicit approval.
    ruby -Ilib -Itest/vendored/imap -e 'require File.expand_path("test/vendored/imap/pen_test.rb")'
    ```
 
-2. Start the full stack locally:
+2. **Deep fuzz runs** (stateful random sessions + security oracles):
+
+   ```bash
+   bin/rails fuzz:smtp
+   bin/rails fuzz:imap
+
+   # longer / reproducible runs
+   FUZZ_ROUNDS=10000 FUZZ_SEED=42 FUZZ_VERBOSE=1 bin/rails fuzz:smtp
+   ```
+
+   | Variable | Default | Purpose |
+   | --- | --- | --- |
+   | `FUZZ_ROUNDS` | `100` | Sessions per run |
+   | `FUZZ_SEED` | `0xFEED_F00D` | PRNG seed (printed on failure for replay) |
+   | `FUZZ_TIMEOUT` | `2` | Per-read socket timeout (seconds) |
+   | `FUZZ_VERBOSE` | off | Log oracle failure details |
+
+3. Start the full stack locally:
 
    ```bash
    bin/setup   # if needed
@@ -34,6 +51,29 @@ at production without explicit approval.
 
 3. Work through the checklist below against `localhost`, recording results.
 
+## Stateful fuzz harness
+
+`bin/rails fuzz:smtp` and `bin/rails fuzz:imap` drive grammar-shaped sessions
+with byte-level mutations against the in-memory store on loopback. Each round
+picks a profile, mutates arguments, and checks security oracles afterward.
+
+**SMTP profiles:** `garbage`, `mx_relay_attempt`, `submission_no_auth`,
+`auth_garbage`, `stateful_delivery`, `data_smuggle`, `pipelined`.
+
+**IMAP profiles:** `garbage_preauth`, `garbage_postauth`, `stateful_commands`,
+`literal_flood`, `auth_garbage`, `cross_account_probe`.
+
+**Oracles (both protocols):** no session crash; relay/envelope-spoof paths never
+queue unauthorized mail; garbage rounds store nothing; IMAP pre-auth commands
+cannot read mail; cross-account probes never leak another user's mailbox names
+or message content.
+
+Replay a failing seed from the summary line:
+
+```bash
+FUZZ_SEED=4277006349 FUZZ_ROUNDS=200 bin/rails fuzz:smtp
+```
+
 ## Automated coverage map
 
 | Area | Primary suites |
@@ -41,10 +81,12 @@ at production without explicit approval.
 | SMTP parser abuse / fuzzing | `test/vendored/smtp/smtp_parser_abuse_test.rb` |
 | SMTP RFC conformance | `test/vendored/smtp/smtp_conformance_test.rb` |
 | SMTP pen-test scenarios | `test/vendored/smtp/pen_test.rb` |
+| SMTP stateful fuzz (CI smoke) | `test/vendored/smtp/fuzz_smoke_test.rb` |
 | SMTP virus scanning | `test/vendored/smtp/smtp_virus_scan_test.rb` |
 | IMAP RFC compliance audits | `test/vendored/imap/*_audit_test.rb` |
 | IMAP account isolation | `test/vendored/imap/cross_account_isolation_test.rb` |
 | IMAP pen-test scenarios | `test/vendored/imap/pen_test.rb` |
+| IMAP stateful fuzz (CI smoke) | `test/vendored/imap/fuzz_smoke_test.rb` |
 | Full-stack wire tests | `test/integration/pen_test.rb`, `test/integration/in_process_servers_test.rb` |
 | Auth throttling / lockout | `test/vendored/smtp/auth_throttle_test.rb`, `test/vendored/imap/accept_hardening_test.rb` |
 
