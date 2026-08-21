@@ -1,20 +1,20 @@
 # frozen_string_literal: true
 
 require_relative "store/base"
-require_relative "store/imap_backend"
-require_relative "store/smtp_backend"
+require_relative "store/with_source"
 
 module MailOnRails
-  # Namespace for the app-side storage adapters behind the in-process mail
-  # servers. A server talks to the world only through a store; the IMAP
-  # interface is specified in docs/store_contract.md and both interfaces
-  # have executable form in lib/mail_on_rails/{imap,smtp}/store/contracts.rb.
-  # Store::ImapBackend is the Active Record implementation the IMAP
-  # sessions use (wrapped in Store::WithSource so auth attempts carry
-  # source: "imap"); Store::SmtpBackend serves the SMTP sessions
-  # (recipient checks, inbound ingestion, outbound queueing, quarantine);
-  # Store::Base holds the shared plumbing (executor wrapping, AuthThrottle
-  # policy, AuthAttempt logging).
+  # Namespace for the Active Record storage adapters behind the mail
+  # servers. A server talks to the world only through a store; the
+  # contracts are specified in docs/store_contract.md and have executable
+  # form in each protocol gem (MailOnRails::{Imap,Smtp}::Store::Contracts).
+  #
+  # This gem holds the shared plumbing: Store::Base (executor wrapping,
+  # AuthThrottle policy, AuthAttempt logging, the ops-state projection) and
+  # Store::WithSource (stamps auth calls with their surface). The concrete
+  # backends live with their protocols - Store::ImapBackend in
+  # mail_on_rails_imap, Store::SmtpBackend in mail_on_rails_smtp - and
+  # inherit Store::Base.
   module Store
   end
 end

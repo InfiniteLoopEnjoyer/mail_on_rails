@@ -44,7 +44,11 @@ module MailOnRails
     # mail tables share the primary database (and schema_migrations) with
     # the host app, which holds foreign keys into them. No copy step.
     initializer "mail_on_rails.migrations" do |app|
-      unless !MailOnRails.use_engine_migrations || app.root.to_s.match?(root.to_s)
+      # Skipped when the host IS this gem (its own dummy app) - an exact
+      # path comparison, not a prefix match: a host checked out next to
+      # the gem as .../mail_on_rails_admin must still get the migrations.
+      same_root = File.expand_path(app.root.to_s) == File.expand_path(root.to_s)
+      unless !MailOnRails.use_engine_migrations || same_root
         config.paths["db/migrate"].expanded.each do |expanded_path|
           app.config.paths["db/migrate"] << expanded_path
         end

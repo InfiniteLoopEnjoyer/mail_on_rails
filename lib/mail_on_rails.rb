@@ -7,22 +7,22 @@ require "active_support/core_ext/module/attribute_accessors"
 require "active_record"
 require "zeitwerk"
 
-# The protocol tree (servers, netserv scaffolding, per-protocol daemons,
-# memory stores, fuzz harness) is deliberately NOT Zeitwerk-managed: it is
-# stdlib-only, loads with zero Rails in the process (`ruby -Ilib -r
-# mail_on_rails/imap/daemon`), and the server threads hold references to
-# these classes for the process lifetime, so they must never be reloaded.
-# Everything else (Runtime, CLI, the AR models under app/) is autoloaded.
+# The listener tree (netserv scaffolding, settings schema, sender-auth and
+# SCRAM primitives, fuzz base) is deliberately NOT Zeitwerk-managed: it is
+# stdlib-only, loads with zero Rails in the process (the protocol gems'
+# servers build on it the same way), and the server threads hold
+# references to these classes for the process lifetime, so they must never
+# be reloaded. Everything else (Runtime, CLI, the AR models under app/) is
+# autoloaded.
 loader = Zeitwerk::Loader.for_gem(warn_on_extra_files: false)
 loader.ignore("#{__dir__}/mail_on_rails/version.rb") # required above; defines VERSION, not Version
 loader.ignore("#{__dir__}/mail_on_rails/engine.rb")  # required below, only under Rails
 loader.ignore("#{__dir__}/generators")
 loader.ignore("#{__dir__}/puma")
 loader.ignore("#{__dir__}/mail_on_rails/testing") # test harness; requires minitest, never eager-loaded
-%w[imap_server.rb smtp_server.rb imap.rb smtp.rb store.rb
-   clamav_scanner.rb rspamd_analyzer.rb settings.rb dnssec.rb
+%w[store.rb clamav_scanner.rb rspamd_analyzer.rb settings.rb dnssec.rb
    sender_auth.rb scram.rb send_quota.rb outbound_data.rb clamav_client.rb
-   imap smtp netserv store fuzz settings dnssec sender_auth].each do |path|
+   netserv store fuzz settings dnssec sender_auth].each do |path|
   loader.ignore("#{__dir__}/mail_on_rails/#{path}")
 end
 loader.setup
@@ -111,8 +111,7 @@ end
 # the method above must exist before the engine loads.
 require "mail_on_rails/engine" if defined?(Rails::Engine)
 
-# Protocol entry points register themselves with Runtime (one-package
-# phase: both ship in this gem; as separate gems each host requires only
-# the ones it installs).
-require "mail_on_rails/smtp"
-require "mail_on_rails/imap"
+# The protocol servers are separate gems (mail_on_rails_smtp,
+# mail_on_rails_imap); each registers itself with Runtime when its entry
+# file (mail_on_rails/smtp, mail_on_rails/imap) loads - Bundler does that
+# for a host that lists the gem.

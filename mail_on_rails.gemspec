@@ -5,15 +5,16 @@ require_relative "lib/mail_on_rails/version"
 Gem::Specification.new do |spec|
   spec.name = "mail_on_rails"
   spec.version = MailOnRails::VERSION
-  spec.summary = "A complete mail server for Rails: SMTP + IMAP, database-backed"
-  spec.description = "In-process SMTP (RFC 5321 subset, SPF/DKIM/DMARC/ARC) and " \
-                     "IMAP4rev1 (RFC 3501 subset, CONDSTORE/QRESYNC) servers that " \
-                     "store mail in your app's database (PostgreSQL, MySQL, or " \
-                     "SQLite). The gem owns the " \
-                     "models and migrations; the servers run standalone via " \
-                     "bin/mail_server or inside the web process as a Puma plugin. " \
-                     "Includes outbound delivery (MX, DANE, MTA-STS), DKIM key " \
-                     "management, and DMARC/TLS-RPT report handling."
+  spec.summary = "A database-backed mail server for Rails: the models, migrations and runtime"
+  spec.description = "The core of mail_on_rails: Active Record models and migrations for a " \
+                     "mail server (PostgreSQL, MySQL, or SQLite), the inbound mailroom, " \
+                     "outbound delivery (MX, DANE, MTA-STS, DKIM), DMARC/TLS-RPT report " \
+                     "handling, the settings schema, the shared listener scaffolding " \
+                     "(TLS, connection caps, lockouts, denylist, ops-state projection), " \
+                     "SPF/DKIM/DMARC/ARC and SCRAM primitives, and the runtime that runs " \
+                     "the protocol servers standalone (bin/mail_server) or inside Puma. " \
+                     "The servers themselves are the mail_on_rails_smtp and " \
+                     "mail_on_rails_imap gems - install either or both."
   spec.authors = [ "Tayden Miller" ]
   spec.homepage = "https://github.com/InfiniteLoopEnjoyer/mail_on_rails"
   spec.license = "MIT"
@@ -72,7 +73,7 @@ Gem::Specification.new do |spec|
 
   # The ICANN Public Suffix List, for DMARC organizational-domain
   # computation (relaxed alignment, aggregate-report grouping). Loaded
-  # lazily by Smtp::SenderAuth::Dmarc with a two-label fallback, so the
+  # lazily by SenderAuth::Dmarc with a two-label fallback, so the
   # protocol tree still runs without it.
   spec.add_dependency "public_suffix"
 

@@ -4,14 +4,14 @@ on:
   pull_request:
   push:
     branches: [ main ]
-  schedule:
-    - cron: "23 2 * * *" # nightly deep fuzz
 
 jobs:
   # Brakeman lives in security.yml and RuboCop in lint.yml - separate
-  # workflows so each gets its own README status badge.
+  # workflows so each gets its own README status badge. The protocol
+  # servers' own suites (wire, CVE, conformance, fuzz) run in their gems'
+  # CI: mail_on_rails_smtp and mail_on_rails_imap.
 
-  protocol-suites:
+  rails-free-suites:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -35,21 +35,14 @@ jobs:
       - name: Primitives suite
         run: bundle exec rake test:lib
 
-      - name: IMAP protocol suite
-        run: bundle exec rake test:imap
-
-      - name: SMTP protocol suite
-        run: bundle exec rake test:smtp
-
       - name: DNSSEC suite
         run: bundle exec rake test:dnssec
 
-  # The Active Record side (migration, models, store backends) against
+  # The Active Record side (migration, models, store plumbing) against
   # every supported adapter. The sqlite leg runs with no DATABASE_URL -
   # that is also the harness default, so it doubles as the "works with
   # zero setup" check.
   db-suites:
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -93,51 +86,3 @@ jobs:
         run: bundle exec rake test:db
         env:
           DATABASE_URL: ${{ matrix.database_url }}
-
-  # PR-time coverage is a small smoke; the nightly schedule carries the
-  # deep run the smoke can't afford. The runners are Rails-free and
-  # stdlib-only. The seed is the workflow run id so a red night is
-  # replayable from the log line alone: FUZZ_SEED=<run id>.
-  fuzz:
-    if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        protocol: [ smtp, imap ]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: .ruby-version
-
-      - name: Fuzz smoke ${{ matrix.protocol }}
-        run: ruby -Ilib lib/mail_on_rails/fuzz/${{ matrix.protocol }}_runner.rb
-        env:
-          FUZZ_ROUNDS: "25"
-
-  fuzz_deep:
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        protocol: [ smtp, imap ]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: .ruby-version
-
-      - name: Deep fuzz ${{ matrix.protocol }}
-        run: ruby -Ilib lib/mail_on_rails/fuzz/${{ matrix.protocol }}_runner.rb
-        env:
-          FUZZ_ROUNDS: "5000"
-          FUZZ_SEED: ${{ github.run_id }}

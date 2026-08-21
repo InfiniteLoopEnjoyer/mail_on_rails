@@ -18,11 +18,23 @@ class RuntimeMonitorTest < Minitest::Test
     def shutdown(drain: 5) = nil
   end
 
+  # The protocol gems register the real adapters; the core suite stands
+  # in its own (start_protocol is stubbed below anyway).
+  module FakeProtocol
+    module_function
+
+    def start(logger:, tls_dir:) = raise("stubbed")
+    def check_config(logger:) = true
+    def preflight! = nil
+  end
+
   def setup
     # The suite's Rails stub has no env; the runtime consults it.
     Rails.singleton_class.attr_accessor :env unless Rails.respond_to?(:env)
     Rails.env = ActiveSupport::StringInquirer.new("test")
     @runtime = MailOnRails::Runtime
+    @registered = %i[smtp imap].reject { |p| @runtime.registered?(p) }
+    @registered.each { |p| @runtime.register(p, FakeProtocol) }
     @original_start = @runtime.method(:start_protocol)
     @runtime.monitor_interval = 0.02
   end
@@ -30,6 +42,7 @@ class RuntimeMonitorTest < Minitest::Test
   def teardown
     @runtime.stop_servers
     @runtime.define_singleton_method(:start_protocol, @original_start)
+    @registered.each { |p| @runtime.registry.delete(p) }
     @runtime.monitor_interval = nil
     @runtime.restart_backoff = nil
   end
@@ -101,32 +114,5 @@ class RuntimeMonitorTest < Minitest::Test
     refute_predicate monitor, :alive?
     assert_nil @runtime.server(:smtp)
     refute @runtime.ready?
-  end
-end
-
-# The production boot guard for virus scanning: an empty SMTP_CLAMAV_ADDR
-# must fail the boot unless the operator explicitly opted out - running
-# without a scanner has to be a decision, not a forgotten env. (The guard
-# only runs when Rails.env is production; here it is called directly.)
-class RuntimeVirusScannerGuardTest < Minitest::Test
-  def teardown
-    MailOnRails::Settings.reset!
-  end
-
-  test "an empty clamd address fails the production boot" do
-    MailOnRails::Settings.overrides = { smtp_clamav_addr: "" }
-    error = assert_raises(RuntimeError) { MailOnRails::Smtp::Protocol.require_virus_scanner! }
-    assert_match(/SMTP_CLAMAV_ADDR/, error.message)
-    assert_match(/SMTP_CLAMAV_OPTIONAL/, error.message)
-  end
-
-  test "SMTP_CLAMAV_OPTIONAL permits booting without a scanner" do
-    MailOnRails::Settings.overrides = { smtp_clamav_addr: "", smtp_clamav_optional: true }
-    assert_nil MailOnRails::Smtp::Protocol.require_virus_scanner!
-  end
-
-  test "a configured clamd address boots" do
-    MailOnRails::Settings.overrides = { smtp_clamav_addr: "127.0.0.1:3310" }
-    assert_nil MailOnRails::Smtp::Protocol.require_virus_scanner!
   end
 end

@@ -18,6 +18,8 @@ require "minitest"
 require "active_support"
 require "active_support/core_ext"
 require "active_record"
+require "active_job"
+require "global_id"
 require "mail"
 require "mail_on_rails"
 require "mail_on_rails/store"
@@ -82,6 +84,13 @@ module MailOnRails
         Time.zone ||= "UTC"
         MailOnRails.logger = ActiveSupport::Logger.new(File::NULL)
         MailOnRails.app_executor ||= ActiveSupport::Executor
+        # Models enqueue jobs (Domain -> DnsCheckRefreshJob, HoneypotEvent ->
+        # enrichment, ...); the test adapter records them without a queue
+        # backend, and GlobalID lets records ride as job arguments.
+        ActiveJob::Base.logger = ActiveSupport::Logger.new(File::NULL)
+        ActiveJob::Base.queue_adapter = :test
+        GlobalID.app ||= "mail_on_rails-testing"
+        ActiveRecord::Base.include(GlobalID::Identification) unless ActiveRecord::Base < GlobalID::Identification
         # EmailAccount encrypts its SCRAM verifier columns; any fixed keys
         # do for a throwaway test database.
         ActiveRecord::Encryption.configure(
@@ -106,12 +115,15 @@ module MailOnRails
         end
       end
 
-      # The models normally arrive via the engine's autoload paths.
+      # The models and jobs normally arrive via the engine's autoload paths.
       def load_models!
         models_dir = File.join(gem_root, "app", "models")
         Dir["#{models_dir}/concerns/mail_on_rails/*.rb"].sort.each { |file| require file }
         require "#{models_dir}/mail_on_rails/record"
         Dir["#{models_dir}/mail_on_rails/*.rb"].sort.each { |file| require file }
+        jobs_dir = File.join(gem_root, "app", "jobs", "mail_on_rails")
+        require "#{jobs_dir}/base_job"
+        Dir["#{jobs_dir}/*.rb"].sort.each { |file| require file }
       end
 
       # Every gem migration in timestamp order, as classes (the data

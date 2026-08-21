@@ -83,19 +83,6 @@ class VerpTest < DbSuite::TestCase
     assert_equal address, with_params.address
   end
 
-  test "the edge accepts valid VERP recipients and refuses forgeries" do
-    message = queue_message
-    store = MailOnRails::Store::SmtpBackend.new
-    address = MailOnRails::VerpAddress.encode(message)
-
-    assert_equal [ address ], store.local_rcpts([ address ])[:local]
-
-    forged = address.sub(/-\h{12}@/, "-000000000000@")
-    result = store.local_rcpts([ forged ])
-    assert_empty result[:local], "a bad MAC must not read as a local recipient"
-    assert_equal [ forged ], result[:unknown_in_local_domain]
-  end
-
   # An edge-stamped bounce as it lands in the bounce@ account.
   def bounce_raw(verp_address, status: "5.1.1", action: "failed", dsn: true)
     body = if dsn

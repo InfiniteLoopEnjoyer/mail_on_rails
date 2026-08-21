@@ -61,14 +61,4 @@ class Smtputf8OutboundTest < DbSuite::TestCase
     plain = queue_message
     assert_equal plain.mail_from, deliverer.send(:envelope_sender, plain, propagate_dsn: false)
   end
-
-  test "the store normalizes u-label recipient domains to hosted punycode domains" do
-    MailOnRails::Domain.create!(name: "xn--exmple-cua.test") # exämple.test
-    store = MailOnRails::Store::SmtpBackend.new
-
-    result = store.local_rcpts([ "user@exämple.test" ])
-
-    assert_equal [ "user@xn--exmple-cua.test" ], result[:unknown_in_local_domain],
-                 "the U-label domain must match the punycode Domain row (no such user, not relaying denied)"
-  end
 end
