@@ -1,0 +1,15 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Standalone entry point, installable via `bundle binstubs mail_on_rails`
+# (the install generator's bin/mail_server is the same thing with the app
+# path baked in). Boots the host Rails app when run from an app checkout
+# so the store, settings DB tier and initializer overrides are live, then
+# hands off to the CLI (start/check).
+environment = File.expand_path("config/environment.rb", Dir.pwd)
+require environment if File.exist?(environment)
+
+require "mail_on_rails"
+require "mail_on_rails/cli"
+
+MailOnRails::Cli.start(ARGV)

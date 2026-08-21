@@ -1,0 +1,184 @@
+# frozen_string_literal: true
+
+require "net/http"
+require "json"
+require "uri"
+require "mail_on_rails/settings"
+
+module MailOnRails
+  # Sends a raw RFC822 message to an rspamd worker's HTTP /checkv2 endpoint
+  # to compute the inbound sender-authentication verdicts (SPF/DKIM/DMARC)
+  # and a spam action. This is the verdict authority for filing - the SMTP
+  # edge's own SPF/DKIM checks are only a connection-time gate; it forwards
+  # the connection facts (client IP, HELO, envelope sender) as the
+  # trusted X-MailOnRails-* / Return-Path headers, which the mailroom passes
+  # here so rspamd's SPF/DMARC checks have the data the app never saw on the
+  # wire.
+  #
+  # Twin of MailOnRails::ClamavScanner in shape: enabled by an env address,
+  # never raises (any failure is :unavailable, and callers decide policy),
+  # read per call so tests can toggle it. Disabled unless SMTP_RSPAMD_ADDR
+  # is set (a "host:port" pointing at rspamd's normal worker, default 11333).
+  module RspamdAnalyzer
+    # `auth_results` is an Authentication-Results-style string built from the
+    # mechanism verdicts (e.g. "mail.example.com; spf=pass; dkim=pass;
+    # dmarc=pass"), the exact shape EmailMessage#auth_result parses and the
+    # mailroom stamps. `action`/`score` carry rspamd's spam verdict for logging.
+    # `dmarc_policy` is the sender domain's own published disposition
+    # ("reject"/"quarantine") when the message failed DMARC, nil otherwise -
+    # p=none failures still read dmarc=fail but carry no policy, so enforcing
+    # on dmarc_policy always honors what the domain owner asked for.
+    Result = Struct.new(:status, :action, :score, :required_score, :spf, :dkim, :dmarc, :dmarc_policy,
+                        :auth_results, keyword_init: true) do
+      def ok? = status == :ok
+      def unavailable? = status == :unavailable
+      # Any action past plain acceptance/greylisting is rspamd calling it spam.
+      def spam? = ok? && ![ nil, "no action", "greylist" ].include?(action)
+      # rspamd's two refusal actions, split by SMTP semantics: "reject"
+      # deserves a permanent 5xx, "soft reject" a retryable 4xx.
+      def reject? = ok? && action == "reject"
+      def soft_reject? = ok? && action == "soft reject"
+      # rspamd asking the MTA to greylist: a 451 that a real MTA retries
+      # (passing once rspamd's window elapses) and a spam cannon rarely does.
+      def greylist? = ok? && action == "greylist"
+    end
+
+    DEFAULT_PORT = 11333
+    DEFAULT_TIMEOUT = 10
+
+    # rspamd surfaces each mechanism as a symbol; first match wins (the maps
+    # are ordered pass-first). Anything unlisted leaves that mechanism nil,
+    # i.e. omitted from the Authentication-Results string.
+    SPF_SYMBOLS = {
+      "R_SPF_ALLOW" => "pass", "R_SPF_FAIL" => "fail", "R_SPF_SOFTFAIL" => "softfail",
+      "R_SPF_NEUTRAL" => "neutral", "R_SPF_DNSFAIL" => "temperror",
+      "R_SPF_PERMFAIL" => "permerror", "R_SPF_NA" => "none"
+    }.freeze
+    DKIM_SYMBOLS = {
+      "R_DKIM_ALLOW" => "pass", "R_DKIM_REJECT" => "fail",
+      "R_DKIM_TEMPFAIL" => "temperror", "R_DKIM_PERMFAIL" => "permerror", "R_DKIM_NA" => "none"
+    }.freeze
+    DMARC_SYMBOLS = {
+      "DMARC_POLICY_ALLOW" => "pass", "DMARC_POLICY_REJECT" => "fail",
+      "DMARC_POLICY_QUARANTINE" => "fail", "DMARC_POLICY_SOFTFAIL" => "fail",
+      "DMARC_NA" => "none", "DMARC_BAD_POLICY" => "permerror"
+    }.freeze
+    # The failure symbols that also carry the domain's published disposition
+    # (DMARC_POLICY_SOFTFAIL is a fail under p=none - no disposition).
+    DMARC_POLICY_SYMBOLS = {
+      "DMARC_POLICY_REJECT" => "reject", "DMARC_POLICY_QUARANTINE" => "quarantine"
+    }.freeze
+
+    module_function
+
+    def enabled?
+      !addr.empty?
+    end
+
+    def addr
+      Settings[:smtp_rspamd_addr].to_s.strip
+    end
+
+    def timeout
+      Settings[:smtp_rspamd_timeout]
+    end
+
+    # True when the configured worker answers GET /ping. Exists for
+    # /metrics (mail_on_rails_rspamd_up): authenticated submission fails
+    # open when rspamd is down, so an outage should be alertable instead
+    # of passing silently. Deliberately short timeout - a Prometheus
+    # scrape must not hang on a dead worker.
+    def up?(addr = self.addr, timeout: 2)
+      return false if addr.empty?
+
+      uri = endpoint(addr)
+      http = Net::HTTP.new(uri.host, uri.port || DEFAULT_PORT)
+      http.open_timeout = timeout
+      http.read_timeout = timeout
+      http.use_ssl = uri.scheme == "https"
+      http.request(Net::HTTP::Get.new("/ping")).is_a?(Net::HTTPSuccess)
+    rescue Timeout::Error, SystemCallError, IOError, SocketError, Net::ProtocolError
+      false
+    end
+
+    # Analyze a message. The keyword facts come from the edge-stamped headers
+    # and are passed to rspamd so SPF/DMARC (which need the live connection)
+    # can run app-side. addr/timeout default to the env config and exist for
+    # callers that carry their own (the SMTP session's per-listener spec).
+    # Returns a Result; :unavailable on any transport or parse failure -
+    # never raises.
+    def analyze(raw, ip: nil, helo: nil, mail_from: nil, rcpt: nil, authenticated_as: nil,
+                addr: self.addr, timeout: self.timeout)
+      uri = endpoint(addr)
+      http = Net::HTTP.new(uri.host, uri.port || DEFAULT_PORT)
+      http.open_timeout = timeout
+      http.read_timeout = timeout
+      http.use_ssl = uri.scheme == "https"
+
+      request = Net::HTTP::Post.new("/checkv2")
+      request.body = raw
+      request["Content-Type"] = "application/octet-stream"
+      request["IP"] = clean(ip) if ip
+      request["Helo"] = clean(helo) if helo
+      request["From"] = clean(mail_from) if mail_from
+      request["Rcpt"] = clean(rcpt) if rcpt
+      request["User"] = clean(authenticated_as) if authenticated_as
+      request["Password"] = clean(password) unless password.empty?
+
+      response = http.request(request)
+      return Result.new(status: :unavailable) unless response.is_a?(Net::HTTPSuccess)
+
+      parse(JSON.parse(response.body))
+    rescue Timeout::Error, SystemCallError, IOError, SocketError, Net::ProtocolError, JSON::ParserError
+      Result.new(status: :unavailable)
+    end
+
+    def parse(json)
+      symbols = json["symbols"] || {}
+      spf = mechanism(symbols, SPF_SYMBOLS)
+      dkim = mechanism(symbols, DKIM_SYMBOLS)
+      dmarc = mechanism(symbols, DMARC_SYMBOLS)
+
+      Result.new(
+        status: :ok, action: json["action"], score: json["score"], required_score: json["required_score"],
+        spf: spf, dkim: dkim, dmarc: dmarc, dmarc_policy: mechanism(symbols, DMARC_POLICY_SYMBOLS),
+        auth_results: auth_results_string(spf, dkim, dmarc)
+      )
+    end
+
+    def mechanism(symbols, map)
+      map.each { |symbol, verdict| return verdict if symbols.key?(symbol) }
+      nil
+    end
+
+    def auth_results_string(spf, dkim, dmarc)
+      parts = []
+      parts << "spf=#{spf}" if spf
+      parts << "dkim=#{dkim}" if dkim
+      parts << "dmarc=#{dmarc}" if dmarc
+      return if parts.empty?
+
+      "#{authserv_id}; #{parts.join('; ')}"
+    end
+
+    def authserv_id
+      host = Settings[:smtp_helo_hostname].to_s.strip
+      host.empty? ? "mail-on-rails" : host
+    end
+
+    def password
+      Settings[:smtp_rspamd_password].to_s.strip
+    end
+
+    def endpoint(addr = self.addr)
+      base = addr.include?("://") ? addr : "http://#{addr}"
+      URI.parse(base)
+    end
+
+    # Header values cross a trust boundary into rspamd's request line; strip
+    # CR/LF so a hostile envelope value can't inject extra headers.
+    def clean(value)
+      value.to_s.gsub(/[\r\n]/, "").strip
+    end
+  end
+end

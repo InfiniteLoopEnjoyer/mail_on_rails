@@ -1,0 +1,5 @@
+#!/usr/bin/env ruby
+require_relative "../config/environment"
+require "mail_on_rails/cli"
+
+MailOnRails::Cli.start(ARGV)

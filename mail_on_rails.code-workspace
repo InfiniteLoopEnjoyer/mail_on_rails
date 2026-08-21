@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+				{
+			"path": "../mail_on_rails_admin"
+		},
+				{
+			"path": "../mail_on_rails_smtp"
+		},
+				{
+			"path": "../mail_on_rails_imap"
+		}
+	]
+}
