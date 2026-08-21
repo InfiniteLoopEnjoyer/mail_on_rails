@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require "forwardable"
 require "mail_on_rails/store"
 
 module MailOnRails
@@ -11,15 +10,14 @@ module MailOnRails
     # Store::Base#log_attempt silently skips AuthAttempt logging when
     # source is blank - this wrapper is what keeps IMAP logins visible on
     # the auth-attempts page and inside the shared brute-force budget.
+    #
+    # Everything else passes straight through, including the OPTIONAL
+    # store methods the servers probe with respond_to? (connection
+    # history, honeypot events, the ops-state projection): the wrapper
+    # answers exactly what the backend answers, so wrapping never hides a
+    # capability - an explicit delegator list once did exactly that, and
+    # the IMAP listener silently stopped projecting its ops state.
     class WithSource
-      extend Forwardable
-
-      def_delegators :@backend, :log, :scram_credentials, :record_closed_connection, :banned_cidrs,
-                     :record_honeypot_event, :update_honeypot_transcript,
-                     :list_mailboxes, :create_mailbox, :delete_mailbox, :rename_mailbox,
-                     :select_mailbox, :status, :fetch, :store_flags, :expunge, :append,
-                     :copy, :move, :expunged_since
-
       def initialize(backend, source)
         @backend = backend
         @source = source
@@ -31,6 +29,18 @@ module MailOnRails
 
       def record_auth_failure(email, ip: nil, source: nil)
         @backend.record_auth_failure(email, ip: ip, source: source || @source)
+      end
+
+      def respond_to_missing?(name, include_private = false)
+        @backend.respond_to?(name, include_private) || super
+      end
+
+      def method_missing(name, ...)
+        if @backend.respond_to?(name)
+          @backend.public_send(name, ...)
+        else
+          super
+        end
       end
     end
   end
