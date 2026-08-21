@@ -143,6 +143,30 @@ Host apps gate `/up` on `MailOnRails.ready?` **only when**
 process whose listeners live elsewhere must not wait on ports it does
 not bind.
 
+### Jobs: Solid Queue is required
+
+The listeners are only the edge. Everything that happens *after* accept
+is an Active Job in this gem, and a `bin/mail_server` process runs
+**no** job worker - so your deployment must run one (this stack uses
+[Solid Queue](https://github.com/rails/solid_queue); the reference app
+runs its supervisor inside the web role with `SOLID_QUEUE_IN_PUMA`) and
+a recurring schedule. Without them:
+
+- accepted inbound mail sits in `action_mailbox_inbound_emails` and is
+  never routed by `MailroomMailbox` into mailboxes;
+- submitted outbound mail sits in `smtp_outbound_messages` and is never
+  sent (`DeliverSmtpOutboundJob` is a recurring job, every ~15 s);
+- DMARC / TLS-RPT reports, DKIM rotation, Spamhaus DROP refresh,
+  rescans, and every `prune!` never run.
+
+The schedule itself lives in the host app, not the gem - copy the
+`config/recurring.yml` from
+[mail_on_rails_admin](https://github.com/InfiniteLoopEnjoyer/mail_on_rails_admin)
+as the reference. An SMTP-only or IMAP-only container therefore still
+needs a sibling job process (`bin/jobs`) against the same database; a
+standalone mode that runs Solid Queue inside `bin/mail_server` is on the
+todo list.
+
 ## Configuration
 
 Every tunable is declared once in the settings schema
