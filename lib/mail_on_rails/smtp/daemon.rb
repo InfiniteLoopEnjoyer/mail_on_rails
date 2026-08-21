@@ -5,7 +5,6 @@ require "logger"
 require_relative "../settings"
 require_relative "../netserv/config"
 require_relative "../smtp_server"
-require_relative "tls"
 
 module MailOnRails
   module Smtp
@@ -35,12 +34,12 @@ module MailOnRails
         Settings.validate_env!
         host = Settings.static(:smtp_host)
         specs = listeners(host)
-        tls = TLS.material(dir: Settings.static(:smtp_tls_dir), logger: logger)
+        tls = Netserv::Tls.for(:smtp).material(dir: Settings.static(:smtp_tls_dir), logger: logger)
         tls_summary = tls ? (tls[:cert_path] ? "from #{tls[:cert_path]}" : "self-signed") : "UNAVAILABLE (plaintext only)"
         logger.info "[mail_on_rails] SMTP config OK: ports #{specs.map { |s| s[:port] }.join("/")} on #{host}, " \
                     "hostname #{specs.first[:hostname]}, TLS #{tls_summary}"
         true
-      rescue TLS::Error, Netserv::Config::Error => e
+      rescue Netserv::Tls::Error, Netserv::Config::Error => e
         logger.error "[mail_on_rails] SMTP config error: #{e.message}"
         false
       end
@@ -100,7 +99,7 @@ module MailOnRails
       # a submission port that can never offer AUTH) must be a hard config
       # error, not a warning line. Development keeps the forgiving path.
       def tls_material(logger, dir)
-        material = TLS.material(dir: dir, logger: logger)
+        material = Netserv::Tls.for(:smtp).material(dir: dir, logger: logger)
         if material.nil? && ENV["RAILS_ENV"] == "production"
           raise Netserv::Config::Error,
                 "TLS material unavailable - production refuses plaintext-only SMTP listeners " \

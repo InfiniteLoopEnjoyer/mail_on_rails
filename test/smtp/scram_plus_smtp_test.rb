@@ -4,7 +4,7 @@ require "test_helper"
 require "socket"
 require "openssl"
 require "mail_on_rails/smtp_server"
-require "mail_on_rails/imap/scram"
+require "mail_on_rails/scram"
 require "mail_on_rails/smtp/store/memory"
 
 # SCRAM-SHA-256-PLUS channel binding on the submission listener, over a
@@ -12,13 +12,13 @@ require "mail_on_rails/smtp/store/memory"
 # plain sockets), plus the STARTTLS plaintext-pipelining defense the
 # upgrade itself must provide.
 class ScramPlusSmtpTest < Minitest::Test
-  Scram = MailOnRails::Imap::Scram
+  Scram = MailOnRails::Scram
 
   EMAIL = "user@example.test"
   PASSWORD = "pw-123456"
 
   def self.tls_context
-    @tls_context ||= MailOnRails::Smtp::TLS.context(MailOnRails::Smtp::TLS.generate_self_signed)
+    @tls_context ||= MailOnRails::Netserv::Tls.context(MailOnRails::Netserv::Tls.generate_self_signed)
   end
 
   def setup

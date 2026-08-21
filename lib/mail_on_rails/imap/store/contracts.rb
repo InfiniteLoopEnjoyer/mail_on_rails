@@ -160,14 +160,14 @@ module MailOnRails
           end
 
           def test_scram_credentials_derive_from_the_account_password
-            require "mail_on_rails/imap/scram"
+            require "mail_on_rails/scram"
             account_id
             creds = store.scram_credentials(EMAIL)
             assert_equal account_id, creds[:account_id]
             assert_equal EMAIL, creds[:email]
             assert_operator creds[:iterations], :>=, 4096
 
-            expected = MailOnRails::Imap::Scram.derive(
+            expected = MailOnRails::Scram.derive(
               PASSWORD, salt: creds[:salt_base64].unpack1("m0"), iterations: creds[:iterations]
             )
             assert_equal [ expected[:stored_key] ].pack("m0"), creds[:stored_key_base64]

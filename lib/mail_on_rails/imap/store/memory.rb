@@ -2,8 +2,8 @@
 
 require "digest"
 require "monitor"
-require_relative "../scram"
-require_relative "../../mime"
+require_relative "../../scram"
+require_relative "../mime"
 
 module MailOnRails
   module Imap
@@ -68,7 +68,7 @@ module MailOnRails
           @lock.synchronize do
             account = { id: next_id(:account), email: normalize(email), password: password.to_s,
                         honeypot: honeypot,
-                        scram: Imap::Scram.derive(password.to_s), quota_bytes: nil, mailboxes: {} }
+                        scram: Scram.derive(password.to_s), quota_bytes: nil, mailboxes: {} }
             DEFAULT_MAILBOXES.each { |name| account[:mailboxes][name] = new_mailbox(name) }
             @accounts[account[:id]] = account
             account[:id]
@@ -399,7 +399,7 @@ module MailOnRails
 
             needle = query.to_s.downcase
             hits = sorted(mailbox).select do |m|
-              haystack = scope.to_s == "body" ? Mime.split_header(m[:raw])[1] : m[:raw]
+              haystack = scope.to_s == "body" ? Imap::Mime.split_header(m[:raw])[1] : m[:raw]
               haystack.downcase.include?(needle)
             end
             { uids: hits.map { |m| m[:uid] } }
@@ -544,7 +544,7 @@ module MailOnRails
         def deliver_raw(account, mailbox, raw, flags:, internal_date:)
           normalized = raw.gsub(/(?<!\r)\n/, "\r\n")
           email_id = self.class.email_object_id(normalized)
-          headers = Mime.parse_headers(Mime.split_header(normalized)[0])
+          headers = Imap::Mime.parse_headers(Imap::Mime.split_header(normalized)[0])
           message_id = message_ids(headers["message-id"]).first
           message = {
             uid: mailbox[:uid_next],

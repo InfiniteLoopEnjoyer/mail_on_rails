@@ -84,7 +84,7 @@ class CveWireTest < Minitest::Test
   # drive the full listener via SmtpServer.run with the tcp_server seam.
 
   def self.tls_material
-    @tls_material ||= MailOnRails::Smtp::TLS.generate_self_signed
+    @tls_material ||= MailOnRails::Netserv::Tls.generate_self_signed
   end
 
   def run_listener(role: :mx)

@@ -47,7 +47,7 @@ class SmtpCapabilityTest < Minitest::Test
   end
 
   def tls_ctx
-    @@tls_ctx ||= MailOnRails::Smtp::TLS.context(MailOnRails::Smtp::TLS.generate_self_signed)
+    @@tls_ctx ||= MailOnRails::Netserv::Tls.context(MailOnRails::Netserv::Tls.generate_self_signed)
   end
 
   BASE_SET = [ "SIZE #{MailOnRails::SmtpServer::MAX_MESSAGE_BYTES}", "8BITMIME", "PIPELINING",

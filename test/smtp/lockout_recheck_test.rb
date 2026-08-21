@@ -40,7 +40,7 @@ class LockoutRecheckTest < Minitest::Test
 
   # Generating a keypair is slow enough to share across the suite.
   def self.tls_material
-    @tls_material ||= MailOnRails::Smtp::TLS.generate_self_signed
+    @tls_material ||= MailOnRails::Netserv::Tls.generate_self_signed
   end
 
   # AUTH is only offered over an encrypted channel, so the wire tests run

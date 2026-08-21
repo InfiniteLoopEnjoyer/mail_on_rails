@@ -4,7 +4,7 @@ require "test_helper"
 require "tmpdir"
 require "logger"
 require "stringio"
-require "mail_on_rails/imap/tls"
+require "mail_on_rails/netserv/tls"
 require "mail_on_rails/imap/daemon"
 
 # Boot-time TLS material resolution, mirroring the SMTP twin. Explicitly
@@ -14,7 +14,7 @@ require "mail_on_rails/imap/daemon"
 # encrypted) refusing every login. The self-signed development path stays
 # forgiving.
 class ImapTlsMaterialTest < Minitest::Test
-  TLS = MailOnRails::Imap::TLS
+  TLS = MailOnRails::Netserv::Tls
   ENV_KEYS = %w[MAIL_ON_RAILS_TLS_CERT MAIL_ON_RAILS_TLS_KEY].freeze
 
   def setup
@@ -46,7 +46,7 @@ class ImapTlsMaterialTest < Minitest::Test
       ENV["MAIL_ON_RAILS_TLS_CERT"] = cert
       ENV["MAIL_ON_RAILS_TLS_KEY"] = key
 
-      assert_equal({ cert_path: cert, key_path: key }, TLS.material(logger: null_logger))
+      assert_equal({ cert_path: cert, key_path: key }, TLS.for(:imap).material(logger: null_logger))
     end
   end
 
@@ -54,7 +54,7 @@ class ImapTlsMaterialTest < Minitest::Test
     ENV["MAIL_ON_RAILS_TLS_CERT"] = "/nonexistent/fullchain.pem"
     ENV["MAIL_ON_RAILS_TLS_KEY"] = "/nonexistent/privkey.pem"
 
-    error = assert_raises(TLS::Error) { TLS.material(logger: null_logger) }
+    error = assert_raises(TLS::Error) { TLS.for(:imap).material(logger: null_logger) }
     assert_match(/fullchain\.pem/, error.message, "the message must name the bad path")
   end
 
@@ -65,7 +65,7 @@ class ImapTlsMaterialTest < Minitest::Test
       ENV["MAIL_ON_RAILS_TLS_CERT"] = garbage
       ENV["MAIL_ON_RAILS_TLS_KEY"] = key
 
-      assert_raises(TLS::Error) { TLS.material(logger: null_logger) }
+      assert_raises(TLS::Error) { TLS.for(:imap).material(logger: null_logger) }
     end
   end
 
@@ -76,14 +76,14 @@ class ImapTlsMaterialTest < Minitest::Test
       ENV["MAIL_ON_RAILS_TLS_CERT"] = cert
       ENV["MAIL_ON_RAILS_TLS_KEY"] = other_key
 
-      assert_raises(TLS::Error) { TLS.material(logger: null_logger) }
+      assert_raises(TLS::Error) { TLS.for(:imap).material(logger: null_logger) }
     end
   end
 
   test "setting only one of cert or key is fatal, not a silent self-signed fallback" do
     ENV["MAIL_ON_RAILS_TLS_CERT"] = "/some/fullchain.pem"
 
-    error = assert_raises(TLS::Error) { TLS.material(logger: null_logger) }
+    error = assert_raises(TLS::Error) { TLS.for(:imap).material(logger: null_logger) }
     assert_match(/set together/, error.message)
   end
 
@@ -99,12 +99,12 @@ class ImapTlsMaterialTest < Minitest::Test
   end
 
   test "self-signed dev path stays forgiving and returns nil on failure" do
-    assert_nil TLS.material(dir: nil, logger: null_logger)
+    assert_nil TLS.for(:imap).material(dir: nil, logger: null_logger)
   end
 
   test "self-signed dev path still provisions inline pems" do
     Dir.mktmpdir do |dir|
-      material = TLS.material(dir: dir, logger: null_logger)
+      material = TLS.for(:imap).material(dir: dir, logger: null_logger)
 
       assert material[:cert] && material[:key], "expected inline PEM material"
       assert_path_exists File.join(dir, "selfsigned.crt")
@@ -116,7 +116,7 @@ class ImapTlsMaterialTest < Minitest::Test
     ENV["MAIL_ON_RAILS_TLS_KEY"] = "/nonexistent/privkey.pem"
     logs = StringIO.new
 
-    error = assert_raises(MailOnRails::Imap::TLS::Error) do
+    error = assert_raises(MailOnRails::Netserv::Tls::Error) do
       MailOnRails::Imap::Daemon.start(store: nil, logger: Logger.new(logs))
     end
 

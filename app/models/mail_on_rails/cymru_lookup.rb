@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "ipaddr"
-require "mail_on_rails/smtp/sender_auth/dns"
+require "mail_on_rails/sender_auth/dns"
 
 module MailOnRails
   # Dependency-free IP attribution for honeypot events: origin ASN, AS name,
@@ -25,7 +25,7 @@ module MailOnRails
   class CymruLookup
     Result = Data.define(:asn, :as_name, :country, :prefix, :rdns)
 
-    def self.lookup(ip, resolver: Smtp::SenderAuth::Dns.shared)
+    def self.lookup(ip, resolver: SenderAuth::Dns.shared)
       new(resolver).lookup(ip)
     end
 

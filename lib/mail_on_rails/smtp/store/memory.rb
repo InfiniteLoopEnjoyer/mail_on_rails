@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "monitor"
-require_relative "../../imap/scram"
+require_relative "../../scram"
 
 module MailOnRails
   module Smtp
@@ -51,7 +51,7 @@ module MailOnRails
           @lock.synchronize do
             account = { id: next_id(:account), email: normalize(email), password: password.to_s, honeypot: honeypot,
                         aliases: Array(aliases).map { |a| normalize(a) },
-                        scram: Imap::Scram.derive(password.to_s) }
+                        scram: Scram.derive(password.to_s) }
             @accounts[account[:id]] = account
             account[:id]
           end
@@ -92,7 +92,7 @@ module MailOnRails
           @lock.synchronize do
             account = @accounts.values.find { |a| a[:email] == normalize(email) }
             scram = account&.dig(:scram)
-            return Imap::Scram.decoy_credentials(normalize(email), @decoy_secret) unless scram
+            return Scram.decoy_credentials(normalize(email), @decoy_secret) unless scram
 
             {
               account_id: account[:id],

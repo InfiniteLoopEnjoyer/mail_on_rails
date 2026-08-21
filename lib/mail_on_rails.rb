@@ -18,9 +18,11 @@ loader.ignore("#{__dir__}/mail_on_rails/version.rb") # required above; defines V
 loader.ignore("#{__dir__}/mail_on_rails/engine.rb")  # required below, only under Rails
 loader.ignore("#{__dir__}/generators")
 loader.ignore("#{__dir__}/puma")
-%w[imap_server.rb smtp_server.rb mime.rb imap.rb smtp.rb store.rb
+loader.ignore("#{__dir__}/mail_on_rails/testing") # test harness; requires minitest, never eager-loaded
+%w[imap_server.rb smtp_server.rb imap.rb smtp.rb store.rb
    clamav_scanner.rb rspamd_analyzer.rb settings.rb dnssec.rb
-   imap smtp netserv store fuzz settings dnssec].each do |path|
+   sender_auth.rb scram.rb send_quota.rb outbound_data.rb clamav_client.rb
+   imap smtp netserv store fuzz settings dnssec sender_auth].each do |path|
   loader.ignore("#{__dir__}/mail_on_rails/#{path}")
 end
 loader.setup
@@ -42,7 +44,11 @@ module MailOnRails
   # Optional multi-database redirection for the gem's models; Record
   # applies it (`config.mail_on_rails.connects_to = { database: ... }`).
   mattr_accessor :connects_to
-  mattr_accessor :protocols, default: [ :imap, :smtp ]
+  # Which installed protocols the Puma plugin runs in this process. nil =
+  # not chosen here: MAIL_ON_RAILS_SERVERS decides, else every installed
+  # protocol in development and none elsewhere (Runtime.in_process_protocols).
+  # An explicit [] means "UI only" even with protocol gems in the bundle.
+  mattr_accessor :protocols, default: nil
   mattr_accessor :tls_dir # engine defaults this to Rails.root/storage/tls
   mattr_accessor :smtp_hostname_resolver # callable; engine wraps Setting
   mattr_accessor :shutdown_drain, default: 5
@@ -104,3 +110,9 @@ end
 # After the module body: isolate_namespace consults table_name_prefix, so
 # the method above must exist before the engine loads.
 require "mail_on_rails/engine" if defined?(Rails::Engine)
+
+# Protocol entry points register themselves with Runtime (one-package
+# phase: both ship in this gem; as separate gems each host requires only
+# the ones it installs).
+require "mail_on_rails/smtp"
+require "mail_on_rails/imap"

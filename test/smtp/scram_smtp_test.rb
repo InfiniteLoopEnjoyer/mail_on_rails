@@ -3,7 +3,7 @@
 require "test_helper"
 require "socket"
 require "mail_on_rails/smtp_server"
-require "mail_on_rails/imap/scram"
+require "mail_on_rails/scram"
 require "mail_on_rails/smtp/store/memory"
 
 # The SCRAM-SHA-256 AUTH exchange as the SMTP session drives it over the
@@ -13,7 +13,7 @@ require "mail_on_rails/smtp/store/memory"
 # handling, submission-only gating, and the rule that no failure path may
 # leave the session authenticated.
 class ScramSmtpTest < Minitest::Test
-  Scram = MailOnRails::Imap::Scram
+  Scram = MailOnRails::Scram
 
   EMAIL = "user@example.test"
   PASSWORD = "pw-123456"

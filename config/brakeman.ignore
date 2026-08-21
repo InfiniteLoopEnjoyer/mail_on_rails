@@ -3,17 +3,17 @@
     {
       "warning_type": "SSL Verification Bypass",
       "warning_code": 71,
-      "fingerprint": "7d5f84d2f5bc2c385e9250b7cbc04ee4ef0d9268ca73e6dd7b9700059579c45d",
+      "fingerprint": "aebe2825f231f19ca1bd1c96e5016b5c776e44754c92255d7b677379863c4b2d",
       "check_name": "SSLVerify",
       "message": "SSL certificate verification was bypassed",
-      "file": "lib/mail_on_rails/smtp/tls.rb",
-      "line": 129,
+      "file": "lib/mail_on_rails/netserv/tls.rb",
+      "line": 70,
       "link": "https://brakemanscanner.org/docs/warning_types/ssl_verification_bypass/",
       "code": "OpenSSL::SSL::SSLContext.new.verify_mode = OpenSSL::SSL::VERIFY_NONE",
       "render_path": null,
       "location": {
         "type": "method",
-        "class": "MailOnRails::Smtp::TLS",
+        "class": "MailOnRails::Netserv::Tls",
         "method": "context"
       },
       "user_input": null,
@@ -21,30 +21,7 @@
       "cwe_id": [
         295
       ],
-      "note": "Server-side listener context: VERIFY_NONE here disables requesting/verifying CLIENT certificates, which this server never uses - IMAP/SMTP clients authenticate via SASL (SCRAM/PLAIN) and verify OUR certificate. No outbound connection is made with this context, so no peer verification is being bypassed."
-    },
-    {
-      "warning_type": "SSL Verification Bypass",
-      "warning_code": 71,
-      "fingerprint": "b6bfaf498c0a40dbce361ca00ae9aacef5079be2e842cbee3c3cc8057f85d61a",
-      "check_name": "SSLVerify",
-      "message": "SSL certificate verification was bypassed",
-      "file": "lib/mail_on_rails/imap/tls.rb",
-      "line": 129,
-      "link": "https://brakemanscanner.org/docs/warning_types/ssl_verification_bypass/",
-      "code": "OpenSSL::SSL::SSLContext.new.verify_mode = OpenSSL::SSL::VERIFY_NONE",
-      "render_path": null,
-      "location": {
-        "type": "method",
-        "class": "MailOnRails::Imap::TLS",
-        "method": "context"
-      },
-      "user_input": null,
-      "confidence": "High",
-      "cwe_id": [
-        295
-      ],
-      "note": "Server-side listener context: VERIFY_NONE here disables requesting/verifying CLIENT certificates, which this server never uses - IMAP/SMTP clients authenticate via SASL (SCRAM/PLAIN) and verify OUR certificate. No outbound connection is made with this context, so no peer verification is being bypassed."
+      "note": "Server-side listener context (shared by the SMTP and IMAP servers): VERIFY_NONE here disables requesting/verifying CLIENT certificates, which these servers never use - IMAP/SMTP clients authenticate via SASL (SCRAM/PLAIN) and verify OUR certificate. No outbound connection is made with this context, so no peer verification is being bypassed."
     },
     {
       "warning_type": "Cross-Site Request Forgery",
@@ -69,5 +46,5 @@
       "note": "RFC 8058 one-click unsubscribe endpoint: the POST is sent server-to-server by the recipient's mailbox provider (Gmail, Yahoo), which has no session and cannot obtain a CSRF token - :exception would break the mandated protocol. There is nothing to forge: the controller is anonymous (no session state is read or written), and the action is authorized solely by the signed UnsubscribeToken in the path, which binds one (recipient, sender) pair. A cross-site attacker who has a valid token already has the unsubscribe capability by definition - CSRF adds nothing."
     }
   ],
-  "updated": "2026-08-19"
+  "updated": "2026-08-21"
 }

@@ -26,7 +26,7 @@
 # spans, unsigned delegations - "outside DNSSEC", never "securely
 # absent") / :bogus (defer, the moral equivalent of SERVFAIL).
 #
-# The outbound DANE path (Smtp::SenderAuth::Dns#tlsa/#mx_answer) runs on
+# The outbound DANE path (SenderAuth::Dns#tlsa/#mx_answer) runs on
 # this resolver; there is no external validating resolver anywhere in
 # the deployment.
 require "dnsruby"

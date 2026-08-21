@@ -9,7 +9,10 @@ require "mail_on_rails/imap/store/memory"
 # The MailOnRails.on_connection_activity seam: the server tells the host
 # whenever the live-connection picture changes (session registered,
 # session ended, IP locked out) so a dashboard can push an update instead
-# of polling. This suite is Rails-free, so the module attribute the Rails
+# of polling. Since the picture is projected to the database by the
+# server's Netserv::OpsSync tick, the hook fires from that tick - once per
+# changed picture, after the rows are written - so the servers here pin a
+# fast tick. This suite is Rails-free, so the module attribute the Rails
 # glue normally defines is stood up on the singleton here - which also
 # pins the respond_to? guard the server resolves the hook through.
 class ConnectionActivityTest < Minitest::Test
@@ -22,6 +25,7 @@ class ConnectionActivityTest < Minitest::Test
     MAX_CONNECTIONS_PER_IP = 0
     AUTH_LOCKOUT_FAILURES = 0
     CONN_RATE_LIMIT = 0
+    OPS_SYNC_INTERVAL = 0.05
   end
 
   # Lockout on the second failed auth, so one connection can produce a
@@ -32,6 +36,7 @@ class ConnectionActivityTest < Minitest::Test
     AUTH_LOCKOUT_FAILURES = 2
     AUTH_LOCKOUT_SECONDS = 900
     CONN_RATE_LIMIT = 0
+    OPS_SYNC_INTERVAL = 0.05
   end
 
   def setup
@@ -65,7 +70,7 @@ class ConnectionActivityTest < Minitest::Test
   end
 
   def self.tls_material
-    @tls_material ||= MailOnRails::Imap::TLS.generate_self_signed
+    @tls_material ||= MailOnRails::Netserv::Tls.generate_self_signed
   end
 
   def connect(spec)
@@ -121,6 +126,7 @@ class ConnectionActivityTest < Minitest::Test
 
     client.write("f1 LOGIN #{EMAIL} wrong-1\r\n")
     read_until_tagged(client, "f1")
+    sleep 0.2 # a couple of ticks
     assert @events.empty?, "a failure below the limit is not an event"
 
     client.write("f2 LOGIN #{EMAIL} wrong-2\r\n")

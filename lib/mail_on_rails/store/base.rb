@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "mail_on_rails/imap/scram"
+require "mail_on_rails/scram"
 
 module MailOnRails
   module Store
@@ -84,7 +84,7 @@ module MailOnRails
           end
 
           account = EmailAccount.find_by(email: email.to_s.strip.downcase)
-          next Imap::Scram.decoy_credentials(email.to_s.strip.downcase, decoy_secret) unless account&.scram_salt
+          next Scram.decoy_credentials(email.to_s.strip.downcase, decoy_secret) unless account&.scram_salt
 
           {
             account_id: account.id,
@@ -136,6 +136,58 @@ module MailOnRails
       def update_honeypot_transcript(id, transcript:)
         db do
           HoneypotEvent.where(id: id).update_all(transcript: transcript, updated_at: Time.current)
+          {}
+        end
+      end
+
+      # -- ops state (Netserv::OpsSync) ---------------------------------
+      #
+      # The daemon projects its live picture into the database so the
+      # admin UI works across processes: the listener row is heartbeated
+      # every tick; connections and lockouts are replaced only when they
+      # changed (nil = unchanged, skip). Optional store methods, all
+      # respond_to?-guarded on the caller's side and best-effort (db's
+      # rescue) - ops state must never disturb a mail session.
+
+      # +listener+ is the plain hash OpsSync builds (listener_id,
+      # protocol, pid, hostname, ports, max_connections, ready,
+      # started_at); +connections+ the Server#connections rows (each with
+      # connection_id); +lockouts+ { ip => locked_until (Time) }.
+      def sync_ops_state(listener:, connections: nil, lockouts: nil)
+        db do
+          Listener.touch!(listener)
+          id = listener[:listener_id]
+          OpenConnection.replace_for!(id, listener[:protocol], connections) if connections
+          AcceptLockout.replace_for!(id, listener[:protocol], lockouts) if lockouts
+          {}
+        end
+      end
+
+      # Unprocessed, unexpired kick commands for a protocol:
+      # [ { id:, ip: }, ... ].
+      def pending_kicks(protocol)
+        db { ConnectionKick.pending_for(protocol) }
+      end
+
+      # Marks a kick processed with how many sessions it dropped.
+      def ack_kick(id, kicked:, processed_by: nil)
+        db do
+          ConnectionKick.acknowledge!(id, kicked: kicked, processed_by: processed_by)
+          {}
+        end
+      end
+
+      # Sweeps listeners (and their rows) that stopped heartbeating
+      # +stale_after+ seconds ago. Returns { pruned: n }.
+      def prune_stale_listeners(stale_after)
+        db { { pruned: Listener.prune_stale!(stale_after) } }
+      end
+
+      # Clean shutdown: drop this listener's projection right away rather
+      # than waiting for it to go stale.
+      def remove_listener(listener_id)
+        db do
+          Listener.remove!(listener_id)
           {}
         end
       end

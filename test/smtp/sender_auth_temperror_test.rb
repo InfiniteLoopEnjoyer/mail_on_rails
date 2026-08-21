@@ -23,7 +23,7 @@ class SenderAuthTemperrorTest < Minitest::Test
       reply.rcode = Resolv::DNS::RCode::ServFail
       reply
     end
-    @resolver = MailOnRails::Smtp::SenderAuth::Dns.new(
+    @resolver = MailOnRails::SenderAuth::Dns.new(
       nameservers: [ "127.0.0.1" ], timeout: 1, port: @fake.port
     )
   end
@@ -33,7 +33,7 @@ class SenderAuthTemperrorTest < Minitest::Test
   end
 
   def test_verify_degrades_to_temperror_verdicts_under_servfail
-    result = MailOnRails::Smtp::SenderAuth.verify(
+    result = MailOnRails::SenderAuth.verify(
       ip: "192.0.2.9", helo: "client.test", mail_from: "sender@remote.test",
       data: RAW, resolver: @resolver
     )
@@ -76,8 +76,8 @@ class SenderAuthTemperrorTest < Minitest::Test
     store = MailOnRails::Smtp::Store::Memory.new
     store.add_account(email: EMAIL, password: "pw-123456")
 
-    singleton = MailOnRails::Smtp::SenderAuth.singleton_class
-    original = MailOnRails::Smtp::SenderAuth.method(:verify)
+    singleton = MailOnRails::SenderAuth.singleton_class
+    original = MailOnRails::SenderAuth.method(:verify)
     resolver = @resolver
     singleton.define_method(:verify) { |**kwargs| original.call(**kwargs, resolver: resolver) }
 

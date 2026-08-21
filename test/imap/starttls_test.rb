@@ -17,7 +17,7 @@ class StarttlsTest < Minitest::Test
   # One self-signed pair for the whole suite; generating RSA keys per test
   # dominates the runtime otherwise.
   def self.tls_context
-    @tls_context ||= MailOnRails::Imap::TLS.context(MailOnRails::Imap::TLS.generate_self_signed)
+    @tls_context ||= MailOnRails::Netserv::Tls.context(MailOnRails::Netserv::Tls.generate_self_signed)
   end
 
   def setup

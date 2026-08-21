@@ -4,15 +4,14 @@ require "strscan"
 require "date"
 require "time"
 require "securerandom"
-require "mail_on_rails/imap/scram"
+require "mail_on_rails/scram"
 require "mail_on_rails/settings"
 require "mail_on_rails/netserv/config"
 require "mail_on_rails/netserv/server"
-require "mail_on_rails/imap/tls"
 require "mail_on_rails/imap/session_helpers"
 require "mail_on_rails/imap/utf7"
 require "mail_on_rails/imap/version"
-require_relative "mime"
+require "mail_on_rails/imap/mime"
 
 module MailOnRails
   # IMAP4rev1 server (RFC 3501 subset), run on a thread by Imap::Daemon -
@@ -97,7 +96,6 @@ module MailOnRails
 
     def session_class = Session
 
-    def tls_module = Imap::TLS
 
     # Splits a command line (with literals already inlined as separate
     # elements) into tokens: strings, :lparen and :rparen.
@@ -207,7 +205,7 @@ module MailOnRails
           # mechanism they support, and SCRAM keeps the password itself
           # off the wire even inside TLS. -PLUS only when this connection
           # can actually prove a binding (a real TLS socket).
-          caps << " AUTH=SCRAM-SHA-256-PLUS" if Imap::Scram.channel_binding?(@socket)
+          caps << " AUTH=SCRAM-SHA-256-PLUS" if Scram.channel_binding?(@socket)
           caps << " AUTH=SCRAM-SHA-256 AUTH=PLAIN SASL-IR"
         else
           caps << " STARTTLS" if @tls_ctx
@@ -599,7 +597,7 @@ module MailOnRails
         # dies with it. Anything that gives the session a buffered reader
         # spanning the TLS swap reintroduces the injection - keep the
         # pre-TLS buffer unreachable from here on.
-        @socket = Imap::TLS.accept(io_for(@socket), @tls_ctx)
+        @socket = Netserv::Tls.accept(io_for(@socket), @tls_ctx)
         @tls = true
         set_timeout(session_timeout)
         # Discard pre-TLS session state; the client re-authenticates.
@@ -644,7 +642,7 @@ module MailOnRails
         when "PLAIN" then authenticate_plain(tag, initial)
         when "SCRAM-SHA-256" then authenticate_scram(tag, initial)
         when "SCRAM-SHA-256-PLUS"
-          if Imap::Scram.channel_binding?(@socket)
+          if Scram.channel_binding?(@socket)
             authenticate_scram(tag, initial, plus: true)
           else
             tagged(tag, "NO Unsupported authentication mechanism")
@@ -705,7 +703,7 @@ module MailOnRails
       # never travels on this path.
       def authenticate_scram(tag, initial, plus: false)
         client_first = initial || (sasl_challenge(tag, "") { return } or return)
-        gs2, bare, cb_type, cb_declined = Imap::Scram.split_gs2(decode_base64(client_first))
+        gs2, bare, cb_type, cb_declined = Scram.split_gs2(decode_base64(client_first))
         return tagged(tag, "BAD Malformed SCRAM message") if gs2.nil?
 
         cb_data = nil
@@ -714,12 +712,12 @@ module MailOnRails
           # the gs2 header must then name a type this connection can prove.
           return tagged(tag, "BAD Channel binding required for SCRAM-SHA-256-PLUS") unless cb_type
 
-          cb_data = Imap::Scram.channel_binding_data(@socket, cb_type)
+          cb_data = Scram.channel_binding_data(@socket, cb_type)
           return tagged(tag, "NO Unsupported channel binding type #{cb_type}") unless cb_data
         elsif cb_type
-          message = Imap::Scram.channel_binding?(@socket) ? "NO Channel binding requires SCRAM-SHA-256-PLUS" : "NO Channel binding not supported"
+          message = Scram.channel_binding?(@socket) ? "NO Channel binding requires SCRAM-SHA-256-PLUS" : "NO Channel binding not supported"
           return tagged(tag, message)
-        elsif cb_declined && Imap::Scram.channel_binding?(@socket)
+        elsif cb_declined && Scram.channel_binding?(@socket)
           # RFC 5802 §6: "y" claims the server never advertised -PLUS.
           # This one does, so the claim can only mean the advertisement
           # was stripped - fail rather than complete a downgraded exchange.
@@ -763,12 +761,12 @@ module MailOnRails
         stored_key = creds[:stored_key_base64].unpack1("m0")
         unless final_attrs["r"] == nonce &&
                final_attrs["c"] == [ gs2.b + cb_data.to_s.b ].pack("m0") &&
-               Imap::Scram.valid_proof?(stored_key, auth_message, proof)
+               Scram.valid_proof?(stored_key, auth_message, proof)
           return scram_failure(tag, user)
         end
 
         server_key = creds[:server_key_base64].unpack1("m0")
-        verifier = "v=#{[ Imap::Scram.server_signature(server_key, auth_message) ].pack("m0")}"
+        verifier = "v=#{[ Scram.server_signature(server_key, auth_message) ].pack("m0")}"
         empty = sasl_challenge(tag, [ verifier ].pack("m0")) { return } or return
         return tagged(tag, "BAD Unexpected final client response") unless empty.empty?
 
@@ -960,7 +958,7 @@ module MailOnRails
             next unless name.match?(regex)
             next if special_only && !SPECIAL_USE.key?(name)
 
-            untagged %(#{verb} (#{list_attributes(name, names)}) "/" #{Mime.quote(Imap::Utf7.encode(name))})
+            untagged %(#{verb} (#{list_attributes(name, names)}) "/" #{Imap::Mime.quote(Imap::Utf7.encode(name))})
             emit_status(name, status_items) if status_items
           end
         end
@@ -1177,7 +1175,7 @@ module MailOnRails
           "MAILBOXID" => "(#{result[:mailbox_object_id]})"
         }
         pairs = items.map { |i| "#{i} #{values[i]}" }
-        untagged "STATUS #{Mime.quote(Imap::Utf7.encode(name))} (#{pairs.join(" ")})"
+        untagged "STATUS #{Imap::Mime.quote(Imap::Utf7.encode(name))} (#{pairs.join(" ")})"
         true
       end
 
@@ -1573,7 +1571,7 @@ module MailOnRails
 
       def fetch_items(msg, items, announce_seen: false)
         parsed = nil
-        parse = -> { parsed ||= Mime.parse(msg[:raw]) }
+        parse = -> { parsed ||= Imap::Mime.parse(msg[:raw]) }
         flags = @flags[msg[:uid]] || msg[:flags]
         out = []
 
@@ -1584,27 +1582,27 @@ module MailOnRails
           when "FLAGS"         then out << "FLAGS (#{flags.join(" ")})"
           when "INTERNALDATE"  then out << %(INTERNALDATE "#{internal_date(msg)}")
           when "RFC822.SIZE"   then out << "RFC822.SIZE #{msg[:size]}"
-          when "ENVELOPE"      then out << "ENVELOPE #{Mime.envelope(parse.call)}"
-          when "BODY" then out << "BODY #{Mime.bodystructure(parse.call)}"
-          when "BODYSTRUCTURE" then out << "BODYSTRUCTURE #{Mime.bodystructure(parse.call, extended: true)}"
+          when "ENVELOPE"      then out << "ENVELOPE #{Imap::Mime.envelope(parse.call)}"
+          when "BODY" then out << "BODY #{Imap::Mime.bodystructure(parse.call)}"
+          when "BODYSTRUCTURE" then out << "BODYSTRUCTURE #{Imap::Mime.bodystructure(parse.call, extended: true)}"
           when "EMAILID"       then out << "EMAILID (#{msg[:email_id]})" if msg[:email_id]
           when "THREADID"      then out << (msg[:thread_id] ? "THREADID (#{msg[:thread_id]})" : "THREADID NIL")
           when "SAVEDATE"
             out << (msg[:saved_date] ? %(SAVEDATE "#{Time.at(msg[:saved_date]).strftime("%d-%b-%Y %H:%M:%S %z")}") : "SAVEDATE NIL")
-          when "PREVIEW"       then out << "PREVIEW #{Mime.quote(Mime.preview(parse.call))}"
-          when "RFC822"        then out << "RFC822 #{Mime.literal(msg[:raw])}"
-          when "RFC822.HEADER" then out << "RFC822.HEADER #{Mime.literal(parse.call.header_block)}"
-          when "RFC822.TEXT"   then out << "RFC822.TEXT #{Mime.literal(parse.call.body)}"
+          when "PREVIEW"       then out << "PREVIEW #{Imap::Mime.quote(Imap::Mime.preview(parse.call))}"
+          when "RFC822"        then out << "RFC822 #{Imap::Mime.literal(msg[:raw])}"
+          when "RFC822.HEADER" then out << "RFC822.HEADER #{Imap::Mime.literal(parse.call.header_block)}"
+          when "RFC822.TEXT"   then out << "RFC822.TEXT #{Imap::Mime.literal(parse.call.body)}"
           else
             if (m = item.match(/\ABODY(\.PEEK)?\[(.*)\](?:<(\d+)(?:\.(\d+))?>)?\z/i))
               _peek, section, start, count = m[1], m[2], m[3], m[4]
-              data = Mime.section(parse.call, section)
+              data = Imap::Mime.section(parse.call, section)
               label = +"BODY[#{section.upcase}]"
               if data && start
                 data = data.byteslice(start.to_i, count ? count.to_i : data.bytesize).to_s
                 label << "<#{start}>"
               end
-              out << "#{label} #{data ? Mime.literal(data) : "NIL"}"
+              out << "#{label} #{data ? Imap::Mime.literal(data) : "NIL"}"
             end
           end
         end
@@ -1871,7 +1869,7 @@ module MailOnRails
       def sort_values(msg, criteria)
         headers = nil
         read_header = lambda do |name|
-          headers ||= Mime.parse_headers(Mime.split_header(msg[:raw].to_s)[0])
+          headers ||= Imap::Mime.parse_headers(Imap::Mime.split_header(msg[:raw].to_s)[0])
           headers[name]&.first.to_s
         end
 
@@ -1894,7 +1892,7 @@ module MailOnRails
       end
 
       def first_addr_mailbox(value)
-        Mime.parse_addresses(value).first&.at(1).to_s.downcase
+        Imap::Mime.parse_addresses(value).first&.at(1).to_s.downcase
       end
 
       # RFC 5256 §2.1 base subject, simplified: strip trailing "(fwd)"
@@ -1946,7 +1944,7 @@ module MailOnRails
       # subject, and the sent date (INTERNALDATE when unparseable, as in
       # SORT).
       def thread_entry(seq, uid, msg, uid_mode)
-        headers = Mime.parse_headers(Mime.split_header(msg[:raw].to_s)[0])
+        headers = Imap::Mime.parse_headers(Imap::Mime.split_header(msg[:raw].to_s)[0])
         subject = headers["subject"]&.first.to_s
         references = header_msg_ids(headers, "references")
         references = header_msg_ids(headers, "in-reply-to").first(1) if references.empty?
@@ -2341,7 +2339,7 @@ module MailOnRails
       def sent_date_key(str, &compare)
         day = parse_search_date(str)
         raw_key do |_seq, msg|
-          value = Mime.parse_headers(Mime.split_header(msg[:raw].to_s)[0])["date"]&.first
+          value = Imap::Mime.parse_headers(Imap::Mime.split_header(msg[:raw].to_s)[0])["date"]&.first
           sent_day = begin
             value && Date.parse(value)
           rescue ArgumentError, TypeError
@@ -2379,7 +2377,7 @@ module MailOnRails
         name = name.downcase
         value = value.downcase
         raw_key do |_seq, msg|
-          headers = Mime.parse_headers(Mime.split_header(msg[:raw].to_s)[0])
+          headers = Imap::Mime.parse_headers(Imap::Mime.split_header(msg[:raw].to_s)[0])
           headers[name].to_a.any? { |v| v.downcase.include?(value) }
         end
       end
@@ -2407,7 +2405,7 @@ module MailOnRails
         value = value.downcase
         raw_key do |_seq, msg|
           haystack = msg[:raw].to_s
-          haystack = Mime.split_header(haystack)[1] if scope == "body"
+          haystack = Imap::Mime.split_header(haystack)[1] if scope == "body"
           haystack.downcase.include?(value)
         end
       end
@@ -2431,7 +2429,7 @@ module MailOnRails
         name = mailbox_name_arg(tag, args.shift, "GETQUOTAROOT") or return
         return tagged(tag, "NO [NONEXISTENT] No such mailbox") if @store.status(@account_id, name)[:error]
 
-        untagged %(QUOTAROOT #{Mime.quote(Imap::Utf7.encode(name))} "")
+        untagged %(QUOTAROOT #{Imap::Mime.quote(Imap::Utf7.encode(name))} "")
         untagged %(QUOTA "" #{quota_resources})
         tagged tag, "OK GETQUOTAROOT completed"
       end

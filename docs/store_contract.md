@@ -142,6 +142,35 @@ side: any non-array result (the AR store returns `db`'s error hash on a
 database problem) keeps the denylist's last good list, and unparseable
 entries are skipped.
 
+### Ops state: `sync_ops_state`, `pending_kicks`, `ack_kick`, `prune_stale_listeners`, `remove_listener` — optional
+
+Each server runs a `Netserv::OpsSync` thread that projects its live
+picture into the database so an admin UI in *another process* can show
+it, and that carries commands back. All five are optional (checked with
+`respond_to?`), best-effort, and only ever called from that thread —
+never from the accept path or a connection thread. A store without them
+(the memory stores) still gets the tick's change detection and the
+`on_connection_activity` hook; it just keeps no rows.
+
+- `sync_ops_state(listener:, connections: nil, lockouts: nil)` — every
+  tick. `listener` is `{ listener_id:, protocol:, pid:, hostname:,
+  ports:, max_connections:, ready:, started_at: }` and must be upserted
+  (it is the heartbeat). `connections` (the `Server#connections` rows,
+  each carrying `connection_id:`) and `lockouts` (`{ ip => locked_until
+  Time }`) are passed only when the picture changed, otherwise `nil` =
+  leave the rows alone. Returns `{}`.
+- `pending_kicks(protocol)` — unprocessed, unexpired kick commands for
+  this protocol as `[ { id:, ip: }, ... ]`; the server drops matching
+  sessions and calls `ack_kick(id, kicked:, processed_by:)`.
+- `prune_stale_listeners(stale_after)` — sweep listeners (and their
+  rows) that stopped heartbeating `stale_after` seconds ago; returns
+  `{ pruned: n }`.
+- `remove_listener(listener_id)` — clean shutdown: drop this listener's
+  projection immediately.
+
+Bans need no command row: the server kicks live sessions its denylist
+(`banned_cidrs`) now matches on every tick.
+
 ### Settings are deliberately not part of the store contract
 
 Runtime configuration (`MailOnRails::Settings`) reaches the servers

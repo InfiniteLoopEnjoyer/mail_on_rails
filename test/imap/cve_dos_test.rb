@@ -2,7 +2,7 @@
 
 require "test_helper"
 require "wire_harness"
-require "mail_on_rails/mime"
+require "mail_on_rails/imap/mime"
 
 # Resource-exhaustion / crash regressions for the IMAP server, organised by
 # the CVE class each guards against. These are boundary probes: they push
@@ -21,7 +21,7 @@ require "mail_on_rails/mime"
 class CveDosTest < Minitest::Test
   include WireHarness
 
-  Mime = MailOnRails::Mime
+  Mime = MailOnRails::Imap::Mime
 
   # A single wall-clock ceiling for every "must stay bounded" assertion. The
   # bounded paths answer in tens of milliseconds; an unbounded one would run

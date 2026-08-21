@@ -115,18 +115,18 @@ class RuntimeVirusScannerGuardTest < Minitest::Test
 
   test "an empty clamd address fails the production boot" do
     MailOnRails::Settings.overrides = { smtp_clamav_addr: "" }
-    error = assert_raises(RuntimeError) { MailOnRails::Runtime.require_virus_scanner! }
+    error = assert_raises(RuntimeError) { MailOnRails::Smtp::Protocol.require_virus_scanner! }
     assert_match(/SMTP_CLAMAV_ADDR/, error.message)
     assert_match(/SMTP_CLAMAV_OPTIONAL/, error.message)
   end
 
   test "SMTP_CLAMAV_OPTIONAL permits booting without a scanner" do
     MailOnRails::Settings.overrides = { smtp_clamav_addr: "", smtp_clamav_optional: true }
-    assert_nil MailOnRails::Runtime.require_virus_scanner!
+    assert_nil MailOnRails::Smtp::Protocol.require_virus_scanner!
   end
 
   test "a configured clamd address boots" do
     MailOnRails::Settings.overrides = { smtp_clamav_addr: "127.0.0.1:3310" }
-    assert_nil MailOnRails::Runtime.require_virus_scanner!
+    assert_nil MailOnRails::Smtp::Protocol.require_virus_scanner!
   end
 end

@@ -19,7 +19,7 @@ class ImapPenTest < Minitest::Test
   RAW = "From: sender@remote.test\r\nSubject: pen\r\n\r\nbody\r\n"
 
   def self.tls_context
-    @tls_context ||= MailOnRails::Imap::TLS.context(MailOnRails::Imap::TLS.generate_self_signed)
+    @tls_context ||= MailOnRails::Netserv::Tls.context(MailOnRails::Netserv::Tls.generate_self_signed)
   end
 
   def setup

@@ -1,5 +1,5 @@
-require "mail_on_rails/smtp/sender_auth/dns"
-require "mail_on_rails/smtp/sender_auth/dmarc"
+require "mail_on_rails/sender_auth/dns"
+require "mail_on_rails/sender_auth/dmarc"
 
 # Receiver-side BIMI (Brand Indicators for Message Identification): the
 # per-sender-domain cache of "may we show this domain's logo, and what
@@ -62,7 +62,7 @@ module MailOnRails
     end
 
     # The full evaluation, persisted. Injectable DNS/fetcher for tests.
-    def self.refresh!(domain, dns: MailOnRails::Smtp::SenderAuth::Dns.shared, fetcher: BimiFetcher)
+    def self.refresh!(domain, dns: MailOnRails::SenderAuth::Dns.shared, fetcher: BimiFetcher)
       row = find_or_create_by!(domain: domain)
       attributes = evaluate(row.domain, dns: dns, fetcher: fetcher)
       row.update!(attributes.merge(checked_at: Time.current))
@@ -87,7 +87,7 @@ module MailOnRails
       { status: "pass", svg: svg, evidence: tags["a"].to_s.strip.present?, error: nil }
     rescue BimiFetcher::Error, BimiSvg::Invalid => e
       { status: "fail", svg: nil, error: e.message.to_s.truncate(200) }
-    rescue MailOnRails::Smtp::SenderAuth::Dns::TempError => e
+    rescue MailOnRails::SenderAuth::Dns::TempError => e
       # DNS trouble is not a verdict: keep whatever we had, try again later.
       { error: "DNS: #{e.message.to_s.truncate(180)}" }
     end
@@ -97,7 +97,7 @@ module MailOnRails
     # reject. Same record-discovery walk as DMARC itself (the domain,
     # then its organizational domain, whose sp= then governs).
     def self.dmarc_enforced?(domain, dns)
-      org = MailOnRails::Smtp::SenderAuth::Dmarc.org_domain(domain)
+      org = MailOnRails::SenderAuth::Dmarc.org_domain(domain)
       record = dmarc_txt(domain, dns)
       policy_tag = "p"
       if record.nil? && org != domain
@@ -120,7 +120,7 @@ module MailOnRails
     # default._bimi at the domain, falling back to its org domain - the
     # BIMI assertion record discovery.
     def self.bimi_record(domain, dns)
-      [ domain, MailOnRails::Smtp::SenderAuth::Dmarc.org_domain(domain) ].uniq.each do |candidate|
+      [ domain, MailOnRails::SenderAuth::Dmarc.org_domain(domain) ].uniq.each do |candidate|
         records = dns.txt("default._bimi.#{candidate}").select { |t| t.match?(/\Av=BIMI1(\s*;|\s*\z)/i) }
         return records.first if records.size == 1
       end

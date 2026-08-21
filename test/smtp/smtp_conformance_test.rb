@@ -547,7 +547,7 @@ class SmtpConformanceTest < Minitest::Test
   end
 
   def self.tls_material
-    @tls_material ||= MailOnRails::Smtp::TLS.generate_self_signed
+    @tls_material ||= MailOnRails::Netserv::Tls.generate_self_signed
   end
 
   # -- command timeout (RFC 5321 4.3.3) --------------------------------------

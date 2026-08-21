@@ -13,7 +13,7 @@ module MailOnRails
     # SCRAM default while staying unnoticeable at login. Stored per row and
     # served back from there, so existing accounts keep their old cost
     # until the next password change. Keep in step with
-    # MailOnRails::Imap::Scram::ITERATIONS.
+    # MailOnRails::Scram::ITERATIONS.
     SCRAM_ITERATIONS = 100_000
 
     # The stored/server keys are password-verifier material - not the

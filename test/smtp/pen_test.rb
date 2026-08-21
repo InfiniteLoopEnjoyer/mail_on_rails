@@ -63,8 +63,8 @@ class SmtpPenTest < Minitest::Test
   end
 
   def without_sender_verification
-    singleton = MailOnRails::Smtp::SenderAuth.singleton_class
-    original = MailOnRails::Smtp::SenderAuth.method(:verify)
+    singleton = MailOnRails::SenderAuth.singleton_class
+    original = MailOnRails::SenderAuth.method(:verify)
     singleton.define_method(:verify) { |**| nil }
     yield
   ensure

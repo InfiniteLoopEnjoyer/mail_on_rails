@@ -4,7 +4,7 @@ require "test_helper"
 require "logger"
 require "mail_on_rails/smtp_server"
 require "mail_on_rails/smtp/store/memory"
-require_relative "fake_clamd"
+require "fake_clamd"
 
 # Virus scanning at the DATA hot path, end-to-end over a loopback session
 # against a scripted clamd (see FakeClamd). Policy under test: infected mail
@@ -49,8 +49,8 @@ class SmtpVirusScanTest < Minitest::Test
   end
 
   def without_sender_verification
-    singleton = MailOnRails::Smtp::SenderAuth.singleton_class
-    original = MailOnRails::Smtp::SenderAuth.method(:verify)
+    singleton = MailOnRails::SenderAuth.singleton_class
+    original = MailOnRails::SenderAuth.method(:verify)
     singleton.define_method(:verify) { |**| nil }
     yield
   ensure

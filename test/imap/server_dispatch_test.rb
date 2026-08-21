@@ -81,7 +81,7 @@ class ServerDispatchTest < Minitest::Test
   end
 
   def tls_material
-    @@tls_material ||= MailOnRails::Imap::TLS.generate_self_signed
+    @@tls_material ||= MailOnRails::Netserv::Tls.generate_self_signed
   end
 
   def test_serves_mailbox_over_implicit_tls_end_to_end

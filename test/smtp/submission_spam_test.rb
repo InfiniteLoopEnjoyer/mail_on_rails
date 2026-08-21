@@ -3,7 +3,7 @@
 require "test_helper"
 require "mail_on_rails/smtp_server"
 require "mail_on_rails/smtp/store/memory"
-require_relative "fake_rspamd"
+require "fake_rspamd"
 
 # The outbound spam gate at the DATA hot path: authenticated submissions
 # are scored by rspamd and refused on its "reject" (550) and "soft reject"

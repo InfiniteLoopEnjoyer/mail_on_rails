@@ -30,7 +30,7 @@ module MailOnRails
       # from deferring behind a half-capable local stub.
       FALLBACK_NAMESERVERS = [ "8.8.8.8", "1.1.1.1" ].freeze
 
-      # Parsed once, like Smtp::SenderAuth::Dns - resolv.conf changes
+      # Parsed once, like SenderAuth::Dns - resolv.conf changes
       # need a process restart, which container deploys do anyway.
       def self.system_nameservers
         servers = File.readlines("/etc/resolv.conf", chomp: true)

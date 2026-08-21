@@ -10,7 +10,12 @@
 #   smtp_rbl_zones: %w[zen.spamhaus.org]
 # }
 
-# Which protocols the servers run (Puma plugin and bin/mail_server):
+# Which installed protocols run inside the web process (the Puma plugin).
+# Protocols are installed by adding the mail_on_rails_smtp / mail_on_rails_imap
+# gems. Unset, MAIL_ON_RAILS_SERVERS decides ("smtp,imap", "smtp", "imap",
+# "0"); unset too, development runs every installed protocol and other
+# environments run none (run them with bin/mail_server instead). An
+# explicit [] means "web UI only".
 # config.mail_on_rails.protocols = [ :imap, :smtp ]
 
 # Tell the shared brute-force analysis which web logins actually exist:

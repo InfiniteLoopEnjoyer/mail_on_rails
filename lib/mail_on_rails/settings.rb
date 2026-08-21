@@ -487,6 +487,16 @@ module MailOnRails
     setting :conn_log_retention_days, type: :integer, default: 90, env: "MAIL_ON_RAILS_CONN_LOG_RETENTION_DAYS",
             scope: :dynamic, category: :retention,
             desc: "Days closed-connection history is kept"
+    # The daemons' ops-state projection (Netserv::OpsSync): how often each
+    # listener syncs its live connections / lockouts / heartbeat to the
+    # database and processes kicks, and how long a listener may go without
+    # a heartbeat before other listeners treat it as dead and sweep its rows.
+    setting :ops_sync_interval, type: :integer, default: 2, min: 1, max: 60, env: "MAIL_ON_RAILS_OPS_SYNC_INTERVAL",
+            scope: :dynamic, category: :retention,
+            desc: "Seconds between a listener's ops-state syncs (live connections, lockouts, heartbeat, kicks)"
+    setting :ops_stale_after, type: :integer, default: 30, min: 5, max: 3600, env: "MAIL_ON_RAILS_OPS_STALE_AFTER",
+            scope: :dynamic, category: :retention,
+            desc: "Seconds without a heartbeat before a listener's ops rows are swept as dead"
     setting :conn_log_max_rows_per_ip, type: :integer, default: 50, env: "MAIL_ON_RAILS_CONN_LOG_MAX_ROWS_PER_IP",
             scope: :dynamic, category: :retention,
             desc: "Closed-connection rows kept per IP before rollup"

@@ -23,6 +23,18 @@ jobs:
           ruby-version: .ruby-version
           bundler-cache: true
 
+      - name: Settings suite
+        run: bundle exec rake test:settings
+
+      - name: Netserv suite
+        run: bundle exec rake test:netserv
+
+      - name: Sender-auth suite
+        run: bundle exec rake test:sender_auth
+
+      - name: Primitives suite
+        run: bundle exec rake test:lib
+
       - name: IMAP protocol suite
         run: bundle exec rake test:imap
 

@@ -2,8 +2,8 @@ require "net/smtp"
 require "resolv"
 require "cgi"
 require "dkim"
-require "mail_on_rails/smtp/sender_auth/dns"
-require "mail_on_rails/smtp/outbound_data"
+require "mail_on_rails/sender_auth/dns"
+require "mail_on_rails/outbound_data"
 require "mail_on_rails/idn"
 
 # Delivers one SmtpOutboundMessage to its recipient's mail server:
@@ -118,7 +118,7 @@ module MailOnRails
       new.deliver(message)
     end
 
-    def initialize(dns: MailOnRails::Smtp::SenderAuth::Dns.shared)
+    def initialize(dns: MailOnRails::SenderAuth::Dns.shared)
       @dns = dns
     end
 
@@ -184,7 +184,7 @@ module MailOnRails
         rescue Net::SMTPServerBusy, Net::SMTPUnknownError, Net::SMTPAuthenticationError,
                IOError, SystemCallError, Timeout::Error => e
           errors << "#{host}: #{e.class}: #{e.message.strip}"
-        rescue MailOnRails::Smtp::SenderAuth::Dns::TempError => e
+        rescue MailOnRails::SenderAuth::Dns::TempError => e
           errors << "#{host}: TLSA lookup failed: #{e.message}"
         end
       end
@@ -289,7 +289,7 @@ module MailOnRails
       names = [ domain ] if fallback
 
       Resolved.new(hosts: names.map { |h| [ h, 25 ] }, secure: answer.secure, fallback: fallback)
-    rescue MailOnRails::Smtp::SenderAuth::Dns::TempError => e
+    rescue MailOnRails::SenderAuth::Dns::TempError => e
       raise TransientError, "DNS lookup for #{domain} failed: #{e.message}"
     end
 
@@ -518,7 +518,7 @@ module MailOnRails
       harden(context)
     end
 
-    # The same TLS 1.2+ AEAD-only floor the listeners pin (Smtp::TLS
+    # The same TLS 1.2+ AEAD-only floor the listeners pin (Netserv::Tls
     # .context): a policy-verified session downgraded to a legacy
     # protocol or CBC suite would undercut what DANE/MTA-STS promised.
     # Only these enforcing contexts are pinned - the opportunistic path
@@ -569,7 +569,7 @@ module MailOnRails
     # smuggling probe cannot ride out as a DATA terminator. DKIM covers
     # the bytes we actually put on the wire.
     def signed(message)
-      data = ensure_required_headers(Smtp::OutboundData.canonicalize(message.data), message)
+      data = ensure_required_headers(OutboundData.canonicalize(message.data), message)
       data = inject_list_id(data, message)
       data = inject_list_unsubscribe(data, message)
       domain = signing_domain(data, message.mail_from)
@@ -592,7 +592,7 @@ module MailOnRails
     rescue TransientError
       raise
     rescue StandardError => e
-      data ||= Smtp::OutboundData.canonicalize(message.data)
+      data ||= OutboundData.canonicalize(message.data)
       unsigned_or_defer(data, message, domain, "signing failed (#{e.class}: #{e.message})")
     end
 

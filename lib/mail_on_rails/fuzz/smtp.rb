@@ -74,15 +74,15 @@ module MailOnRails
       end
 
       def disable_sender_verification
-        singleton = MailOnRails::Smtp::SenderAuth.singleton_class
-        @sender_auth_original = MailOnRails::Smtp::SenderAuth.method(:verify)
+        singleton = MailOnRails::SenderAuth.singleton_class
+        @sender_auth_original = MailOnRails::SenderAuth.method(:verify)
         singleton.define_method(:verify) { |**| nil }
       end
 
       def restore_sender_verification
         return unless @sender_auth_original
 
-        MailOnRails::Smtp::SenderAuth.singleton_class.define_method(:verify, @sender_auth_original)
+        MailOnRails::SenderAuth.singleton_class.define_method(:verify, @sender_auth_original)
         @sender_auth_original = nil
       end
 

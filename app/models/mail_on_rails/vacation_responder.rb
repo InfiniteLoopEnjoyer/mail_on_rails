@@ -1,4 +1,4 @@
-require "mail_on_rails/smtp/send_quota"
+require "mail_on_rails/send_quota"
 
 # Sends an account's vacation auto-reply for an inbound message, with the
 # RFC 3834 loop protections that keep autoresponders from mailbombing
@@ -30,7 +30,7 @@ module MailOnRails
     # +mail+ is the parsed inbound message, +return_path+ its envelope
     # sender (the mailroom knows it from the edge stamp). Returns true when
     # a reply went out.
-    def deliver_if_due(account, mail, return_path:, quota: MailOnRails::Smtp::SendQuota.shared)
+    def deliver_if_due(account, mail, return_path:, quota: MailOnRails::SendQuota.shared)
       return false unless account.vacation_active?
       return false if bounce?(return_path) || auto_generated?(mail) || list_traffic?(mail)
 

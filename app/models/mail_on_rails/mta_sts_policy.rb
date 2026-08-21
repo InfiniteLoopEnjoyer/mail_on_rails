@@ -1,6 +1,6 @@
 require "net/http"
 require "ipaddr"
-require "mail_on_rails/smtp/sender_auth/dns"
+require "mail_on_rails/sender_auth/dns"
 
 # A recipient domain's cached MTA-STS policy (RFC 8461) - the sending
 # side of the protocol; MtaSts is our published side. The DB row is the
@@ -43,14 +43,14 @@ module MailOnRails
     Lookup = Struct.new(:policy, :fetch_error, keyword_init: true)
     NONE = Lookup.new(policy: nil, fetch_error: false)
 
-    def self.lookup(domain, dns: MailOnRails::Smtp::SenderAuth::Dns.shared)
+    def self.lookup(domain, dns: MailOnRails::SenderAuth::Dns.shared)
       domain = domain.to_s.downcase
       cached = find_by(domain: domain)
       cached = nil if cached&.expired?
 
       begin
         txt_id = published_id(domain, dns)
-      rescue MailOnRails::Smtp::SenderAuth::Dns::TempError
+      rescue MailOnRails::SenderAuth::Dns::TempError
         # Resolver trouble: whatever is validly cached stays in force.
         return Lookup.new(policy: cached, fetch_error: false)
       end

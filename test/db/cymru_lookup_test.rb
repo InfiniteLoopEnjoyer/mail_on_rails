@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
-require_relative "../smtp/fake_resolver"
+require "fake_resolver"
 
 # CymruLookup parses Team Cymru's DNS answers into ASN/country/rDNS. Driven
 # with the hash-backed FakeResolver - no network.

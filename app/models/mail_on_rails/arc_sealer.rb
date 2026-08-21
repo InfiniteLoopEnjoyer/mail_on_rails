@@ -1,5 +1,5 @@
 require "openssl"
-require "mail_on_rails/smtp/sender_auth/arc"
+require "mail_on_rails/sender_auth/arc"
 
 # Seals a message with an ARC set (RFC 8617) - the chain-of-custody a
 # forwarder attaches so downstream receivers can trust the original
@@ -18,7 +18,7 @@ require "mail_on_rails/smtp/sender_auth/arc"
 # README roadmap). A message with no ARC headers is sealed as instance 1
 # (cv=none). One that already carries a chain is extended as instance
 # N+1 when the caller passes the chain verdict it got from the validator
-# (MailOnRails::Smtp::SenderAuth::Arc) - cv=pass seals the whole chain,
+# (MailOnRails::SenderAuth::Arc) - cv=pass seals the whole chain,
 # cv=fail seals only its own set (RFC 8617 5.1.2); with no verdict the
 # message is returned untouched, since extending unvalidated chains
 # would vouch for something never checked.
@@ -35,7 +35,7 @@ module MailOnRails
 
     # Chains longer than this are not extended - mirrors the validator's
     # cap (RFC 8617 allows 50; nothing legitimate approaches it).
-    MAX_CHAIN = MailOnRails::Smtp::SenderAuth::Arc::MAX_INSTANCES
+    MAX_CHAIN = MailOnRails::SenderAuth::Arc::MAX_INSTANCES
 
     def self.seal(raw, auth_results:, domain:, selector:, private_key:, chain: nil)
       new(domain: domain, selector: selector, private_key: private_key)
@@ -170,7 +170,7 @@ module MailOnRails
     end
 
     # Relaxed canonicalization, mirroring the verifier
-    # (MailOnRails::Smtp::SenderAuth::Dkim) which is verification-only.
+    # (MailOnRails::SenderAuth::Dkim) which is verification-only.
 
     def canonical_body(body)
       lines = body.split("\r\n", -1).map { |l| l.gsub(/[ \t]+/, " ").sub(/ \z/, "") }

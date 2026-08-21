@@ -59,7 +59,7 @@ class SubmissionQuotaTest < Minitest::Test
   end
 
   def test_recipients_over_the_quota_get_452
-    quota = MailOnRails::Smtp::SendQuota.new(limit: 2, window: 3600)
+    quota = MailOnRails::SendQuota.new(limit: 2, window: 3600)
     with_session(role: :submission, quota: quota) do |client|
       authenticate(client)
       assert_match(/\A250/, command(client, "RCPT TO:<one@remote.test>"))
@@ -71,7 +71,7 @@ class SubmissionQuotaTest < Minitest::Test
   end
 
   def test_quota_follows_the_account_across_sessions
-    quota = MailOnRails::Smtp::SendQuota.new(limit: 1, window: 3600)
+    quota = MailOnRails::SendQuota.new(limit: 1, window: 3600)
     with_session(role: :submission, quota: quota) do |client|
       authenticate(client)
       assert_match(/\A250/, command(client, "RCPT TO:<one@remote.test>"))
@@ -92,7 +92,7 @@ class SubmissionQuotaTest < Minitest::Test
   end
 
   def test_unauthenticated_mx_traffic_never_touches_the_quota
-    quota = MailOnRails::Smtp::SendQuota.new(limit: 1, window: 3600)
+    quota = MailOnRails::SendQuota.new(limit: 1, window: 3600)
     with_session(role: :mx, quota: quota) do |client|
       read_reply(client)
       command(client, "EHLO client.test")

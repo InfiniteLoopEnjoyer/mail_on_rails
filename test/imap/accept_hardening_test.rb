@@ -69,7 +69,7 @@ class AcceptHardeningTest < Minitest::Test
 
   # Generating a keypair is slow enough to share across the suite.
   def self.tls_material
-    @tls_material ||= MailOnRails::Imap::TLS.generate_self_signed
+    @tls_material ||= MailOnRails::Netserv::Tls.generate_self_signed
   end
 
   def connect(spec)

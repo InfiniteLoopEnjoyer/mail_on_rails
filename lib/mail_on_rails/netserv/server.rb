@@ -9,6 +9,8 @@ require_relative "denylist"
 require_relative "transcript"
 require_relative "probe_signatures"
 require_relative "honeypot_session"
+require_relative "tls"
+require_relative "ops_sync"
 
 module MailOnRails
   module Netserv
@@ -33,9 +35,9 @@ module MailOnRails
     #
     # Subclasses define MAX_CONNECTIONS (plus the per-IP constants below)
     # and the protocol specifics: protocol_name, busy_line (sent when the
-    # connection cap is hit), listener_label(spec), session_class,
-    # tls_module (the protocol's TLS module - each reads its own env
-    # prefix), and optionally locked_line.
+    # connection cap is hit), listener_label(spec), session_class, and
+    # optionally locked_line. TLS (material, context, accept) is the shared
+    # Netserv::Tls; the daemons resolve the per-protocol material at boot.
     class Server
       # Reap dead peers at the TCP layer (Postal's timings): first probe
       # after 50s idle, then every 10s, gone after 5 unanswered probes -
@@ -68,6 +70,11 @@ module MailOnRails
       # spec[:handshake_timeout].
       HANDSHAKE_TIMEOUT = 30
 
+      # Cadence of the ops-state sync thread (Netserv::OpsSync), seconds.
+      # nil = the live Settings[:ops_sync_interval]; test servers pin a
+      # small constant.
+      OPS_SYNC_INTERVAL = nil
+
       # One live connection's registry entry. peer_ip/spec/connected_at are
       # fixed at accept time; thread and session are filled in as the
       # connection comes up (spawn_session / handle). The session reference
@@ -76,8 +83,10 @@ module MailOnRails
       # monotonic twin of connected_at - the reaper measures age against a
       # clock a step of the wall clock can't fool. tarpit is the delay the
       # RateLimiter served this connection (nil when none), kept so the ops
-      # UI can mark slowed connections live and in the history log.
-      Conn = Struct.new(:thread, :session, :peer_ip, :spec, :connected_at, :started_at, :tarpit)
+      # UI can mark slowed connections live and in the history log. id is
+      # the per-listener sequence number that keys the connection's
+      # open_connections row.
+      Conn = Struct.new(:thread, :session, :peer_ip, :spec, :connected_at, :started_at, :tarpit, :id)
 
       def self.run(store, listeners, tls_material)
         new(store, listeners, tls_material).run
@@ -96,6 +105,10 @@ module MailOnRails
         @rate = RateLimiter.new(limit: -> { conn_rate_limit },
                                 window: -> { conn_rate_window })
         @denylist = Denylist.new(store)
+        # The ops-state projection (live connections, lockouts, heartbeat,
+        # kicks) - see Netserv::OpsSync. Its interval is the class constant
+        # when a test server pins one, else the live setting.
+        @ops = OpsSync.new(self, store, interval: -> { self.class::OPS_SYNC_INTERVAL })
         # Lifecycle state shared between the accept threads, the connection
         # threads, and the host's boot/shutdown calls.
         @lifecycle = Mutex.new
@@ -111,7 +124,7 @@ module MailOnRails
       def run
         # Build the context at boot so TLS problems surface here, not on
         # the first connection.
-        @tls = @tls_material && tls_module::ContextProvider.new(@tls_material)
+        @tls = @tls_material && Tls::ContextProvider.new(@tls_material)
 
         active = @listeners.reject { |spec| spec[:tls] == :implicit && @tls.nil? }
         @lifecycle.synchronize do
@@ -125,9 +138,23 @@ module MailOnRails
         end
         @lifecycle.synchronize { @listener_threads = threads }
         start_session_reaper(active)
+        @ops.start
         @store.log(:info, "#{protocol_name} listening: #{@listeners.map { |s| listener_label(s) }.join(", ")}")
         threads.each(&:join)
       end
+
+      # This server's identity in the ops tables (one UUID per instance).
+      def listener_id = @ops.listener_id
+
+      # The ports this server was configured to bind (ints), for the
+      # listener row.
+      def listener_ports
+        @listeners.map { |spec| spec[:port] }.compact
+      end
+
+      # The accept-side denylist (admin bans); OpsSync kicks live sessions
+      # it now matches.
+      attr_reader :denylist
 
       # True once every listener socket is bound - the host process must
       # not report itself healthy before this (a deploy health check that
@@ -145,6 +172,13 @@ module MailOnRails
       # Runtime monitor restarts an unhealthy server.
       def healthy?
         @lifecycle.synchronize { @listener_threads.none? { |thread| !thread.alive? } }
+      end
+
+      # True once every listener thread has ended (after run started them):
+      # the server is over, whether or not shutdown ran. The ops thread
+      # stops ticking on this.
+      def dead?
+        @lifecycle.synchronize { @listener_threads.any? && @listener_threads.none?(&:alive?) }
       end
 
       # Blocks up to +timeout+ seconds for every listener to bind. False on
@@ -191,6 +225,9 @@ module MailOnRails
         @store.log(:info, "#{protocol_name} closing #{stragglers.size} sessions after #{drain}s drain") if stragglers.any?
         stragglers.each { |socket, _conn| close_quietly(socket) }
         stragglers.each { |_socket, conn| conn.thread&.join(2) }
+        # Last: the ops thread's final cleanup removes this listener's rows
+        # so the dashboard does not wait out the stale window.
+        @ops.stop
       end
 
       # Snapshot of the live connections for the ops UI: an array of
@@ -202,10 +239,34 @@ module MailOnRails
       def connections
         entries = @lifecycle.synchronize { @sessions.values.map { |conn| [ conn.dup, conn.session ] } }
         entries.map do |conn, session|
-          { protocol: protocol_name, peer_ip: conn.peer_ip,
+          { protocol: protocol_name, connection_id: conn.id, peer_ip: conn.peer_ip,
             port: conn.spec[:port], role: conn.spec[:role],
             connected_at: conn.connected_at,
             tarpit: conn.tarpit }.merge(session ? session.live_info : {})
+        end
+      end
+
+      # Tells the host the live-connection picture changed, via the
+      # MailOnRails.on_connection_activity seam. Called by OpsSync after it
+      # has written the changed picture (so a dashboard refresh never
+      # races the rows it announces), never from accept or connection
+      # threads. Resolved through respond_to? because the netserv tree
+      # also boots stdlib-only, without the Rails-glue module attributes.
+      # Best-effort: a dashboard hook must never disturb a listener, so
+      # exceptions are logged and dropped.
+      def notify_activity
+        return unless MailOnRails.respond_to?(:on_connection_activity)
+
+        hook = MailOnRails.on_connection_activity
+        return unless hook
+
+        @protocol_key ||= protocol_name.downcase.to_sym
+        hook.call(@protocol_key)
+      rescue StandardError => e
+        begin
+          @store.log(:warn, "#{protocol_name} connection-activity hook failed: #{e.class}: #{e.message}")
+        rescue StandardError
+          nil
         end
       end
 
@@ -334,29 +395,8 @@ module MailOnRails
 
         @store.log(:warn, "#{protocol_name} locking out #{ip} for #{auth_lockout_seconds}s " \
                           "after #{auth_lockout_failures} failed authentication attempts")
-        notify_activity # the dashboard's locked-out table just grew a row
-      end
-
-      # Tells the host the live-connection picture changed, via the
-      # MailOnRails.on_connection_activity seam. Resolved through
-      # respond_to? because the netserv tree also boots stdlib-only,
-      # without the Rails-glue module attributes. Best-effort like
-      # report_closed: a dashboard hook must never disturb a connection's
-      # lifecycle, so exceptions are logged and dropped.
-      def notify_activity
-        return unless MailOnRails.respond_to?(:on_connection_activity)
-
-        hook = MailOnRails.on_connection_activity
-        return unless hook
-
-        @protocol_key ||= protocol_name.downcase.to_sym
-        hook.call(@protocol_key)
-      rescue StandardError => e
-        begin
-          @store.log(:warn, "#{protocol_name} connection-activity hook failed: #{e.class}: #{e.message}")
-        rescue StandardError
-          nil
-        end
+        # The dashboard's locked-out table just grew a row; OpsSync's next
+        # tick writes and announces it.
       end
 
       def accept_loop(spec, session_spec)
@@ -395,7 +435,8 @@ module MailOnRails
 
       def spawn_session(socket, session_spec, ip, delay)
         tarpit = delay&.positive? ? delay : nil
-        @lifecycle.synchronize { @sessions[socket] = Conn.new(nil, nil, ip, session_spec, Time.now, monotonic, tarpit) }
+        conn = Conn.new(nil, nil, ip, session_spec, Time.now, monotonic, tarpit, @ops.next_connection_id)
+        @lifecycle.synchronize { @sessions[socket] = conn }
         thread = Thread.new { handle(socket, session_spec, ip, delay) }
         # The session may already have finished and deregistered itself;
         # only record the thread while the registration is still live.
@@ -410,10 +451,6 @@ module MailOnRails
       # even after a TLS upgrade swaps the working socket.
       def handle(raw, spec, ip, delay)
         socket = raw
-        # Announce the registration made in spawn_session from here, not
-        # there: spawn_session runs on the accept thread, and the host's
-        # activity hook must never add latency to the accept loop.
-        notify_activity
         # Tarpit (RateLimiter's verdict): served before the TLS handshake
         # and banner. The sleeping connection keeps holding its ConnLimiter
         # slot - that is the cost to the flooding peer.
@@ -421,7 +458,7 @@ module MailOnRails
         ctx = @tls&.context
         if spec[:tls] == :implicit && ctx
           socket.timeout = spec[:handshake_timeout] || HANDSHAKE_TIMEOUT if socket.respond_to?(:timeout=)
-          socket = tls_module.accept(socket, ctx)
+          socket = Tls.accept(socket, ctx)
         end
         session = session_class.new(socket, @store, spec, ctx)
         # Seed the accept-time address so session logs and policy checks
@@ -461,7 +498,6 @@ module MailOnRails
           @sessions.delete(raw)
           @lifecycle_cv.broadcast
         end
-        notify_activity
       end
 
       # Hands the finished connection to the store's history log (the

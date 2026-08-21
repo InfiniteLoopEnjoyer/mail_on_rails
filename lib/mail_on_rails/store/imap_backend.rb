@@ -2,7 +2,7 @@
 
 require "active_support/key_generator"
 require "mail_on_rails/clamav_scanner"
-require "mail_on_rails/imap/scram"
+require "mail_on_rails/scram"
 
 module MailOnRails
   module Store

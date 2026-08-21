@@ -4,7 +4,7 @@ require "test_helper"
 require "mail_on_rails/smtp/fcrdns"
 require "mail_on_rails/smtp_server"
 require "mail_on_rails/smtp/store/memory"
-require_relative "fake_resolver"
+require "fake_resolver"
 
 # FCrDNS facts for a connecting client: PTR resolution with forward
 # confirmation, plus the HELO-resolves-to-peer check. Advisory only -

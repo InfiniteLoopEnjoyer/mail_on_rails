@@ -1,6 +1,6 @@
 require "zlib"
 require "securerandom"
-require "mail_on_rails/smtp/sender_auth/dns"
+require "mail_on_rails/sender_auth/dns"
 
 # Rolls the previous day's TlsRptEvents up into RFC 8460 aggregate
 # reports and mails one to every recipient domain that publishes a
@@ -48,7 +48,7 @@ module MailOnRails
 
       rua = records.first[/;\s*rua\s*=\s*([^;]+)/, 1].to_s
       rua.split(",").filter_map { |uri| uri.strip[/\Amailto:(.+)\z/, 1] }.first(3)
-    rescue MailOnRails::Smtp::SenderAuth::Dns::TempError
+    rescue MailOnRails::SenderAuth::Dns::TempError
       []
     end
 
@@ -126,7 +126,7 @@ module MailOnRails
     end
 
     def dns
-      MailOnRails::Smtp::SenderAuth::Dns.shared
+      MailOnRails::SenderAuth::Dns.shared
     end
   end
 end

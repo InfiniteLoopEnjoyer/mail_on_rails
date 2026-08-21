@@ -5,14 +5,13 @@ require "securerandom"
 require "mail_on_rails/settings"
 require "mail_on_rails/netserv/config"
 require "mail_on_rails/netserv/server"
-require "mail_on_rails/smtp/tls"
 require "mail_on_rails/smtp/session_helpers"
-require "mail_on_rails/smtp/sender_auth"
+require "mail_on_rails/sender_auth"
 require "mail_on_rails/smtp/dnsbl"
 require "mail_on_rails/smtp/fcrdns"
-require "mail_on_rails/smtp/clamav_client"
-require "mail_on_rails/smtp/send_quota"
-require "mail_on_rails/imap/scram"
+require "mail_on_rails/clamav_client"
+require "mail_on_rails/send_quota"
+require "mail_on_rails/scram"
 require "mail_on_rails/rspamd_analyzer"
 
 module MailOnRails
@@ -61,7 +60,7 @@ module MailOnRails
     # MAX_AUTH_ATTEMPTS per connection, fresh on every reconnect), and a
     # sliding-window connection rate answered with an escalating pre-banner
     # tarpit. 0 disables any of them. The per-ACCOUNT budget for
-    # authenticated senders lives session-side instead (Smtp::SendQuota,
+    # authenticated senders lives session-side instead (SendQuota,
     # consumed at RCPT) - the abuse it bounds, one stolen credential worked
     # from many IPs, is invisible to everything keyed by peer address.
     #
@@ -87,7 +86,6 @@ module MailOnRails
 
     def session_class = Session
 
-    def tls_module = Smtp::TLS
 
     class Session
       include Smtp::SessionHelpers
@@ -392,7 +390,7 @@ module MailOnRails
           # LOGIN is deliberately NOT advertised (obsolete, and a scanner
           # fingerprint); the handler still answers it for legacy clients
           # configured to use it regardless.
-          mechanisms = Imap::Scram.channel_binding?(@socket) ? "SCRAM-SHA-256-PLUS " : ""
+          mechanisms = Scram.channel_binding?(@socket) ? "SCRAM-SHA-256-PLUS " : ""
           extensions << "AUTH #{mechanisms}SCRAM-SHA-256 PLAIN"
         end
         multi 250, extensions
@@ -422,7 +420,7 @@ module MailOnRails
         return reply 454, "4.7.0 TLS not available due to local problem" unless @tls_ctx
 
         reply 220, "2.0.0 Ready to start TLS"
-        @socket = Smtp::TLS.accept(io_for(@socket), @tls_ctx)
+        @socket = Netserv::Tls.accept(io_for(@socket), @tls_ctx)
         @tls = true
         set_timeout(read_timeout)
         # RFC 3207: discard all state learned before STARTTLS, the
@@ -460,7 +458,7 @@ module MailOnRails
         when "SCRAM-SHA-256"
           initial ? auth_scram(initial) : challenge("") { |first| auth_scram(first) }
         when "SCRAM-SHA-256-PLUS"
-          if Imap::Scram.channel_binding?(@socket)
+          if Scram.channel_binding?(@socket)
             initial ? auth_scram(initial, plus: true) : challenge("") { |first| auth_scram(first, plus: true) }
           else
             error_reply 504, "5.5.4 Unrecognized authentication type"
@@ -561,11 +559,11 @@ module MailOnRails
       # Server side of SCRAM-SHA-256 (RFC 5802/7677) and, over real TLS,
       # SCRAM-SHA-256-PLUS with channel binding (RFC 9266 / 5929) - over
       # the RFC 4954 challenge flow, same exchange as the IMAP session,
-      # built on the shared Imap::Scram primitives. The store supplies
+      # built on the shared Scram primitives. The store supplies
       # only verifier material (StoredKey/ServerKey); the password never
       # travels here.
       def auth_scram(client_first_b64, plus: false)
-        gs2, bare, cb_type, cb_declined = Imap::Scram.split_gs2(decode64(client_first_b64))
+        gs2, bare, cb_type, cb_declined = Scram.split_gs2(decode64(client_first_b64))
         return error_reply 501, "5.5.2 Malformed SCRAM message" if gs2.nil?
 
         cb_data = nil
@@ -574,13 +572,13 @@ module MailOnRails
           # the gs2 header must then name a type this connection can prove.
           return error_reply 501, "5.5.2 Channel binding required for SCRAM-SHA-256-PLUS" unless cb_type
 
-          cb_data = Imap::Scram.channel_binding_data(@socket, cb_type)
+          cb_data = Scram.channel_binding_data(@socket, cb_type)
           return error_reply 504, "5.5.4 Unsupported channel binding type #{cb_type}" unless cb_data
         elsif cb_type
-          return error_reply 501, "5.5.2 Channel binding not supported" unless Imap::Scram.channel_binding?(@socket)
+          return error_reply 501, "5.5.2 Channel binding not supported" unless Scram.channel_binding?(@socket)
 
           return error_reply 501, "5.5.2 Channel binding requires SCRAM-SHA-256-PLUS"
-        elsif cb_declined && Imap::Scram.channel_binding?(@socket)
+        elsif cb_declined && Scram.channel_binding?(@socket)
           # RFC 5802 §6: "y" claims the server never advertised -PLUS.
           # This one does, so the claim can only mean the advertisement
           # was stripped - fail rather than complete a downgraded exchange.
@@ -628,12 +626,12 @@ module MailOnRails
           stored_key = creds[:stored_key_base64].unpack1("m0")
           unless final_attrs["r"] == nonce &&
                  final_attrs["c"] == [ gs2.b + cb_data.to_s.b ].pack("m0") &&
-                 Imap::Scram.valid_proof?(stored_key, auth_message, proof)
+                 Scram.valid_proof?(stored_key, auth_message, proof)
             next scram_failure(user)
           end
 
           server_key = creds[:server_key_base64].unpack1("m0")
-          verifier = "v=#{[ Imap::Scram.server_signature(server_key, auth_message) ].pack("m0")}"
+          verifier = "v=#{[ Scram.server_signature(server_key, auth_message) ].pack("m0")}"
           challenge([ verifier ].pack("m0")) do |empty|
             next error_reply 501, "5.5.2 Unexpected final client response" unless empty.empty?
 
@@ -1112,7 +1110,7 @@ module MailOnRails
             # verdict must not become an accept (the spoofed mail it was
             # meant to reject would sail through), so defer to the sender's
             # retry instead.
-            if Smtp::SenderAuth.enforce_dmarc?
+            if SenderAuth.enforce_dmarc?
               @store.log(:warn, "SMTP tempfail for message from <#{@mail_from}>: sender verification error under DMARC enforcement (#{peer_ip})")
               reply 451, "4.7.0 Sender verification unavailable, try again later"
               reset
@@ -1130,7 +1128,7 @@ module MailOnRails
             record_dmarc_event(verdict, disposition: "none",
                                reason: "arc=pass from trusted sealer #{verdict.arc_sealer}")
           elsif verdict&.dmarc_reject?
-            if Smtp::SenderAuth.enforce_dmarc?
+            if SenderAuth.enforce_dmarc?
               @store.log(:info, "SMTP rejected message from <#{@mail_from}>: DMARC policy (#{auth_results}, #{peer_ip})")
               record_dmarc_event(verdict, disposition: "reject")
               reply 550, "5.7.1 Rejected by DMARC policy for #{verdict.from_domain}"
@@ -1139,7 +1137,7 @@ module MailOnRails
             end
             @store.log(:info, "SMTP would reject message from <#{@mail_from}> under DMARC enforcement (#{auth_results}, #{peer_ip})")
             record_dmarc_event(verdict, disposition: "none", reason: "p=reject not enforced (local policy)")
-          elsif verdict&.temperror? && Smtp::SenderAuth.enforce_dmarc? && Smtp::SenderAuth.fail_closed?
+          elsif verdict&.temperror? && SenderAuth.enforce_dmarc? && SenderAuth.fail_closed?
             @store.log(:info, "SMTP tempfail for message from <#{@mail_from}>: DMARC temperror under enforcement (#{auth_results}, #{peer_ip})")
             reply 451, "4.7.0 Sender verification temporarily unavailable, try again later"
             reset
@@ -1287,13 +1285,13 @@ module MailOnRails
       # (RFC 6409), or nil when they pass. Unparseable headers read as
       # unauthorizable, never as a pass.
       def from_alignment_problem(body)
-        froms = Smtp::SenderAuth::FromHeader.addresses(body)
+        froms = SenderAuth::FromHeader.addresses(body)
         return "message has no From header" if froms.nil?
         if froms.empty? || froms.any? { |a| a.nil? || !permitted_senders.include?(a) }
           return "From address must be the authenticated account or one of its aliases"
         end
 
-        senders = Smtp::SenderAuth::FromHeader.addresses(body, field: "sender")
+        senders = SenderAuth::FromHeader.addresses(body, field: "sender")
         if senders&.any? { |a| a.nil? || !permitted_senders.include?(a) }
           return "Sender address must be the authenticated account or one of its aliases"
         end
@@ -1305,7 +1303,7 @@ module MailOnRails
       # test seam - worker Ractors cannot read ENV at runtime), else the
       # load-time SMTP_SENDER_AUTH default.
       def sender_auth?
-        @spec.fetch(:sender_auth) { Smtp::SenderAuth.enabled? }
+        @spec.fetch(:sender_auth) { SenderAuth.enabled? }
       end
 
       # SPF/DKIM/DMARC for unauthenticated MX mail. DNS-heavy but bounded
@@ -1314,7 +1312,7 @@ module MailOnRails
       # session down - a raise becomes :error, which the DATA handler
       # tempfails under enforcement rather than treating as a pass.
       def verify_sender(body)
-        Smtp::SenderAuth.verify(ip: peer_ip, helo: @helo_name, mail_from: @mail_from, data: body)
+        SenderAuth.verify(ip: peer_ip, helo: @helo_name, mail_from: @mail_from, data: body)
       rescue StandardError => e
         @store.log(:error, "SMTP sender verification error: #{e.class}: #{e.message}")
         :error
@@ -1407,7 +1405,7 @@ module MailOnRails
         return nil if addr.empty?
 
         timeout = @spec[:clamav_timeout] || Settings[:smtp_clamav_timeout]
-        Smtp::ClamavClient.new(addr: addr, timeout: timeout).scan(body)
+        ClamavClient.new(addr: addr, timeout: timeout).scan(body)
       end
 
       # One recipient slot from the authenticated account's send quota;
@@ -1415,7 +1413,7 @@ module MailOnRails
       # the test seam - an instance overrides, nil disables - else the
       # process-wide default built from load-time env.
       def consume_send_quota
-        quota = @spec.fetch(:send_quota) { Smtp::SendQuota.shared }
+        quota = @spec.fetch(:send_quota) { SendQuota.shared }
         return true unless quota
 
         quota.consume(@authenticated_as)

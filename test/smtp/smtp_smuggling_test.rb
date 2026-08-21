@@ -4,7 +4,7 @@ require "test_helper"
 require "net/smtp"
 require "mail_on_rails/smtp_server"
 require "mail_on_rails/smtp/store/memory"
-require "mail_on_rails/smtp/outbound_data"
+require "mail_on_rails/outbound_data"
 
 # SMTP smuggling (CVE-2023-51764 Postfix, CVE-2023-51765 Sendmail,
 # CVE-2023-51766 Exim). Sequences and attack shape come from:
@@ -193,7 +193,7 @@ class SmtpSmugglingTest < Minitest::Test
   # -- outbound: stored mail must not leak unfiltered EOD on the wire ----------
 
   def test_canonicalize_strips_nuls_and_bare_newlines
-    out = MailOnRails::Smtp::OutboundData.canonicalize("a\n.\n\x00.\rb")
+    out = MailOnRails::OutboundData.canonicalize("a\n.\n\x00.\rb")
     refute_includes out, "\0"
     refute_match(/(?<!\r)\n/, out)
     refute_match(/\r(?!\n)/, out)
@@ -223,7 +223,7 @@ class SmtpSmugglingTest < Minitest::Test
 
       stored = @store.outbound_messages.last
       assert stored, "#{name}: submission must queue outbound mail"
-      payload = MailOnRails::Smtp::OutboundData.canonicalize(stored[:data])
+      payload = MailOnRails::OutboundData.canonicalize(stored[:data])
       wire = deliver_via_net_smtp(payload, stored[:mail_from], stored[:recipient])
       region = smuggling_region(wire)
       assert region, "#{name}: next hop must receive both analysis markers (early DATA end?)"

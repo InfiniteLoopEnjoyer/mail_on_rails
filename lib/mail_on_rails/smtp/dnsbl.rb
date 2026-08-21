@@ -2,7 +2,7 @@
 
 require "ipaddr"
 require_relative "../settings"
-require_relative "sender_auth/dns"
+require_relative "../sender_auth/dns"
 
 module MailOnRails
   module Smtp

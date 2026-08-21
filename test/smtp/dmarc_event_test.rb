@@ -18,7 +18,7 @@ class DmarcEventTest < Minitest::Test
   end
 
   def verdict(result:, policy:, domain: "remote.test")
-    MailOnRails::Smtp::SenderAuth::Result.new(
+    MailOnRails::SenderAuth::Result.new(
       spf: { result: :fail, domain: "remote.test" },
       dkim: [ { result: :pass, domain: "other.test" } ],
       dmarc: { result: result, policy: policy, domain: domain, from_domain: "remote.test",
@@ -28,8 +28,8 @@ class DmarcEventTest < Minitest::Test
   end
 
   def stubbing_sender_verification(result)
-    singleton = MailOnRails::Smtp::SenderAuth.singleton_class
-    original = MailOnRails::Smtp::SenderAuth.method(:verify)
+    singleton = MailOnRails::SenderAuth.singleton_class
+    original = MailOnRails::SenderAuth.method(:verify)
     singleton.define_method(:verify) { |**| result }
     yield
   ensure

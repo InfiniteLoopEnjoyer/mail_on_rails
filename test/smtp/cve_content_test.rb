@@ -7,9 +7,9 @@ require "logger"
 require "stringio"
 require "mail_on_rails/smtp_server"
 require "mail_on_rails/smtp/store/memory"
-require "mail_on_rails/smtp/sender_auth"
-require "mail_on_rails/smtp/outbound_data"
-require_relative "fake_resolver"
+require "mail_on_rails/sender_auth"
+require "mail_on_rails/outbound_data"
+require "fake_resolver"
 
 # Regression coverage for the CVE classes an SMTP server is judged against,
 # each test driving the real production path (no mocks of the code under
@@ -263,7 +263,7 @@ class SmtpCveContentTest < Minitest::Test
               "From: attacker@evil.test\r\n" \
               "To: bob@example.org\r\nSubject: hi\r\n\r\nbody\r\n"
 
-    result = MailOnRails::Smtp::SenderAuth.verify(
+    result = MailOnRails::SenderAuth.verify(
       ip: "1.2.3.4", helo: "mail.example.com", mail_from: "alice@example.com",
       data: spoofed, resolver: FakeResolver.new(records)
     )
@@ -324,6 +324,6 @@ class SmtpCveContentTest < Minitest::Test
   end
 
   def self.tls_material
-    @tls_material ||= MailOnRails::Smtp::TLS.generate_self_signed
+    @tls_material ||= MailOnRails::Netserv::Tls.generate_self_signed
   end
 end

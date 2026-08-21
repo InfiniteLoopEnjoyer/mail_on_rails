@@ -2,7 +2,7 @@
 
 require "test_helper"
 require "mail_on_rails/smtp/dnsbl"
-require_relative "fake_resolver"
+require "fake_resolver"
 
 class DnsblTest < Minitest::Test
   Dnsbl = MailOnRails::Smtp::Dnsbl
@@ -80,7 +80,7 @@ class DnsblTest < Minitest::Test
       def initialize = @calls = 0
       def a(_name)
         @calls += 1
-        raise MailOnRails::Smtp::SenderAuth::Dns::TempError, "down"
+        raise MailOnRails::SenderAuth::Dns::TempError, "down"
       end
     end.new
     c = Dnsbl.new(zones: [ "bl.test" ], resolver: resolver, clock: -> { 0.0 })

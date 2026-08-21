@@ -1,7 +1,7 @@
 require "zlib"
 require "securerandom"
-require "mail_on_rails/smtp/sender_auth/dns"
-require "mail_on_rails/smtp/sender_auth/dmarc"
+require "mail_on_rails/sender_auth/dns"
+require "mail_on_rails/sender_auth/dmarc"
 
 # Rolls the previous day's DmarcAggregateEvents up into RFC 7489
 # aggregate XML reports and mails one to every policy domain that asks
@@ -61,7 +61,7 @@ module MailOnRails
       rua.split(",").filter_map { |uri| uri.strip[/\Amailto:([^!,\s]+)/i, 1] }
          .first(3)
          .select { |recipient| authorized_destination?(domain, recipient) }
-    rescue MailOnRails::Smtp::SenderAuth::Dns::TempError
+    rescue MailOnRails::SenderAuth::Dns::TempError
       []
     end
 
@@ -69,11 +69,11 @@ module MailOnRails
       dest = recipient.split("@").last.to_s.downcase
       return false if dest.empty?
 
-      org = ->(d) { Smtp::SenderAuth::Dmarc.org_domain(d) }
+      org = ->(d) { SenderAuth::Dmarc.org_domain(d) }
       return true if org.call(dest) == org.call(policy_domain)
 
       dns.txt("#{policy_domain}._report._dmarc.#{dest}").any? { |t| t.match?(/\Av=DMARC1\b/i) }
-    rescue MailOnRails::Smtp::SenderAuth::Dns::TempError
+    rescue MailOnRails::SenderAuth::Dns::TempError
       false
     end
 
@@ -187,7 +187,7 @@ module MailOnRails
     end
 
     def dns
-      MailOnRails::Smtp::SenderAuth::Dns.shared
+      MailOnRails::SenderAuth::Dns.shared
     end
   end
 end

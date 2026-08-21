@@ -3,7 +3,7 @@
 require "test_helper"
 require "socket"
 require "mail_on_rails/imap_server"
-require "mail_on_rails/imap/scram"
+require "mail_on_rails/scram"
 require "mail_on_rails/imap/store/memory"
 
 # The SCRAM-SHA-256 AUTHENTICATE exchange as the session drives it over the
@@ -12,7 +12,7 @@ require "mail_on_rails/imap/store/memory"
 # for - nonce echo, channel-binding handling, and the rule that no failure
 # path may leave the session authenticated.
 class ScramSessionTest < Minitest::Test
-  Scram = MailOnRails::Imap::Scram
+  Scram = MailOnRails::Scram
 
   EMAIL = "user@example.test"
   PASSWORD = "pw-123456"

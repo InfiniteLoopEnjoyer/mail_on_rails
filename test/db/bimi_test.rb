@@ -6,7 +6,7 @@ require "active_job"
 require File.expand_path("../../app/jobs/mail_on_rails/base_job", __dir__)
 require File.expand_path("../../app/jobs/mail_on_rails/dns_check_refresh_job", __dir__)
 require File.expand_path("../../app/jobs/mail_on_rails/refresh_bimi_indicator_job", __dir__)
-require File.expand_path("../smtp/fake_resolver", __dir__)
+require "fake_resolver"
 require "global_id"
 GlobalID.app ||= "mail-on-rails-db-suite"
 ActiveRecord::Base.include(GlobalID::Identification)

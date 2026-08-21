@@ -61,8 +61,8 @@ class SmtpSessionTest < Minitest::Test
   # so tests can assert whether verification ran without live DNS.
   def recording_sender_verification
     calls = []
-    singleton = MailOnRails::Smtp::SenderAuth.singleton_class
-    original = MailOnRails::Smtp::SenderAuth.method(:verify)
+    singleton = MailOnRails::SenderAuth.singleton_class
+    original = MailOnRails::SenderAuth.method(:verify)
     singleton.define_method(:verify) { |**kwargs| calls << kwargs; nil }
     yield calls
   ensure
@@ -72,8 +72,8 @@ class SmtpSessionTest < Minitest::Test
   # Pins SenderAuth.verify to a fixed verdict (no live DNS), so a test can
   # drive the DATA-time DMARC branch on a real MX wire session.
   def stubbing_sender_verification(result)
-    singleton = MailOnRails::Smtp::SenderAuth.singleton_class
-    original = MailOnRails::Smtp::SenderAuth.method(:verify)
+    singleton = MailOnRails::SenderAuth.singleton_class
+    original = MailOnRails::SenderAuth.method(:verify)
     singleton.define_method(:verify) { |**| result }
     yield
   ensure
@@ -82,7 +82,7 @@ class SmtpSessionTest < Minitest::Test
 
   # A verdict whose From: domain published p=reject and nothing aligned.
   def dmarc_reject_result(from_domain: "remote.test")
-    MailOnRails::Smtp::SenderAuth::Result.new(
+    MailOnRails::SenderAuth::Result.new(
       spf: { result: :fail, domain: from_domain },
       dkim: [],
       dmarc: { result: :fail, policy: :reject, from_domain: from_domain }
@@ -91,7 +91,7 @@ class SmtpSessionTest < Minitest::Test
 
   # A verdict where transient DNS failure left DMARC unevaluated.
   def dmarc_temperror_result(from_domain: "remote.test")
-    MailOnRails::Smtp::SenderAuth::Result.new(
+    MailOnRails::SenderAuth::Result.new(
       spf: { result: :temperror, domain: from_domain },
       dkim: [],
       dmarc: { result: :temperror, policy: :none, from_domain: from_domain }
@@ -101,8 +101,8 @@ class SmtpSessionTest < Minitest::Test
   # Makes SenderAuth.verify raise, as a verifier bug would; the session's
   # rescue must not let the message through under enforcement.
   def breaking_sender_verification
-    singleton = MailOnRails::Smtp::SenderAuth.singleton_class
-    original = MailOnRails::Smtp::SenderAuth.method(:verify)
+    singleton = MailOnRails::SenderAuth.singleton_class
+    original = MailOnRails::SenderAuth.method(:verify)
     singleton.define_method(:verify) { |**| raise "verifier bug" }
     yield
   ensure

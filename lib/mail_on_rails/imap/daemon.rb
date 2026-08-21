@@ -4,7 +4,6 @@ require "logger"
 require_relative "../settings"
 require_relative "../netserv/config"
 require_relative "../imap_server"
-require_relative "tls"
 
 module MailOnRails
   module Imap
@@ -34,12 +33,12 @@ module MailOnRails
         Settings.validate_env!
         host = Settings.static(:imap_host)
         specs = listeners(host)
-        tls = TLS.material(dir: Settings.static(:imap_tls_dir), logger: logger)
+        tls = Netserv::Tls.for(:imap).material(dir: Settings.static(:imap_tls_dir), logger: logger)
         tls_summary = tls ? (tls[:cert_path] ? "from #{tls[:cert_path]}" : "self-signed") : "UNAVAILABLE (plaintext only)"
         logger.info "[mail_on_rails] IMAP config OK: ports #{specs.map { |s| s[:port] }.join("/")} on #{host}, " \
                     "TLS #{tls_summary}"
         true
-      rescue TLS::Error, Netserv::Config::Error => e
+      rescue Netserv::Tls::Error, Netserv::Config::Error => e
         logger.error "[mail_on_rails] IMAP config error: #{e.message}"
         false
       end
@@ -86,7 +85,7 @@ module MailOnRails
 
       # Hash of plain strings (PEMs or file paths); nil if unavailable.
       def tls_material(logger, dir)
-        material = TLS.material(dir: dir, logger: logger)
+        material = Netserv::Tls.for(:imap).material(dir: dir, logger: logger)
         logger.warn "[mail_on_rails] TLS unavailable - plaintext only" if material.nil?
         material
       end

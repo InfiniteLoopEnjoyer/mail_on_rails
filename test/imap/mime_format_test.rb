@@ -1,12 +1,12 @@
 require "test_helper"
-require "mail_on_rails/mime"
+require "mail_on_rails/imap/mime"
 
 # Locks in the response-format rules that strict clients (net-imap's
 # parser in particular) hard-fail on: ENVELOPE address lists must be NIL
 # when empty (never "()"), text parts must carry a trailing line count,
 # and quoted/literal encoding must round-trip arbitrary values.
 class MimeFormatTest < Minitest::Test
-  Mime = MailOnRails::Mime
+  Mime = MailOnRails::Imap::Mime
 
   def test_envelope_uses_nil_for_absent_and_unparseable_address_lists
     raw = "From: not an address at all\r\nSubject: hi\r\n\r\nbody\r\n"

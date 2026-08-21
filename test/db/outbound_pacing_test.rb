@@ -94,7 +94,7 @@ class OutboundPacingTest < DbSuite::TestCase
   test "missing Message-ID and Date are injected, stable across attempts" do
     message = queue_message("user@remote.test")
     deliverer = MailOnRails::OutboundDeliverer.new
-    data = MailOnRails::Smtp::OutboundData.canonicalize(message.data)
+    data = MailOnRails::OutboundData.canonicalize(message.data)
 
     first = deliverer.send(:ensure_required_headers, data, message)
     second = deliverer.send(:ensure_required_headers, data, message)

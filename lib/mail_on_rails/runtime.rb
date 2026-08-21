@@ -1,11 +1,13 @@
 # frozen_string_literal: true
 
 module MailOnRails
-  # Lifecycle glue for the in-process mail servers. Builds each protocol's
-  # ActiveRecord-backed store and starts the server on a background thread
-  # via its Daemon module, keeping the handles for readiness checks (host
-  # apps gate /up on MailOnRails.ready?) and graceful shutdown (the Puma
-  # plugin's stop hooks, or the standalone CLI's signal handler).
+  # Lifecycle glue for the mail servers. Protocol gems register an adapter
+  # here when they load (see MailOnRails::Smtp::Protocol and
+  # MailOnRails::Imap::Protocol); the runtime starts each requested
+  # protocol through its adapter on a background thread and keeps the
+  # handles for readiness checks (host apps gate /up on MailOnRails.ready?)
+  # and graceful shutdown (the Puma plugin's stop hooks, or the standalone
+  # CLI's signal handler).
   #
   # A monitor thread supervises the running servers: a server whose thread
   # has died, or that reports itself unhealthy (a listener's accept loop
@@ -14,6 +16,9 @@ module MailOnRails
   # store hiccup at bind time) heals without a deploy. While a protocol is
   # down `ready?` is false, so /up fails - deliberate: a mail port that
   # cannot come back should page, not hide.
+  #
+  # Which protocols run *in this process* is a separate question from which
+  # are installed - see in_process_protocols.
   module Runtime
     module_function
 
@@ -22,6 +27,11 @@ module MailOnRails
     # resets after RESTART_FORGIVENESS seconds without a failure.
     RESTART_BACKOFF = [ 0, 5, 10, 30, 60, 300 ].freeze
     RESTART_FORGIVENESS = 600
+
+    # Values of MAIL_ON_RAILS_SERVERS that mean "every installed protocol"
+    # and "none" (anything else is a comma-separated subset).
+    ENV_ALL = %w[true all 1 yes].freeze
+    ENV_NONE = %w[0 false none no off].freeze
 
     # Test seam: shortens the monitor's cadence.
     def monitor_interval = @monitor_interval || MONITOR_INTERVAL
@@ -36,38 +46,111 @@ module MailOnRails
       @restart_backoff = delays
     end
 
-    # Starts one server per requested protocol, plus the monitor, and
-    # returns the handles.
-    def start_servers(protocols: MailOnRails.protocols)
-      if defined?(Rails) && Rails.env.production?
-        require_explicit_tls!(protocols)
-        require_virus_scanner!
+    # -- protocol registry -------------------------------------------------
+
+    # Protocol gems call this at load time. +adapter+ responds to
+    # `start(logger:, tls_dir:)` (returns a Handle: ready?, wait_ready,
+    # shutdown, server, thread), `check_config(logger:)` (boolean) and
+    # `preflight!` (raises on a production misconfiguration).
+    def register(protocol, adapter)
+      registry[protocol.to_sym] = adapter
+    end
+
+    def registry
+      @registry ||= {}
+    end
+
+    # Installed protocols, in registration order.
+    def registered_protocols
+      registry.keys
+    end
+
+    def registered?(protocol)
+      registry.key?(protocol.to_sym)
+    end
+
+    def adapter(protocol)
+      registry.fetch(protocol.to_sym) do
+        raise ArgumentError, "protocol #{protocol.inspect} is not registered - add the " \
+                             "mail_on_rails_#{protocol} gem to the Gemfile (installed: " \
+                             "#{registered_protocols.join(", ").then { |s| s.empty? ? "none" : s }})"
       end
+    end
+
+    # -- which protocols run in this process -------------------------------
+
+    # The protocols the Puma plugin (and a host's /up gate) should treat as
+    # living in this process, resolved in order:
+    #
+    #   1. `config.mail_on_rails.protocols` / MailOnRails.protocols, if the
+    #      host set it explicitly (an empty list is a valid answer: UI only);
+    #   2. MAIL_ON_RAILS_SERVERS - "true"/"all" (every installed protocol),
+    #      "0"/"false"/"none" (nothing), or a subset like "smtp" or
+    #      "smtp,imap";
+    #   3. otherwise: every installed protocol in development, nothing in
+    #      any other environment (production must opt in, exactly as the
+    #      previous MAIL_ON_RAILS_SERVERS=true contract required).
+    #
+    # The CLI (bin/mail_server) does NOT use this: running the mail binary
+    # means "serve mail", so it defaults to every installed protocol.
+    def in_process_protocols
+      explicit = MailOnRails.protocols
+      return normalize_protocols(explicit) unless explicit.nil?
+
+      env = ENV["MAIL_ON_RAILS_SERVERS"]
+      return parse_protocols(env) unless env.nil?
+
+      environment == "development" ? registered_protocols : []
+    end
+
+    # Parses a MAIL_ON_RAILS_SERVERS-style value. Unknown names raise so a
+    # typo ("stmp") fails the boot instead of silently serving nothing.
+    def parse_protocols(value)
+      text = value.to_s.strip.downcase
+      return [] if text.empty? || ENV_NONE.include?(text)
+      return registered_protocols if ENV_ALL.include?(text)
+
+      normalize_protocols(text.split(/[\s,]+/))
+    end
+
+    def normalize_protocols(list)
+      Array(list).map { |p| p.to_s.strip.downcase }.reject(&:empty?).uniq.map(&:to_sym).each do |protocol|
+        adapter(protocol) # raises for unknown / uninstalled
+      end
+    end
+
+    # "production", "development", ... - Rails.env when Rails is loaded,
+    # else RAILS_ENV / RACK_ENV (the Rails-free CLI path).
+    def environment
+      return ::Rails.env.to_s if defined?(::Rails) && ::Rails.respond_to?(:env) && ::Rails.env
+
+      ENV["RAILS_ENV"] || ENV["RACK_ENV"] || "development"
+    end
+
+    def production?
+      environment == "production"
+    end
+
+    # -- lifecycle ---------------------------------------------------------
+
+    # Starts one server per requested protocol (default: every installed
+    # protocol), plus the monitor, and returns the handles. In production
+    # each protocol's adapter runs its preflight first (explicit TLS, a
+    # virus scanner for SMTP, ...) so a misconfigured deploy fails to boot
+    # instead of quietly serving degraded.
+    def start_servers(protocols: nil)
+      protocols = normalize_protocols(protocols || registered_protocols)
+      protocols.each { |protocol| adapter(protocol).preflight! } if production?
       @handles = {}
       protocols.each { |protocol| @handles[protocol] = start_protocol(protocol) }
       start_monitor
       @handles
     end
 
-    # Boots a single protocol's store + daemon. The monitor calls this
+    # Boots a single protocol through its adapter. The monitor calls this
     # again when that protocol needs a restart.
     def start_protocol(protocol)
-      case protocol
-      when :imap
-        require "mail_on_rails/imap/daemon"
-        require "mail_on_rails/store/with_source"
-        store = MailOnRails::Store::WithSource.new(MailOnRails::Store::ImapBackend.new, "imap")
-        MailOnRails::Imap::Daemon.start(store: store, logger: MailOnRails.logger,
-                                        tls_dir: MailOnRails.tls_dir)
-      when :smtp
-        require "mail_on_rails/smtp/daemon"
-        require "mail_on_rails/store/smtp_backend"
-        MailOnRails::Smtp::Daemon.start(store: MailOnRails::Store::SmtpBackend.new,
-                                        logger: MailOnRails.logger, tls_dir: MailOnRails.tls_dir,
-                                        hostname: method(:smtp_hostname))
-      else
-        raise ArgumentError, "unknown protocol #{protocol.inspect}"
-      end
+      adapter(protocol).start(logger: MailOnRails.logger, tls_dir: MailOnRails.tls_dir)
     end
 
     # True once every started server has all its listeners bound and none
@@ -76,6 +159,11 @@ module MailOnRails
     def ready?
       handles = (@handles || {}).values
       handles.any? && handles.all? { |handle| handle.ready? && handle.server.healthy? }
+    end
+
+    # Protocols this process has started (and not stopped).
+    def running_protocols
+      (@handles || {}).keys
     end
 
     # Blocks until every server is ready; raises on timeout so a listener
@@ -99,18 +187,18 @@ module MailOnRails
       handles.each { |handle| handle.shutdown(drain: drain) }
     end
 
-    # The running server for :imap or :smtp - live-connection pages read
-    # #connections (and #max_connections) off it. nil when that server
-    # isn't running in this process (a boot without the Puma plugin, e.g.
-    # tests or a web-only process).
+    # The running server for :imap or :smtp; nil when that server isn't
+    # running in this process. Gem-internal and a test seam - host apps
+    # read the ops tables (OpenConnection, Listener, ...) instead, which
+    # work whether the listeners are in this process or another container.
     def server(protocol)
       (@handles || {})[protocol]&.server
     end
 
     # Drops live connections whose peer IP the caller's test matches, on
-    # every running server (see Netserv::Server#kick). Used when an admin
-    # bans an address: the denylists only silence future connections.
-    # Returns how many connections were closed.
+    # every server running in this process (see Netserv::Server#kick).
+    # Returns how many connections were closed. Cross-process callers
+    # insert ConnectionKick rows instead.
     def kick_connections(&matcher)
       (@handles || {}).values.sum { |handle| handle.server.kick(&matcher) }
     end
@@ -196,51 +284,6 @@ module MailOnRails
       rescue StandardError => e
         MailOnRails.logger.error("[mail_on_rails] #{protocol} restart failed: #{e.class}: #{e.message}")
       end
-    end
-
-    # Production must never serve mail on the self-signed development
-    # fallback: clients would either refuse the cert or train users to
-    # click through warnings, and both failure modes look "up" from a
-    # deploy's point of view. Each protocol reads its own cert/key pair
-    # (the TLS modules fail closed on their own once these are set), so a
-    # missing pair here fails the boot instead of quietly generating a
-    # self-signed cert.
-    def require_explicit_tls!(protocols)
-      missing = []
-      missing << "MAIL_ON_RAILS_TLS_CERT/MAIL_ON_RAILS_TLS_KEY" if protocols.include?(:imap) &&
-        !(Settings.static(:imap_tls_cert) || Settings.static(:imap_tls_key))
-      missing << "SMTP_TLS_CERT/SMTP_TLS_KEY" if protocols.include?(:smtp) &&
-        !(Settings.static(:smtp_tls_cert) || Settings.static(:smtp_tls_key))
-      return if missing.empty?
-
-      raise "production requires explicit TLS material for the mail servers " \
-            "(self-signed fallback is development-only): set #{missing.join(" and ")}"
-    end
-
-    # The schema default for SMTP_CLAMAV_ADDR is empty - right for
-    # development, but in production it means a deploy that forgets one
-    # env accepts and stores mail with no virus verdict, and nothing
-    # visible breaks. Running unscanned must be a decision
-    # (SMTP_CLAMAV_OPTIONAL=1), never a side effect of a missing env.
-    def require_virus_scanner!
-      return unless Settings[:smtp_clamav_addr].to_s.empty?
-      return if Settings.static(:smtp_clamav_optional)
-
-      raise "production requires a virus scanner: set SMTP_CLAMAV_ADDR to a clamd address " \
-            "(the Kamal template uses mail_on_rails-clamav:3310), or explicitly opt out of " \
-            "scanning with SMTP_CLAMAV_OPTIONAL=1"
-    end
-
-    # The name SMTP sessions announce, resolved per connection through the
-    # host-provided callable (defaults to the Setting-backed lookup wired
-    # by the engine). Falls back to the env/system name - the banner must
-    # still go out.
-    def smtp_hostname
-      resolver = MailOnRails.smtp_hostname_resolver
-      value = resolver&.call.to_s.strip
-      return value unless value.empty?
-
-      Settings.static(:smtp_helo_hostname) || Socket.gethostname
     end
   end
 end

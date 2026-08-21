@@ -12,7 +12,7 @@ require "mail_on_rails/smtp/store/memory"
 # certs / bad SANs / broken chains - this server runs VERIFY_NONE and never
 # validates certificates; validity is the connecting client's concern.
 class TlsFailureTest < Minitest::Test
-  TLS = MailOnRails::Smtp::TLS
+  TLS = MailOnRails::Netserv::Tls
 
   def setup
     @cleanup = []

@@ -3,7 +3,7 @@
 require "test_helper"
 require "socket"
 require "openssl"
-require "mail_on_rails/imap/scram"
+require "mail_on_rails/scram"
 require "wire_harness"
 
 # Regression tests against known IMAP CVE classes, driven over the wire the
@@ -24,13 +24,13 @@ require "wire_harness"
 #
 # The certificate-validation CVE class (CVE-2011-4318, CVE-2013-0308, ...) is
 # not applicable: the IMAP code is only ever a TLS *server* (the sole
-# OpenSSL::SSL::SSLSocket construction is Imap::TLS.accept, server side). It
+# OpenSSL::SSL::SSLSocket construction is Netserv::Tls.accept, server side). It
 # never opens an outbound TLS connection, so there is no peer certificate for
 # it to validate. See the final report for the evidence.
 class ImapCveAuthTest < Minitest::Test
   include WireHarness
 
-  Scram = MailOnRails::Imap::Scram
+  Scram = MailOnRails::Scram
 
   UNKNOWN = "nobody@example.test"
 

@@ -6,7 +6,7 @@ module MailOnRails
     # set (so nothing is filtered on our behalf) and validates everything
     # in process - RRSIG chains walked zone by zone up to the root trust
     # anchor, denials proven with NSEC/NSEC3 - so upstream needs no trust
-    # at all. Smtp::SenderAuth::Dns rides this for the outbound DANE
+    # at all. SenderAuth::Dns rides this for the outbound DANE
     # lookups (it formerly trusted a loopback resolver's AD bit instead).
     #
     # resolve() returns an Answer whose status carries the RFC 4035
