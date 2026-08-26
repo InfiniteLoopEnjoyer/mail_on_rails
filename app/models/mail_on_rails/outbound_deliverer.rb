@@ -182,7 +182,10 @@ module MailOnRails
                                                     detail: "#{e.class}: #{e.message.strip}")
           errors << "#{host}: #{e.class}: #{e.message.strip}"
         rescue Net::SMTPServerBusy, Net::SMTPUnknownError, Net::SMTPAuthenticationError,
-               IOError, SystemCallError, Timeout::Error => e
+               IOError, SystemCallError, SocketError, Timeout::Error => e
+          # SocketError covers resolution: an MX name with no usable
+          # address (or none this host can reach) is this host's failure,
+          # not the message's - move on to the next MX.
           errors << "#{host}: #{e.class}: #{e.message.strip}"
         rescue MailOnRails::SenderAuth::Dns::TempError => e
           errors << "#{host}: TLSA lookup failed: #{e.message}"
@@ -247,7 +250,7 @@ module MailOnRails
     rescue Net::SMTPFatalError, Net::SMTPSyntaxError => e
       raise PermanentError, "#{host}: #{e.message.strip}"
     rescue Net::SMTPServerBusy, Net::SMTPUnknownError, Net::SMTPAuthenticationError,
-           OpenSSL::SSL::SSLError, IOError, SystemCallError, Timeout::Error => e
+           OpenSSL::SSL::SSLError, IOError, SystemCallError, SocketError, Timeout::Error => e
       raise TransientError, "#{host}: #{e.class}: #{e.message.strip}"
     end
 

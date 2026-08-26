@@ -15,6 +15,9 @@ require "mail_on_rails/sender_auth/dns"
 module MailOnRails
   class MtaStsPolicy < Record
     class FetchError < StandardError; end
+    # One address of the policy host could not be connected to at all;
+    # fetch_policy_body moves on to the next address before giving up.
+    class UnreachableError < FetchError; end
 
     serialize :mx_patterns, coder: JSON
 
@@ -84,14 +87,30 @@ module MailOnRails
       policy
     end
 
+    # Tries the policy host's addresses in resolver order (IPv6 first on a
+    # dual-stack worker) and moves to the next only when the address itself
+    # is unreachable - a refused/unrouted/timed-out connect - so one broken
+    # address family never turns into a "policy fetch failed" verdict.
+    # Anything the server actually said (HTTP status, TLS failure, body
+    # too large) is final on the first address that answered.
     def self.fetch_policy_body(domain)
       host = "mta-sts.#{domain}"
+      unreachable = nil
+      routable_policy_ips(host).each do |address|
+        return fetch_policy_body_from(host, address)
+      rescue UnreachableError => e
+        unreachable = e
+      end
+      raise unreachable
+    end
+
+    def self.fetch_policy_body_from(host, address)
       http = Net::HTTP.new(host, 443)
       # Pinning the connection to the address we validated closes the
       # rebinding TOCTOU (validate public IP, connect again, get 10.0.0.1).
       # TLS still verifies against the hostname - net/http keeps using
       # @address for SNI and certificate checks when ipaddr is set.
-      http.ipaddr = routable_policy_ip(host)
+      http.ipaddr = address
       http.use_ssl = true # WebPKI-verified by default; a bad cert is a failed fetch
       http.open_timeout = HTTP_TIMEOUT
       http.read_timeout = HTTP_TIMEOUT
@@ -113,14 +132,17 @@ module MailOnRails
       body
     rescue OpenSSL::SSL::SSLError => e
       raise FetchError, "TLS: #{e.message}"
-    rescue Timeout::Error, IOError, SystemCallError, SocketError, Net::ProtocolError => e
+    rescue Net::OpenTimeout, Errno::ECONNREFUSED, Errno::EHOSTUNREACH, Errno::ENETUNREACH,
+           Errno::EADDRNOTAVAIL, Errno::ETIMEDOUT, SocketError => e
+      raise UnreachableError, "#{address}: #{e.class}: #{e.message}"
+    rescue Timeout::Error, IOError, SystemCallError, Net::ProtocolError => e
       raise FetchError, "#{e.class}: #{e.message}"
     end
 
-    # The policy host's address, refused outright when ANY resolved address
-    # is non-routable: a mixed public/private RRset is hostile by
-    # construction, not a tie to break in the attacker's favor.
-    def self.routable_policy_ip(host)
+    # The policy host's addresses in resolver order, refused outright when
+    # ANY resolved address is non-routable: a mixed public/private RRset is
+    # hostile by construction, not a tie to break in the attacker's favor.
+    def self.routable_policy_ips(host)
       addresses = Addrinfo.getaddrinfo(host, 443, nil, :STREAM).map(&:ip_address).uniq
       raise FetchError, "#{host} resolves to no addresses" if addresses.empty?
 
@@ -130,7 +152,7 @@ module MailOnRails
           raise FetchError, "#{host} resolves to non-routable address #{address}"
         end
       end
-      addresses.first
+      addresses
     end
 
     # RFC 8461 section 3.2 key/value lines. Raises FetchError when the

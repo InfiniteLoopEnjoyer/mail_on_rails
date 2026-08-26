@@ -38,6 +38,9 @@ module MailOnRails
       # failed-login paths.
       def covering(ip)
         addr = IPAddr.new(ip.to_s)
+        # A v4-mapped address (an IPv4 peer seen through a dual-stack
+        # socket) is an IPv4 ban's business.
+        addr = addr.native if addr.ipv4_mapped?
         all.detect { |ban| ban.covers_addr?(addr) }
       rescue IPAddr::Error
         nil
@@ -61,6 +64,7 @@ module MailOnRails
 
     def covers_addr?(addr)
       net = network
+      addr = addr.native if addr.ipv4_mapped?
       !net.nil? && net.ipv4? == addr.ipv4? && net.include?(addr)
     end
 

@@ -54,6 +54,17 @@ class DenylistTest < Minitest::Test
     assert_not list.banned?("::1")
   end
 
+  # A dual-stack "::" listener reports IPv4 peers as v4-mapped IPv6; an
+  # IPv4 ban must still catch them (the server canonicalizes at accept,
+  # the gate repeats it so it never depends on that).
+  test "IPv4 entries match v4-mapped peers off a dual-stack socket" do
+    list = denylist(%w[203.0.113.0/24 198.51.100.7])
+
+    assert list.banned?("::ffff:203.0.113.9")
+    assert list.banned?("::ffff:198.51.100.7")
+    assert_not list.banned?("::ffff:198.51.100.8")
+  end
+
   test "garbage entries are skipped" do
     list = denylist([ "not-an-ip", "203.0.113.7" ])
 

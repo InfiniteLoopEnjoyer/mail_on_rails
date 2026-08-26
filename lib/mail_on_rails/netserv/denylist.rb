@@ -38,6 +38,11 @@ module MailOnRails
         rescue IPAddr::Error
           return false
         end
+        # A v4-mapped peer ("::ffff:203.0.113.5", what a dual-stack socket
+        # reports for IPv4 clients) is an IPv4 ban's business. The server
+        # canonicalizes at accept; this repeats it so the gate never
+        # depends on the caller having done so.
+        addr = addr.native if addr.ipv4_mapped?
         current_networks.any? { |net| net.ipv4? == addr.ipv4? && net.include?(addr) }
       end
 

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "socket"
+require_relative "ip"
 require_relative "config"
 require_relative "conn_limiter"
 require_relative "auth_throttle"
@@ -543,8 +544,24 @@ module MailOnRails
       # captured. TCPServer#accept discards it, leaving only getpeername -
       # which raises ENOTCONN once a scanner's immediate RST lands, so
       # those connections used to show up with no IP at all.
+      #
+      # A "::" bind on a host (or container) whose IPv6 stack is disabled
+      # fails with EADDRNOTAVAIL/EAFNOSUPPORT; rather than let the accept
+      # loop die, fall back to IPv4-any with a warning so the same config
+      # runs on every host - the dual-stack listener is then just an
+      # IPv4 one until the host grows IPv6.
       def build_listener(host, port)
         addr = Addrinfo.tcp(host, port)
+        bind_listener(addr)
+      rescue Errno::EADDRNOTAVAIL, Errno::EAFNOSUPPORT => e
+        raise unless addr&.ipv6? && addr.ip_address == "::"
+
+        @store.log(:warn, "#{protocol_name} cannot bind #{host}:#{port} (#{e.class}: IPv6 unavailable) - " \
+                          "listening on 0.0.0.0:#{port} instead")
+        bind_listener(Addrinfo.tcp("0.0.0.0", port))
+      end
+
+      def bind_listener(addr)
         server = Socket.new(addr.afamily, :STREAM)
         server.setsockopt(:SOCKET, :REUSEADDR, true)
         # An IPv6 bind serves IPv4 too (v4-mapped addresses), so "::" is a
@@ -561,6 +578,9 @@ module MailOnRails
         server.bind(addr)
         server.listen(Socket::SOMAXCONN)
         server
+      rescue StandardError
+        server&.close
+        raise
       end
 
       # The peer address at accept time, threaded through to the release
@@ -568,9 +588,12 @@ module MailOnRails
       # Prefers the Addrinfo accept(2) reported (valid even for an
       # already-reset peer); the getpeername fallback covers injected
       # test listeners, where a vanished peer still yields nil (and nil
-      # never matches a denylist entry).
+      # never matches a denylist entry). Canonicalized (v4-mapped peers
+      # off a dual-stack socket become plain IPv4) so every per-IP
+      # surface downstream sees the address the way its bans, SPF
+      # records and DNSBL zones spell it.
       def peer_ip(socket, addr = nil)
-        (addr || socket.remote_address).ip_address
+        Netserv.canonical_ip((addr || socket.remote_address).ip_address)
       rescue StandardError
         nil
       end

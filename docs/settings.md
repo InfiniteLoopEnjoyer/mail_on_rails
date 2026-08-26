@@ -120,11 +120,11 @@ Precedence: gem default < environment variable < initializer override < settings
 
 | Setting | Type | Default | ENV | Scope | Description |
 | --- | --- | --- | --- | --- | --- |
-| `smtp_host` | string | 0.0.0.0 | `SMTP_HOST` | static | SMTP bind address |
+| `smtp_host` | string | 0.0.0.0 | `SMTP_HOST` | static | SMTP bind address (`::` listens dual-stack, IPv6 and IPv4; falls back to 0.0.0.0 where the host has no IPv6) |
 | `smtp_port` | integer | 1025 | `SMTP_PORT` | static | SMTP MX listener port (STARTTLS) |
 | `smtp_submission_port` | integer | 1587 | `SMTP_SUBMISSION_PORT` | static | SMTP submission port (STARTTLS) |
 | `smtps_port` | integer | 1465 | `SMTPS_PORT` | static | SMTP submission port (implicit TLS) |
-| `imap_host` | string | 0.0.0.0 | `MAIL_ON_RAILS_HOST` | static | IMAP bind address |
+| `imap_host` | string | 0.0.0.0 | `MAIL_ON_RAILS_HOST` | static | IMAP bind address (`::` listens dual-stack, IPv6 and IPv4; falls back to 0.0.0.0 where the host has no IPv6) |
 | `imap_port` | integer | 1143 | `MAIL_ON_RAILS_IMAP_PORT` | static | IMAP listener port (STARTTLS) |
 | `imaps_port` | integer | 1993 | `MAIL_ON_RAILS_IMAPS_PORT` | static | IMAP listener port (implicit TLS) |
 

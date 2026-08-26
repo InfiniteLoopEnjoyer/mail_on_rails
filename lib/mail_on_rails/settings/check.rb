@@ -123,10 +123,12 @@ module MailOnRails
           end
         end
         posture_warning do
-          exposed = %i[smtp_host imap_host].select { |name| Settings.static(name) == "0.0.0.0" }
+          # "::" is the dual-stack spelling of the same exposure (IPv6 and
+          # v4-mapped IPv4 on every interface).
+          exposed = %i[smtp_host imap_host].select { |name| %w[0.0.0.0 ::].include?(Settings.static(name)) }
           unless exposed.empty?
-            "#{exposed.join(" and ")} bind all interfaces - confirm firewalling, or bind " \
-              "explicitly via SMTP_HOST / MAIL_ON_RAILS_HOST"
+            "#{exposed.join(" and ")} bind all interfaces (0.0.0.0 / ::) - confirm firewalling, " \
+              "or bind explicitly via SMTP_HOST / MAIL_ON_RAILS_HOST"
           end
         end
         posture_warning do
