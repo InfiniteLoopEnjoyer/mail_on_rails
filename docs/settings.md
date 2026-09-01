@@ -57,6 +57,12 @@ Precedence: gem default < environment variable < initializer override < settings
 | `mailroom_require_seal` | boolean | true | `MAILROOM_REQUIRE_SEAL` | dynamic | Drop inbound email whose trusted routing/auth headers lack a valid internal seal |
 | `mailroom_seal_max_age` | integer | 21600 | `MAILROOM_SEAL_MAX_AGE` | dynamic | How long an ingress seal stays valid, seconds - the replay window for a captured sealed message, and the routing-job backlog the mailroom will still accept (default 6h; raise it during backlog recovery instead of disabling MAILROOM_REQUIRE_SEAL) |
 
+## reporting
+
+| Setting | Type | Default | ENV | Scope | Description |
+| --- | --- | --- | --- | --- | --- |
+| `report_reporter_allowlist` | list | google.com, microsoft.com, outlook.com, hotmail.com, yahoo.com, comcast.net, fastmail.com, mail.ru | `MAIL_ON_RAILS_REPORT_REPORTER_ALLOWLIST` | dynamic | From: domains trusted to trigger fbl@/dmarc@/tls-rpt@ report ingestion (suffix match; empty trusts none). The report itself must also pass DMARC. Reports from other domains are still delivered to the mailbox; only the automated action is skipped. Bounce (VERP-signed) and unsubscribe (token-signed) ingestion are authenticated separately and are not gated by this list |
+
 ## outbound
 
 | Setting | Type | Default | ENV | Scope | Description |

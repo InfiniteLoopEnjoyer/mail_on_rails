@@ -3,11 +3,13 @@
 # delivery so a malformed report never delays or bounces mail - the raw
 # message stays in the mailbox either way.
 #
-# Only verified senders are parsed: the report mail itself must have
-# passed DMARC (real reporters like Google/Microsoft sign their reports)
-# or come from an authenticated local submitter. Anyone can mail a
-# well-formed fake report to dmarc@ - without this gate they could poison
-# the alignment stats that drive the tighten-to-p=reject advice.
+# Only trusted reporters are parsed: the report mail must itself pass
+# DMARC AND come from a From: domain on report_reporter_allowlist (real
+# reporters like Google/Microsoft sign their reports). A bare DMARC pass
+# is not enough - anyone can pass DMARC for their own domain and mail a
+# fake report to dmarc@ to poison the alignment stats that drive the
+# tighten-to-p=reject advice. An untrusted report stays in the mailbox;
+# only the stats ingestion is skipped.
 module MailOnRails
   class IngestDmarcReportJob < BaseJob
     queue_as :default
@@ -15,9 +17,9 @@ module MailOnRails
     discard_on ActiveJob::DeserializationError
 
     def perform(email_message)
-      unless email_message.sender_verified?
+      if (reason = report_reporter_untrusted_reason(email_message))
         Rails.logger.warn "[mail_on_rails] dmarc report from #{email_message.from_address.inspect} " \
-                          "not ingested: sender unverified (report mail must itself pass DMARC)"
+                          "not ingested: #{reason}"
         return
       end
 

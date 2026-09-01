@@ -363,6 +363,25 @@ module MailOnRails
             desc: "Look up and display BIMI brand logos (self-asserted accepted) for inbound senders whose " \
                   "mail passed DMARC under an enforcing policy; logos are fetched once per domain per day, " \
                   "strictly sanitized, and cached (BimiIndicator)"
+    # Only these From: domains are trusted to trigger automated ingestion
+    # of a report delivered to fbl@ / dmarc@ / tls-rpt@ - i.e. to create
+    # complaint suppressions or feed the DMARC/TLS-RPT stats. Anyone can
+    # mail a well-formed fake report from a DMARC-passing domain; without a
+    # reporter allowlist a forged ARF could suppress outbound to a chosen
+    # address (audit H1). A report from a domain not listed here is still
+    # delivered to the mailbox for inspection - only the automated action
+    # is skipped. Matching is suffix-wise, so "google.com" also trusts
+    # "bounces.google.com". An empty list trusts no reporter (ingests
+    # nothing). Bounce and unsubscribe processing are authenticated by a
+    # signed VERP return-path / token instead and are not gated here.
+    setting :report_reporter_allowlist, type: :list,
+            default: %w[google.com microsoft.com outlook.com hotmail.com yahoo.com
+                        comcast.net fastmail.com mail.ru],
+            env: "MAIL_ON_RAILS_REPORT_REPORTER_ALLOWLIST",
+            scope: :dynamic, category: :reporting,
+            desc: "From: domains trusted to trigger fbl@/dmarc@/tls-rpt@ report ingestion (suffix match; " \
+                  "empty trusts none). The report itself must also pass DMARC. Reports from other domains " \
+                  "are still delivered to the mailbox; only the automated action is skipped"
     setting :mailroom_dmarc_enforce, type: :string, default: "enforce", env: "MAILROOM_DMARC_ENFORCE",
             scope: :dynamic, category: :filtering,
             validate: lambda { |value|

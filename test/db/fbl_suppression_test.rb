@@ -141,26 +141,57 @@ class FblSuppressionTest < DbSuite::TestCase
     assert_not MailOnRails::SuppressedRecipient.suppressed?("other@remote.test")
   end
 
-  test "ingest job suppresses complainants only from verified senders" do
-    message = Struct.new(:id, :raw, :from_address) do
-      def sender_verified? = false
-    end.new(1, ARF_WITH_RCPT_TO, "feedback@provider.test")
-    MailOnRails::IngestFblReportJob.new.perform(message)
-    assert_not MailOnRails::SuppressedRecipient.suppressed?("complainer@remote.test"),
-               "an unverified report must not suppress anyone"
+  # A stub report message: id/raw plus the DMARC verdict and From: the
+  # reporter-allowlist gate reads. dmarc defaults to a pass so a test only
+  # has to vary the From: domain against the allowlist.
+  ReportMessage = Struct.new(:id, :raw, :from_address, :dmarc) do
+    def auth_result(mechanism) = mechanism == "dmarc" ? (dmarc || "pass") : nil
+  end
 
-    verified = Struct.new(:id, :raw, :from_address) do
-      def sender_verified? = true
-    end.new(2, ARF_WITH_RCPT_TO, "feedback@provider.test")
-    MailOnRails::IngestFblReportJob.new.perform(verified)
+  def teardown
+    MailOnRails::Settings.reset!
+  end
+
+  test "ingest job suppresses complainants only from a DMARC-passing allowlisted reporter" do
+    MailOnRails::Settings.overrides = { report_reporter_allowlist: [ "provider.test" ] }
+
+    # DMARC fail from an allowlisted domain: not a trusted reporter.
+    failed = ReportMessage.new(1, ARF_WITH_RCPT_TO, "feedback@provider.test", "fail")
+    MailOnRails::IngestFblReportJob.new.perform(failed)
+    assert_not MailOnRails::SuppressedRecipient.suppressed?("complainer@remote.test"),
+               "a report that did not pass DMARC must not suppress anyone"
+
+    # DMARC pass but the From: domain is not on the allowlist: a forged ARF
+    # from the attacker's own aligned domain must not suppress anyone (H1).
+    off_list = ReportMessage.new(2, ARF_WITH_RCPT_TO, "feedback@evil.test", "pass")
+    MailOnRails::IngestFblReportJob.new.perform(off_list)
+    assert_not MailOnRails::SuppressedRecipient.suppressed?("complainer@remote.test"),
+               "a DMARC pass from an un-allowlisted domain must not suppress anyone"
+
+    # DMARC pass from an allowlisted domain: trusted.
+    trusted = ReportMessage.new(3, ARF_WITH_RCPT_TO, "feedback@provider.test", "pass")
+    MailOnRails::IngestFblReportJob.new.perform(trusted)
     assert MailOnRails::SuppressedRecipient.suppressed?("complainer@remote.test")
   end
 
+  test "ingest job trusts a subdomain of an allowlisted reporter" do
+    MailOnRails::Settings.overrides = { report_reporter_allowlist: [ "provider.test" ] }
+    message = ReportMessage.new(1, ARF_WITH_RCPT_TO, "fbl@mx1.provider.test", "pass")
+    MailOnRails::IngestFblReportJob.new.perform(message)
+    assert MailOnRails::SuppressedRecipient.suppressed?("complainer@remote.test")
+  end
+
+  test "an empty allowlist trusts no reporter" do
+    MailOnRails::Settings.overrides = { report_reporter_allowlist: [] }
+    message = ReportMessage.new(1, ARF_WITH_RCPT_TO, "feedback@provider.test", "pass")
+    MailOnRails::IngestFblReportJob.new.perform(message)
+    assert_not MailOnRails::SuppressedRecipient.suppressed?("complainer@remote.test")
+  end
+
   test "ingest job never suppresses a hosted-domain address" do
+    MailOnRails::Settings.overrides = { report_reporter_allowlist: [ "provider.test" ] }
     MailOnRails::Domain.create!(name: "remote.test")
-    message = Struct.new(:id, :raw, :from_address) do
-      def sender_verified? = true
-    end.new(3, ARF_WITH_RCPT_TO, "feedback@provider.test")
+    message = ReportMessage.new(3, ARF_WITH_RCPT_TO, "feedback@provider.test", "pass")
 
     MailOnRails::IngestFblReportJob.new.perform(message)
 

@@ -3,12 +3,14 @@
 # after delivery so a malformed report never delays or bounces mail -
 # the raw message stays in the mailbox either way.
 #
-# Only verified senders are parsed: the report mail itself must have
-# passed DMARC (real reporters like Google/Microsoft sign their reports)
-# or come from an authenticated local submitter. Anyone can mail a
-# well-formed fake report to tls-rpt@ - without this gate they could
-# fabricate TLS failures and send an admin chasing a downgrade attack
-# that never happened (or bury a real one under noise).
+# Only trusted reporters are parsed: the report mail must itself pass
+# DMARC AND come from a From: domain on report_reporter_allowlist (real
+# reporters like Google/Microsoft sign their reports). A bare DMARC pass
+# is not enough - anyone can pass DMARC for their own domain and mail a
+# fake report to tls-rpt@ to fabricate TLS failures and send an admin
+# chasing a downgrade attack that never happened (or bury a real one
+# under noise). An untrusted report stays in the mailbox; only the stats
+# ingestion is skipped.
 module MailOnRails
   class IngestTlsRptReportJob < BaseJob
     queue_as :default
@@ -16,9 +18,9 @@ module MailOnRails
     discard_on ActiveJob::DeserializationError
 
     def perform(email_message)
-      unless email_message.sender_verified?
+      if (reason = report_reporter_untrusted_reason(email_message))
         Rails.logger.warn "[mail_on_rails] tls-rpt report from #{email_message.from_address.inspect} " \
-                          "not ingested: sender unverified (report mail must itself pass DMARC)"
+                          "not ingested: #{reason}"
         return
       end
 
