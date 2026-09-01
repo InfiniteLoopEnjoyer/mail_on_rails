@@ -16,6 +16,10 @@ module MailOnRails
     # runtime surprise), sender verification disabled, and - when the
     # database tier is reachable - settings rows the schema cannot type.
     class Check
+      # Past a week, a raised seal lifetime is a forgotten override, not a
+      # backlog recovery (the default is 6h).
+      SEAL_MAX_AGE_UNUSUAL = 7 * 86_400
+
       attr_reader :errors, :warnings
 
       def initialize
@@ -170,23 +174,43 @@ module MailOnRails
               "servers refuse to boot like this in production unless SMTP_CLAMAV_OPTIONAL=1)"
           end
         end
+        # The per-IP caps, lockouts, rates, send quota and session
+        # lifetimes carry min: 1 in the schema, so a 0 is a check_env
+        # error (ENV) or an unusable row (check_db_rows) rather than a
+        # posture warning here.
         posture_warning do
-          # Each of these is the bound that limits a stolen mailbox
-          # password or a connection flood; 0 turns it off entirely, which
-          # is a deliberate escape hatch but never a sane production
-          # posture - a settings-row typo must not silently uncap abuse.
-          zeroed = %i[smtp_max_conn_per_ip smtp_auth_lockout_failures smtp_conn_rate smtp_send_quota
-                      imap_max_conn_per_ip imap_auth_lockout_failures imap_conn_rate]
-                   .select { |name| Settings[name].to_i.zero? }
-          unless zeroed.empty?
-            "#{zeroed.join(", ")} #{zeroed.one? ? "is" : "are"} 0 (disabled) - nothing bounds " \
-              "per-IP connections, auth brute force, or send volume there"
+          unless Settings[:imap_append_fail_closed]
+            "IMAP APPEND stores mail unscanned while the virus scanner is unreachable " \
+              "(the default refuses, like the SMTP edge's 451; remove the " \
+              "MAIL_ON_RAILS_IMAP_APPEND_FAIL_CLOSED=0 override once the scanner is stable)"
           end
         end
         posture_warning do
-          if Settings.static(:imap_session_seconds).zero?
-            "IMAP sessions have no absolute lifetime (MAIL_ON_RAILS_IMAP_SESSION_SECONDS=0) - " \
-              "a hijacked or forgotten session stays authenticated until the process restarts"
+          unless Settings[:mta_sts]
+            "recipient MTA-STS policies are ignored on delivery - a domain that publishes " \
+              "enforce still gets whatever TLS the path offers (the default honors them; " \
+              "remove the MAIL_ON_RAILS_MTA_STS=0 override)"
+          end
+        end
+        posture_warning do
+          unless Settings[:dane]
+            "recipient DANE/TLSA records are ignored on delivery - a downgrade to an " \
+              "unauthenticated certificate goes unnoticed (the default honors them; remove " \
+              "the MAIL_ON_RAILS_DANE=0 override)"
+          end
+        end
+        posture_warning do
+          unless Settings[:bimi]
+            "BIMI logo display is off - inbound brand indicators are not fetched or shown " \
+              "(the default is on; remove the MAIL_ON_RAILS_BIMI=0 override)"
+          end
+        end
+        posture_warning do
+          max_age = Settings[:mailroom_seal_max_age].to_i
+          if max_age > SEAL_MAX_AGE_UNUSUAL
+            "mailroom_seal_max_age is #{max_age}s (#{max_age / 86_400} days) - that is the replay " \
+              "window for a captured sealed message; raise it only for the duration of a backlog " \
+              "recovery, then return it toward the 6h default"
           end
         end
       end

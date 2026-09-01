@@ -16,4 +16,5 @@ group :development, :test do
   gem "rubocop-rails-omakase", require: false
   # Static analysis for security vulnerabilities [https://brakemanscanner.org/]
   gem "brakeman", require: false
+  gem "bundler-audit", require: false
 end

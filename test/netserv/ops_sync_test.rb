@@ -172,6 +172,25 @@ class OpsSyncTest < Minitest::Test
     assert_equal [ "198.51.100.7" ], @server.connections.map { |c| c[:peer_ip] }
   end
 
+  test "a kick matches the peer by canonical address, however either side spells it" do
+    @server.connections = [
+      { connection_id: 1, peer_ip: "2001:db8::25" },        # accept(2)'s compressed spelling
+      { connection_id: 2, peer_ip: "203.0.113.9" },
+      { connection_id: 3, peer_ip: "::ffff:198.51.100.7" }, # a session that kept the v4-mapped form
+      { connection_id: 4, peer_ip: "198.51.100.8" }
+    ]
+    @store.kicks = [
+      { id: 1, ip: "2001:DB8:0:0:0:0:0:25" }, # the admin typed it uncompressed, uppercase
+      { id: 2, ip: "::ffff:203.0.113.9" },     # ...or v4-mapped
+      { id: 3, ip: "198.51.100.7" }
+    ]
+    @sync.tick
+    assert_equal [ "2001:db8::25", "203.0.113.9", "::ffff:198.51.100.7" ], @server.kicked
+    assert_equal [ "198.51.100.8" ], @server.connections.map { |c| c[:peer_ip] }
+    acks = @store.calls.select { |c| c.first == :ack_kick }.map { |c| c[1..2] }
+    assert_equal [ [ 1, 1 ], [ 2, 1 ], [ 3, 1 ] ], acks
+  end
+
   test "a ban on the denylist drops live sessions from that address" do
     @store.banned = [ "203.0.113.0/24" ]
     @server.denylist = MailOnRails::Netserv::Denylist.new(@store, ttl: 0)

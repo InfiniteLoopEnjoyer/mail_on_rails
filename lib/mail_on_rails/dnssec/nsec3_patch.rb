@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "securerandom"
+
 # Hashed-name matching for Dnsruby::RR::NSEC3 (RFC 5155 section 8.2).
 #
 # Upstream ships the codec and the section 5 hash (NSEC3.calculate_hash)
@@ -7,6 +9,21 @@
 # cover a name. These methods supply the missing comparisons; the proofs
 # built on them live in Dnsruby::Nsec3Proof.
 module Dnsruby
+  # Upstream draws a fresh message id from Kernel#rand - a predictable
+  # PRNG, so an off-path attacker who has seen a few ids can forge the
+  # reply to the next query (RFC 5452 section 4.4). Validation would catch
+  # a forged signed answer, but not a forged :insecure one. Unpredictable
+  # ids close that; the unmarshalling constructor (a wire buffer argument)
+  # is untouched.
+  class Header
+    alias_method :initialize_without_secure_id, :initialize
+
+    def initialize(*args)
+      initialize_without_secure_id(*args)
+      @id = SecureRandom.random_number(MAX_ID) if args.empty?
+    end
+  end
+
   class RR
     class NSEC3
       # RFC 9276 section 3.2: a validator SHOULD treat responses whose

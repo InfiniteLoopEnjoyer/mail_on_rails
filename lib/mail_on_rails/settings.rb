@@ -208,27 +208,35 @@ module MailOnRails
     end
 
     # -- SMTP limits ----------------------------------------------------
+    #
+    # The per-IP caps, lockouts, rates, the send quota and the session
+    # lifetimes carry min: 1: each is the bound on a connection flood or a
+    # stolen mailbox password, and the guards behind them treat 0 as
+    # "off", so a zero written from the settings UI (or a soak override
+    # left in place) would silently uncap abuse. Per-IP here means the
+    # address for IPv4 and the /64 for IPv6 (Netserv.throttle_key).
     setting :smtp_max_conn, type: :integer, default: 100, min: 1, env: "SMTP_MAX_CONN",
             scope: :dynamic, category: :smtp_limits,
             desc: "Process-wide concurrent SMTP connection cap"
-    setting :smtp_max_conn_per_ip, type: :integer, default: 10, env: "SMTP_MAX_CONN_PER_IP",
+    setting :smtp_max_conn_per_ip, type: :integer, default: 10, min: 1, env: "SMTP_MAX_CONN_PER_IP",
             scope: :dynamic, category: :smtp_limits,
-            desc: "Concurrent SMTP connections allowed per peer IP (0 disables)"
-    setting :smtp_auth_lockout_failures, type: :integer, default: 10, env: "SMTP_AUTH_LOCKOUT_FAILURES",
+            desc: "Concurrent SMTP connections allowed per peer IP (IPv6: per /64)"
+    setting :smtp_auth_lockout_failures, type: :integer, default: 10, min: 1, env: "SMTP_AUTH_LOCKOUT_FAILURES",
             scope: :dynamic, category: :smtp_limits,
-            desc: "Failed AUTHs before an IP is locked out (0 disables)"
+            desc: "Failed AUTHs before an IP (IPv6: a /64) is locked out"
     setting :smtp_auth_lockout_seconds, type: :integer, default: 900, min: 1, env: "SMTP_AUTH_LOCKOUT_SECONDS",
             scope: :dynamic, category: :smtp_limits,
             desc: "How long an SMTP auth lockout lasts"
-    setting :smtp_conn_rate, type: :integer, default: 60, env: "SMTP_CONN_RATE",
+    setting :smtp_conn_rate, type: :integer, default: 60, min: 1, env: "SMTP_CONN_RATE",
             scope: :dynamic, category: :smtp_limits,
-            desc: "SMTP connections per IP per window before tarpitting (0 disables)"
+            desc: "SMTP connections per IP (IPv6: per /64) per window before tarpitting"
     setting :smtp_conn_rate_window, type: :integer, default: 60, min: 1, env: "SMTP_CONN_RATE_WINDOW",
             scope: :dynamic, category: :smtp_limits,
             desc: "Window for the SMTP connection rate, seconds"
-    setting :smtp_send_quota, type: :integer, default: 200, env: "SMTP_SEND_QUOTA",
+    setting :smtp_send_quota, type: :integer, default: 200, min: 1, env: "SMTP_SEND_QUOTA",
             scope: :dynamic, category: :smtp_limits,
-            desc: "Recipients an authenticated account may send per window (0 disables)"
+            desc: "Recipients an authenticated account may send per window, across every listener " \
+                  "and the web composer (durable when the database is reachable)"
     setting :smtp_send_quota_window, type: :integer, default: 3600, min: 1, env: "SMTP_SEND_QUOTA_WINDOW",
             scope: :dynamic, category: :smtp_limits,
             desc: "Window for the send quota, seconds"
@@ -244,26 +252,26 @@ module MailOnRails
             desc: "Offer SMTPUTF8 (RFC 6531): accept internationalized (UTF-8) envelope addresses and " \
                   "relay them to next hops that advertise support; delivery to a hop without it bounces " \
                   "5.6.7 rather than downgrading (set 0 to refuse non-ASCII envelopes as before)"
-    setting :smtp_session_seconds, type: :integer, default: 3600, env: "SMTP_SESSION_SECONDS",
+    setting :smtp_session_seconds, type: :integer, default: 3600, min: 1, env: "SMTP_SESSION_SECONDS",
             scope: :static, category: :smtp_limits,
-            desc: "Absolute SMTP session lifetime, seconds (0 disables; boot-only)"
+            desc: "Absolute SMTP session lifetime, seconds (boot-only)"
 
     # -- IMAP limits ----------------------------------------------------
     setting :imap_max_conn, type: :integer, default: 100, min: 1, env: "MAIL_ON_RAILS_IMAP_MAX_CONN",
             scope: :dynamic, category: :imap_limits,
             desc: "Process-wide concurrent IMAP connection cap"
-    setting :imap_max_conn_per_ip, type: :integer, default: 10, env: "MAIL_ON_RAILS_IMAP_MAX_CONN_PER_IP",
+    setting :imap_max_conn_per_ip, type: :integer, default: 10, min: 1, env: "MAIL_ON_RAILS_IMAP_MAX_CONN_PER_IP",
             scope: :dynamic, category: :imap_limits,
-            desc: "Concurrent IMAP connections allowed per peer IP (0 disables)"
-    setting :imap_auth_lockout_failures, type: :integer, default: 10, env: "MAIL_ON_RAILS_IMAP_AUTH_LOCKOUT_FAILURES",
+            desc: "Concurrent IMAP connections allowed per peer IP (IPv6: per /64)"
+    setting :imap_auth_lockout_failures, type: :integer, default: 10, min: 1, env: "MAIL_ON_RAILS_IMAP_AUTH_LOCKOUT_FAILURES",
             scope: :dynamic, category: :imap_limits,
-            desc: "Failed logins before an IP is locked out (0 disables)"
+            desc: "Failed logins before an IP (IPv6: a /64) is locked out"
     setting :imap_auth_lockout_seconds, type: :integer, default: 900, min: 1, env: "MAIL_ON_RAILS_IMAP_AUTH_LOCKOUT_SECONDS",
             scope: :dynamic, category: :imap_limits,
             desc: "How long an IMAP auth lockout lasts"
-    setting :imap_conn_rate, type: :integer, default: 60, env: "MAIL_ON_RAILS_IMAP_CONN_RATE",
+    setting :imap_conn_rate, type: :integer, default: 60, min: 1, env: "MAIL_ON_RAILS_IMAP_CONN_RATE",
             scope: :dynamic, category: :imap_limits,
-            desc: "IMAP connections per IP per window before tarpitting (0 disables)"
+            desc: "IMAP connections per IP (IPv6: per /64) per window before tarpitting"
     setting :imap_conn_rate_window, type: :integer, default: 60, min: 1, env: "MAIL_ON_RAILS_IMAP_CONN_RATE_WINDOW",
             scope: :dynamic, category: :imap_limits,
             desc: "Window for the IMAP connection rate, seconds"
@@ -280,9 +288,9 @@ module MailOnRails
     setting :imap_max_line, type: :integer, default: 65_536, min: 1024, env: "MAIL_ON_RAILS_IMAP_MAX_LINE",
             scope: :static, category: :imap_limits,
             desc: "Cap on a single IMAP command line, bytes (boot-only)"
-    setting :imap_session_seconds, type: :integer, default: 86_400, env: "MAIL_ON_RAILS_IMAP_SESSION_SECONDS",
+    setting :imap_session_seconds, type: :integer, default: 86_400, min: 1, env: "MAIL_ON_RAILS_IMAP_SESSION_SECONDS",
             scope: :static, category: :imap_limits,
-            desc: "Absolute IMAP session lifetime, seconds (0 disables; default 24h - clients reconnect transparently, and a hijacked TCP session must not outlive the process; boot-only)"
+            desc: "Absolute IMAP session lifetime, seconds (default 24h - clients reconnect transparently, and a hijacked TCP session must not outlive the process; boot-only)"
     setting :imap_append_fail_closed, type: :boolean, default: true, env: "MAIL_ON_RAILS_IMAP_APPEND_FAIL_CLOSED",
             scope: :dynamic, category: :imap_limits,
             desc: "Refuse IMAP APPEND (and the web-UI import that mirrors it) when the virus scanner is unreachable, " \
@@ -520,9 +528,9 @@ module MailOnRails
     setting :honeypot_retention_days, type: :integer, default: 365, env: "MAIL_ON_RAILS_HONEYPOT_RETENTION_DAYS",
             scope: :dynamic, category: :honeypot,
             desc: "Days honeypot events are kept"
-    setting :honeypot_block_seconds, type: :integer, default: 3600, env: "MAIL_ON_RAILS_HONEYPOT_BLOCK_SECONDS",
+    setting :honeypot_block_seconds, type: :integer, default: 3600, min: 1, env: "MAIL_ON_RAILS_HONEYPOT_BLOCK_SECONDS",
             scope: :dynamic, category: :honeypot,
-            desc: "Auto-ban duration for a triggered honeypot, seconds"
+            desc: "Temporary block duration for a triggered honeypot canary, seconds"
     setting :honeypot_collateral_days, type: :integer, default: 7, env: "MAIL_ON_RAILS_HONEYPOT_COLLATERAL_DAYS",
             scope: :dynamic, category: :honeypot,
             desc: "Lookback for legitimate traffic before auto-banning a shared IP, days"

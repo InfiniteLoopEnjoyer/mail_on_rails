@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "ipaddr"
+require_relative "ip"
 
 module MailOnRails
   module Netserv
@@ -20,13 +21,19 @@ module MailOnRails
     # legitimate burst.
     #
     # Lives on the accept side like the other two, so the counts stay
-    # exact process-wide. A nil/0 limit disables. +clock+ is injectable
-    # for tests and must be monotonic.
+    # exact process-wide. Keys on Netserv.throttle_key (the /64 for IPv6).
+    # A nil/0 limit disables. +clock+ is injectable for tests and must be
+    # monotonic.
     class RateLimiter
       BASE_DELAY = 1.0
       MAX_DELAY = 16.0
       OVERAGE_MEMORY = 64 # timestamps kept per IP beyond the limit; deeper is at max delay anyway
       SWEEP_THRESHOLD = 1_000 # purge idle IPs when the table grows past this
+      SWEEP_INTERVAL = 1.0 # ...but at most this often: a sweep is O(n) on the accept path
+      # Hard ceiling on tracked keys. Past it the least recently seen key
+      # is evicted, so a flood from many distinct addresses costs bounded
+      # memory and never turns every accept into a full-table walk.
+      MAX_ENTRIES = 50_000
 
       # limit/window may be plain values or callables resolved per check
       # (the servers pass settings-backed lambdas, so retuning applies to
@@ -40,7 +47,8 @@ module MailOnRails
         @base_delay = base_delay
         @max_delay = max_delay
         @clock = clock
-        @entries = {} # ip => connection timestamps within the window, oldest first
+        @entries = {} # key => connection timestamps within the window, oldest first; LRU order
+        @last_sweep = nil
         @mutex = Mutex.new
       end
 
@@ -58,9 +66,14 @@ module MailOnRails
 
         window = current_window
         now = @clock.call
+        key = Netserv.throttle_key(ip)
         @mutex.synchronize do
-          sweep(now, window) if @entries.size > SWEEP_THRESHOLD
-          stamps = (@entries[ip] ||= [])
+          sweep(now, window) if @entries.size > SWEEP_THRESHOLD && sweep_due?(now)
+          # Re-inserting moves the key to the end: Hash keeps insertion
+          # order, so the front is always the least recently seen.
+          stamps = @entries.delete(key) || []
+          @entries[key] = stamps
+          @entries.shift while @entries.size > MAX_ENTRIES
           stamps.shift while stamps.any? && now - stamps.first > window
           stamps.shift if stamps.size >= limit + OVERAGE_MEMORY # bound per-IP memory
           stamps << now
@@ -90,8 +103,13 @@ module MailOnRails
         false # not an IP; still rate-limited under its own key
       end
 
+      def sweep_due?(now)
+        @last_sweep.nil? || now - @last_sweep >= SWEEP_INTERVAL
+      end
+
       # Drops IPs whose every timestamp has aged out of the window.
       def sweep(now, window)
+        @last_sweep = now
         @entries.delete_if { |_ip, stamps| stamps.empty? || now - stamps.last > window }
       end
     end

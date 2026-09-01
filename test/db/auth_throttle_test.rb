@@ -42,6 +42,31 @@ class AuthThrottleTest < DbSuite::TestCase
     assert_operator MailOnRails::AuthThrottle.check(ip: "203.0.113.9", email: nil)[:retry_after], :>, 600
   end
 
+  test "ipv6 failures are counted per /64, so a fresh /128 buys nothing" do
+    MailOnRails::AuthThrottle.record_failure(ip: "2001:db8:1:2::1", email: nil)
+    MailOnRails::AuthThrottle.record_failure(ip: "2001:db8:1:2::2", email: nil)
+    MailOnRails::AuthThrottle.record_failure(ip: "2001:db8:1:2:dead:beef::3", email: nil)
+
+    assert_equal "ip", MailOnRails::AuthThrottle.check(ip: "2001:db8:1:2::4444", email: nil)[:scope],
+                 "an address never seen, inside the locked /64, is blocked"
+    assert_nil MailOnRails::AuthThrottle.check(ip: "2001:db8:1:3::1", email: nil), "the next /64 is untouched"
+    assert_equal [ "2001:db8:1:2::/64" ], MailOnRails::AuthThrottle.where(scope: "ip").pluck(:key)
+  end
+
+  test "block_ip! on an ipv6 address blocks its /64" do
+    MailOnRails::AuthThrottle.block_ip!("2001:db8:1:2::7", seconds: 600)
+
+    assert MailOnRails::AuthThrottle.check(ip: "2001:db8:1:2::8", email: nil)
+    assert_equal "2001:db8:1:2::/64", MailOnRails::AuthThrottle.find_by!(scope: "ip").key
+  end
+
+  test "ipv4 keys are the plain address, v4-mapped spelling included" do
+    MailOnRails::AuthThrottle.block_ip!("::ffff:203.0.113.9", seconds: 600)
+
+    assert MailOnRails::AuthThrottle.check(ip: "203.0.113.9", email: nil)
+    assert_equal "203.0.113.9", MailOnRails::AuthThrottle.find_by!(scope: "ip").key
+  end
+
   test "block_ip! ignores a blank ip or non-positive duration" do
     MailOnRails::AuthThrottle.block_ip!("", seconds: 600)
     MailOnRails::AuthThrottle.block_ip!("203.0.113.9", seconds: 0)

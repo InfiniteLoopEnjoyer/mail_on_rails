@@ -38,6 +38,15 @@ class ArcTest < Minitest::Test
     MailOnRails::SenderAuth::Arc.new(res).evaluate(message)
   end
 
+  test "bare-LF input evaluates exactly like CRLF input" do
+    crlf = seal
+    lf = crlf.gsub("\r\n", "\n")
+    refute_equal crlf, lf
+
+    assert_equal :pass, evaluate(crlf)[:result]
+    assert_equal evaluate(crlf), evaluate(lf)
+  end
+
   test "a message without ARC headers is none" do
     assert_equal :none, evaluate(MESSAGE)[:result]
   end

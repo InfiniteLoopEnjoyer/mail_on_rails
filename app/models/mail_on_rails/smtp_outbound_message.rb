@@ -11,6 +11,17 @@ module MailOnRails
     # `delivering` claims a row so overlapping job runs can't double-send.
     enum :status, { pending: 0, sent: 1, failed: 2, delivering: 3 }
 
+    # The envelope goes onto the wire as MAIL FROM:<...> / RCPT TO:<...>:
+    # CR, LF, NUL or whitespace inside an address would let a stored row
+    # inject commands into the outbound session, whatever path queued it.
+    # The SMTP edge already refuses these at RCPT time (501); this holds
+    # the same line for the mailroom, the report jobs and the composer.
+    # mail_from may be empty - the null return path of bounces and
+    # auto-replies (RFC 3834).
+    ENVELOPE_FORBIDDEN = /[\r\n\0\s]/
+    validates :recipient, presence: true, format: { without: ENVELOPE_FORBIDDEN }
+    validates :mail_from, format: { without: ENVELOPE_FORBIDDEN }, allow_blank: true
+
     scope :due, -> { pending.where(next_attempt_at: ..Time.current).order(:id) }
     # A job that died mid-delivery leaves rows delivering forever; reclaim them.
     scope :stuck, -> { delivering.where(updated_at: ...15.minutes.ago) }

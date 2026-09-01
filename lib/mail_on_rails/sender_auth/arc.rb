@@ -32,7 +32,7 @@ module MailOnRails
 
       def evaluate(raw)
         @seal_tags = {}
-        raw = raw.to_s.gsub(/(?<!\r)\n/, "\r\n")
+        raw = crlf(raw)
         header_block, _, body = raw.partition("\r\n\r\n")
         headers = header_block.split(/\r\n(?![ \t])/)
 

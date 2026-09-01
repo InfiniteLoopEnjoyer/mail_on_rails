@@ -1,6 +1,7 @@
 require "net/http"
 require "ipaddr"
 require "mail_on_rails/sender_auth/dns"
+require "mail_on_rails/netserv/ip"
 
 # A recipient domain's cached MTA-STS policy (RFC 8461) - the sending
 # side of the protocol; MtaSts is our published side. The DB row is the
@@ -31,14 +32,9 @@ module MailOnRails
     # worker's own network position - so a policy host must not resolve
     # into private, link-local, loopback, CGNAT, or otherwise non-routable
     # space. TLS verification already stops data exfiltration; this stops
-    # the blind connect/port-probe primitive.
-    NON_ROUTABLE = [
-      "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
-      "169.254.0.0/16", "172.16.0.0/12", "192.0.2.0/24", "192.168.0.0/16",
-      "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/3",
-      "::/127", "::ffff:0:0/96", "64:ff9b::/96", "100::/64",
-      "2001:db8::/32", "fc00::/7", "fe80::/10", "ff00::/8"
-    ].map { |cidr| IPAddr.new(cidr) }.freeze
+    # the blind connect/port-probe primitive. The set itself lives in
+    # Netserv (OutboundDeliverer vets MX targets against the same one).
+    NON_ROUTABLE = Netserv::NON_ROUTABLE
 
     # What a delivery attempt gets: the policy in force (nil when none) and
     # whether the domain advertises a policy we could not obtain - which

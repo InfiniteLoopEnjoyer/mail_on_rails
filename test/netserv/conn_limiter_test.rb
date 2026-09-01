@@ -49,6 +49,29 @@ class ConnLimiterTest < Minitest::Test
     end
   end
 
+  test "ipv6 peers in one /64 share a per-ip budget; other /64s do not" do
+    limiter = Limiter.new(10, per_ip: 2)
+
+    assert limiter.acquire("2001:db8:1:2::1")
+    assert limiter.acquire("2001:db8:1:2::2")
+    refute limiter.acquire("2001:db8:1:2:dead:beef::3"), "a third address inside the same /64 must be refused"
+    assert limiter.acquire("2001:db8:1:3::1"), "a neighbouring /64 is its own budget"
+    assert limiter.acquire("2001:db8:1:2::1") == false
+
+    limiter.release("2001:db8:1:2::2") # releasing any member frees the /64's slot
+    assert limiter.acquire("2001:db8:1:2::9")
+  end
+
+  test "v4-mapped and plain ipv4 spellings share a budget" do
+    limiter = Limiter.new(10, per_ip: 1)
+
+    assert limiter.acquire("192.0.2.1")
+    refute limiter.acquire("::ffff:192.0.2.1")
+    limiter.release("::ffff:192.0.2.1")
+    assert limiter.acquire("192.0.2.1")
+    assert_equal 1, limiter.instance_variable_get(:@per_ip).size
+  end
+
   test "the per-ip table does not accumulate released peers" do
     limiter = Limiter.new(200, per_ip: 2)
     100.times do |i|

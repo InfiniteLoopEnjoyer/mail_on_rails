@@ -18,15 +18,31 @@ module MailOnRails
   # Slots are only consumed while under the limit, so an account holds
   # at most +limit+ timestamps.
   #
+  # Two backings, chosen per consume:
+  #
+  #   durable  - MailOnRails::SendQuotaSlot rows, whenever Active Record
+  #              is connected and the table exists. The budget is then one
+  #              budget across the web process (composer, vacation
+  #              replies) and every SMTP listener container, and survives
+  #              restarts - a stolen password cannot spend the limit once
+  #              per process.
+  #   memory   - the in-process table, for processes without a database
+  #              (the memory stores, Rails-free suites). Per process by
+  #              nature; the class comment on SendQuotaSlot says why that
+  #              is not enough for production.
+  #
   # A nil/0 limit disables. +clock+ is injectable for tests and must be
-  # monotonic.
+  # monotonic (the durable path keeps wall-clock time in the rows).
   class SendQuota
     SWEEP_THRESHOLD = 1_000 # purge idle accounts when the table grows past this
+    # How long a "no database here" answer is trusted before re-probing:
+    # a process that never gets a connection must not pay an exception
+    # per RCPT, one that gains its connection late must notice.
+    DURABLE_RECHECK = 5.0
 
     # The process-wide quota, its limit and window read through the
-    # settings schema per consume - retuning (or disabling with 0)
-    # applies to the next RCPT without a restart, and existing window
-    # timestamps stay counted.
+    # settings schema per consume - retuning applies to the next RCPT
+    # without a restart, and existing window slots stay counted.
     SHARED_LOCK = Mutex.new
     def self.shared
       SHARED_LOCK.synchronize do
@@ -36,11 +52,17 @@ module MailOnRails
     end
 
     # limit/window may be plain values or callables resolved per consume;
-    # a nil/0 limit disables.
-    def initialize(limit:, window:, clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) })
+    # a nil/0 limit disables. +durable+ is :auto (use SendQuotaSlot when
+    # it is reachable), false (memory only - the unit tests), or an
+    # object answering consume(account, limit:, window:) (the model
+    # itself, or a stand-in).
+    def initialize(limit:, window:, clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) },
+                   durable: :auto)
       @limit = limit
       @window = window
       @clock = clock
+      @durable = durable
+      @durable_checked_at = nil
       @entries = {} # account => consumed-slot timestamps within the window, oldest first
       @mutex = Mutex.new
     end
@@ -53,6 +75,22 @@ module MailOnRails
       return true unless limit && account
 
       window = current_window
+      if (store = durable_store)
+        with_database { store.consume(account, limit: limit, window: window) }
+      else
+        consume_in_memory(account, limit, window)
+      end
+    end
+
+    # Which backing the next consume would use: :durable or :memory. For
+    # the ops UI and tests.
+    def backing
+      durable_store ? :durable : :memory
+    end
+
+    private
+
+    def consume_in_memory(account, limit, window)
       now = @clock.call
       @mutex.synchronize do
         sweep(now, window) if @entries.size > SWEEP_THRESHOLD
@@ -65,7 +103,43 @@ module MailOnRails
       end
     end
 
-    private
+    # The durable store when one is usable, else nil. Explicit stores are
+    # taken as given; :auto probes for a connected Active Record with the
+    # slots table, caching a positive answer for good and a negative one
+    # for DURABLE_RECHECK seconds.
+    def durable_store
+      return nil unless @durable
+      return @durable unless @durable == :auto
+      return @resolved if @resolved
+
+      now = @clock.call
+      return nil if @durable_checked_at && now - @durable_checked_at < DURABLE_RECHECK
+
+      @durable_checked_at = now
+      @resolved = probe_durable
+    end
+
+    def probe_durable
+      return nil unless defined?(::ActiveRecord::Base) && MailOnRails.const_defined?(:SendQuotaSlot)
+
+      model = MailOnRails::SendQuotaSlot
+      with_database { model.table_exists? } ? model : nil
+    rescue StandardError, LoadError
+      nil # no connection (or no table yet): stay in memory
+    end
+
+    # Database work from a listener thread runs inside the host's
+    # executor when there is one (connection checkout/return, reloading
+    # cooperation - the same wrapper the AR stores use), else a plain pool
+    # checkout; an injected store in a process without Active Record at
+    # all is simply called.
+    def with_database(&)
+      executor = MailOnRails.respond_to?(:app_executor) && MailOnRails.app_executor
+      return executor.wrap(&) if executor
+      return yield unless defined?(::ActiveRecord::Base)
+
+      ::ActiveRecord::Base.connection_pool.with_connection(&)
+    end
 
     def current_limit
       limit = @limit.respond_to?(:call) ? @limit.call : @limit

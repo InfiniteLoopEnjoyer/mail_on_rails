@@ -178,9 +178,11 @@ module MailOnRails
       end
 
       def wildcard_proof_status(msg, qname, rrsig_labels, keys, zone, ctx)
-        nsec3s, nsecs = verified_denial_records(msg, keys, zone, ctx)
+        nsec3s, nsecs, unusable = verified_denial_records(msg, keys, zone, ctx)
         result = Dnsruby::Nsec3Proof.wildcard_answer(qname, rrsig_labels, nsec3s) ||
                  Dnsruby::NsecProof.wildcard_answer(qname, rrsig_labels, nsecs)
+        return :insecure if result.nil? && only_unusable_nsec3?(nsec3s, nsecs, unusable)
+
         result&.status
       end
 
@@ -208,7 +210,7 @@ module MailOnRails
 
         return bogus("SOA of #{zone_name} failed to verify") unless verify_with_keys(soa_rrset, zone[:keys], zone_name, ctx)
 
-        nsec3s, nsecs = verified_denial_records(msg, zone[:keys], zone_name, ctx)
+        nsec3s, nsecs, unusable = verified_denial_records(msg, zone[:keys], zone_name, ctx)
         result =
           if msg.rcode == Dnsruby::RCode.NXDOMAIN
             Dnsruby::Nsec3Proof.name_error(qname, nsec3s) ||
@@ -218,7 +220,18 @@ module MailOnRails
               Dnsruby::Nsec3Proof.wildcard_no_data(qname, qtype, nsec3s) ||
               Dnsruby::NsecProof.no_data(qname, qtype, nsecs)
           end
-        return bogus("denial of #{qname}/#{qtype} is unproven") unless result
+        unless result
+          # RFC 9276 section 3.2: a zone whose NSEC3 iteration count is
+          # over the cap is treated as unsigned, not broken - :bogus
+          # (defer) is reserved for material that verified and still
+          # proves nothing, or that failed to verify.
+          if only_unusable_nsec3?(nsec3s, nsecs, unusable)
+            return Answer.new(status: :insecure, records: [],
+                              reason: "NSEC3 records for #{zone_name} exceed #{Dnsruby::RR::NSEC3::MAX_PROOF_ITERATIONS} iterations")
+          end
+
+          return bogus("denial of #{qname}/#{qtype} is unproven")
+        end
 
         Answer.new(status: result.status, records: [], proof: result.proof)
       end
@@ -226,7 +239,9 @@ module MailOnRails
       # NSEC/NSEC3 RRsets are only proof material once their own
       # signatures verify under the zone's keys - an attacker can inject
       # authority records freely, so unverified ones are dropped, and
-      # the total is capped.
+      # the total is capped. Returns [usable NSEC3s, NSECs, count of
+      # verified NSEC3s dropped as unusable] - the last so the caller can
+      # tell "over-iterated zone" from "no proof at all".
       def verified_denial_records(msg, keys, zone, ctx)
         nsec3s = []
         nsecs = []
@@ -238,7 +253,14 @@ module MailOnRails
 
           (rrset.type == Dnsruby::Types.NSEC3 ? nsec3s : nsecs).concat(rrset.rrs)
         end
-        [ Dnsruby::Nsec3Proof.usable(nsec3s), nsecs ]
+        usable = Dnsruby::Nsec3Proof.usable(nsec3s)
+        [ usable, nsecs, nsec3s.length - usable.length ]
+      end
+
+      # Every verified denial record was an NSEC3 the validator refuses to
+      # hash (RFC 9276): there is nothing left to judge the denial by.
+      def only_unusable_nsec3?(nsec3s, nsecs, unusable)
+        nsec3s.empty? && nsecs.empty? && unusable.positive?
       end
 
       # ----- chain of trust --------------------------------------------

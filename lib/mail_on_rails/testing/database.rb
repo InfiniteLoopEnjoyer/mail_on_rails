@@ -36,6 +36,7 @@ module MailOnRails
         mta_sts_policies settings smtp_outbound_messages suppressed_recipients
         tls_rpt_events dmarc_aggregate_events bimi_indicators session_transcripts
         ip_enrichments open_connections accept_lockouts listeners connection_kicks
+        send_quota_slots smtp_receipts
       ].freeze
 
       # Data backfills for existing installs (system accounts/aliases per

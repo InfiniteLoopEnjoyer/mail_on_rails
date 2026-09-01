@@ -5,11 +5,14 @@ require "dkim"
 require "mail_on_rails/sender_auth/dns"
 require "mail_on_rails/outbound_data"
 require "mail_on_rails/idn"
+require "mail_on_rails/netserv/ip"
 
 # Delivers one SmtpOutboundMessage to its recipient's mail server:
-# resolves MX records, connects on port 25 and speaks SMTP. When
-# MAIL_ON_RAILS_SMARTHOST is set (host:port), every delivery is relayed
-# through it instead - the way out while the host blocks port 25.
+# resolves MX records, resolves each MX host and refuses non-routable
+# addresses (vet_targets), connects to a vetted address on port 25 and
+# speaks SMTP. When MAIL_ON_RAILS_SMARTHOST is set (host:port), every
+# delivery is relayed through it instead - the way out while the host
+# blocks port 25.
 #
 # Transport security is policy-driven per destination host:
 #
@@ -83,6 +86,10 @@ module MailOnRails
 
     OPEN_TIMEOUT = 20
     READ_TIMEOUT = 60
+    # Addresses tried per MX host once its name is resolved (vet_targets).
+    # RFC 5321 5.1 wants each address tried; the cap bounds the worst case
+    # to that many open timeouts per host.
+    MAX_ADDRESSES_PER_HOST = 4
 
     # How one destination host must be spoken to: :dane (with the usable
     # TLSA records), :sts_enforce, or :opportunistic.
@@ -147,10 +154,12 @@ module MailOnRails
         end
       end
 
-      errors = []
+      # Hosts that resolve nowhere usable are skipped up front; their
+      # reasons join the per-host errors so a deferral names them.
+      targets, errors = vet_targets(hosts)
       requiretls_refusals = 0
       smtputf8_refusals = 0
-      hosts.each do |(host, port)|
+      targets.each do |(host, port, address)|
         policy = HostPolicy.new(mode: :opportunistic)
         begin
           policy = if relaxed
@@ -161,7 +170,7 @@ module MailOnRails
           # REQUIRETLS upgrades the unverified tier: the promise needs an
           # authenticated server, not just an encrypted socket.
           policy = HostPolicy.new(mode: :requiretls) if message.requiretls? && policy.mode == :opportunistic
-          outcome = send_via(host, port, message, policy: policy)
+          outcome = send_via(host, port, message, policy: policy, address: address)
           record_outcome(domain, host, policy, sts)
           return outcome
         rescue Net::SMTPFatalError, Net::SMTPSyntaxError => e
@@ -296,6 +305,41 @@ module MailOnRails
       raise TransientError, "DNS lookup for #{domain} failed: #{e.message}"
     end
 
+    # Resolves each MX host to the addresses delivery will connect to and
+    # drops the non-routable ones (Netserv::NON_ROUTABLE). The MX RRset is
+    # the recipient's DNS: without this, anyone who can get a message
+    # queued (an authenticated sender, a vacation reply to a hostile
+    # return path) points the delivery worker's port-25 connect at any
+    # address on its own network - and the container network is a ULA
+    # inside fc00::/7. Connecting to the vetted address rather than the
+    # name closes the rebind race; TLS, MTA-STS and DANE keep verifying
+    # the MX NAME (send_via passes both). A records before AAAA: pinning
+    # an address forgoes Happy Eyeballs, and a host whose v6 egress is
+    # filtered would otherwise wait out an open timeout per hop. Returns
+    # [[host, port, address], ...] plus one skip reason per host that had
+    # no usable address. The smarthost never comes through here - it is
+    # operator configuration, and on a private path by design.
+    def vet_targets(hosts)
+      targets = []
+      skipped = []
+      hosts.each do |(host, port)|
+        addresses = begin
+          @dns.a(host) + @dns.aaaa(host)
+        rescue MailOnRails::SenderAuth::Dns::TempError => e
+          skipped << "#{host}: address lookup failed: #{e.message}"
+          next
+        end
+        routable = addresses.select { |address| Netserv.routable?(address) }
+        if addresses.empty?
+          skipped << "#{host}: no address records"
+        elsif routable.empty?
+          skipped << "#{host}: resolves only to non-routable addresses (#{addresses.join(", ")}) - refused"
+        end
+        routable.first(MAX_ADDRESSES_PER_HOST).each { |address| targets << [ host, port, address ] }
+      end
+      [ targets, skipped ]
+    end
+
     def sts_lookup(domain)
       return MtaStsPolicy::NONE unless MailOnRails::Settings[:mta_sts]
 
@@ -335,9 +379,12 @@ module MailOnRails
       MailOnRails::Settings[:dane]
     end
 
-    def send_via(host, port, message, policy:, auth: {})
+    # +address+ is the vetted IP to connect to (vet_targets); +host+ stays
+    # the name every TLS/DANE check is made against. The smarthost passes
+    # no address and is connected by name.
+    def send_via(host, port, message, policy:, auth: {}, address: host)
       data = signed(message)
-      smtp = build_smtp(host, port, policy)
+      smtp = build_smtp(host, port, policy, address: address)
       smtp.open_timeout = OPEN_TIMEOUT
       smtp.read_timeout = READ_TIMEOUT
       session = smtp.start(helo: helo_host, **auth)
@@ -466,39 +513,43 @@ module MailOnRails
       nil
     end
 
-    def build_smtp(host, port, policy)
+    # The socket goes to +address+; certificate hostname verification (and
+    # SNI, which net-smtp derives from tls_hostname) and the DANE match
+    # are against +host+, the MX name - an IP is never what a certificate
+    # or TLSA record names.
+    def build_smtp(host, port, policy, address: host)
       case policy.mode
       when :requiretls
         # Same verified-WebPKI STARTTLS as MTA-STS enforce - REQUIRETLS
         # needs an authenticated server, not merely an encrypted socket.
-        smtp = Net::SMTP.new(host, port, tls_hostname: host)
+        smtp = Net::SMTP.new(address, port, tls_hostname: host)
         smtp.enable_starttls(pkix_ssl_context)
         smtp
       when :relaxed
         # "TLS-Required: No": plain opportunistic, bypassing even the
         # smtp_outbound_require_verified_tls upgrade below.
-        Net::SMTP.new(host, port, starttls: :auto, tls_verify: false)
+        Net::SMTP.new(address, port, starttls: :auto, tls_verify: false)
       when :dane
-        smtp = DaneSmtp.new(host, port, tls_hostname: host)
+        smtp = DaneSmtp.new(address, port, tls_hostname: host)
         smtp.dane_records = policy.tlsa_records
         smtp.dane_hostname = host
         smtp.enable_starttls(dane_ssl_context)
         smtp
       when :sts_enforce, :smarthost_starttls
-        smtp = Net::SMTP.new(host, port, tls_hostname: host)
+        smtp = Net::SMTP.new(address, port, tls_hostname: host)
         smtp.enable_starttls(pkix_ssl_context)
         smtp
       when :smarthost_smtps
-        smtp = Net::SMTP.new(host, port, tls_hostname: host)
+        smtp = Net::SMTP.new(address, port, tls_hostname: host)
         smtp.enable_tls(pkix_ssl_context)
         smtp
       else
         if MailOnRails::Settings[:smtp_outbound_require_verified_tls]
-          smtp = Net::SMTP.new(host, port, tls_hostname: host)
+          smtp = Net::SMTP.new(address, port, tls_hostname: host)
           smtp.enable_starttls(pkix_ssl_context)
           smtp
         else
-          Net::SMTP.new(host, port, starttls: :auto, tls_verify: false)
+          Net::SMTP.new(address, port, starttls: :auto, tls_verify: false)
         end
       end
     end

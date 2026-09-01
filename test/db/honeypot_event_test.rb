@@ -76,6 +76,22 @@ class HoneypotEventTest < DbSuite::TestCase
     assert_equal "observed (shared address)", event.reload.response
   end
 
+  def test_an_ipv6_canary_hit_throttles_the_whole_64_and_defers_to_tenants_anywhere_in_it
+    event = record(ip: "2001:db8:1:2::7", trigger: "canary_auth")
+
+    assert blocked?("2001:db8:1:2::8"), "the block lands on the /64 the attacker owns"
+    assert_not blocked?("2001:db8:1:3::7")
+    assert_match(/throttled/, event.reload.response)
+
+    # A real tenant elsewhere in another /64 marks THAT /64 shared.
+    MailOnRails::ClosedConnection.create!(protocol: "imap", ip: "2001:db8:1:3::abcd",
+                                          username: "real@example.test", closed_at: 1.hour.ago)
+    shared = record(ip: "2001:db8:1:3::7", trigger: "canary_auth")
+
+    assert_not blocked?("2001:db8:1:3::7"), "a /64 carrying tenant traffic must not be blocked"
+    assert_equal "observed (shared address)", shared.reload.response
+  end
+
   def test_a_canary_accounts_own_traffic_does_not_mark_the_address_shared
     MailOnRails::EmailAccount.create!(email: "canary@example.test", password: "secret123", honeypot: true)
     MailOnRails::ClosedConnection.create!(protocol: "imap", ip: "203.0.113.7",

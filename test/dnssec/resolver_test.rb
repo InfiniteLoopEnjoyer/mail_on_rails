@@ -46,15 +46,15 @@ class ResolverTest < Minitest::Test
     zone.sign(rrset, signed_at: SIGNED_AT, expires_at: EXPIRES_AT, **opts)
   end
 
-  def self.nsec3_chain(zone, names, flags: 0)
+  def self.nsec3_chain(zone, names, flags: 0, iterations: 0)
     hashes = names.map do |name, types|
-      [ Dnsruby::RR::NSEC3.calculate_hash(Dnsruby::Name.create(name), 0, "",
+      [ Dnsruby::RR::NSEC3.calculate_hash(Dnsruby::Name.create(name), iterations, "",
                                           Dnsruby::Nsec3HashAlgorithms.SHA_1), types ]
     end.sort_by(&:first)
     hashes.each_with_index.map do |(hash, types), i|
       succ = hashes[(i + 1) % hashes.length][0]
       rrset = TestZone.rrset(
-        Dnsruby::RR.create("#{hash}.#{zone.name} 300 IN NSEC3 1 #{flags} 0 - #{succ} #{types}")
+        Dnsruby::RR.create("#{hash}.#{zone.name} 300 IN NSEC3 1 #{flags} #{iterations} - #{succ} #{types}")
       )
       sign(rrset, zone)
     end
@@ -133,6 +133,31 @@ class ResolverTest < Minitest::Test
     answer = resolver(transport).resolve("gone.example.test.", "A")
     assert_equal :insecure, answer.status
     assert_equal :name_error, answer.proof
+  end
+
+  test "a denial from an over-iterated NSEC3 zone is :insecure, not :bogus (RFC 9276)" do
+    transport = self.class.base_transport
+    over_iterated = self.class.nsec3_chain(EXAMPLE, EXAMPLE_NAMES, iterations: 150)
+    transport.add DnsResponse.build("nope.example.test.", "A", rcode: Dnsruby::RCode.NXDOMAIN,
+                                    authority: [ signed(self.class.example_soa, EXAMPLE), *over_iterated ])
+    transport.add DnsResponse.build("a.example.test.", "TLSA",
+                                    authority: [ signed(self.class.example_soa, EXAMPLE), *over_iterated ])
+
+    nxdomain = resolver(transport).resolve("nope.example.test.", "A")
+    assert_equal :insecure, nxdomain.status
+    assert_match(/iterations/, nxdomain.reason)
+
+    nodata = resolver(transport).resolve("a.example.test.", "TLSA")
+    assert_equal :insecure, nodata.status, "the DANE NODATA shape must downgrade the same way"
+  end
+
+  test "an over-iterated chain that is also unsigned is still :bogus" do
+    transport = self.class.base_transport
+    unsigned = self.class.nsec3_chain(EXAMPLE, EXAMPLE_NAMES, iterations: 150).map { |rrset| TestZone.rrset(*rrset.rrs) }
+    transport.add DnsResponse.build("nope.example.test.", "A", rcode: Dnsruby::RCode.NXDOMAIN,
+                                    authority: [ signed(self.class.example_soa, EXAMPLE), *unsigned ])
+
+    assert_equal :bogus, resolver(transport).resolve("nope.example.test.", "A").status
   end
 
   test "NXDOMAIN whose denial records are unsigned is :bogus" do

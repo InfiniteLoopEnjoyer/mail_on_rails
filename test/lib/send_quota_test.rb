@@ -52,4 +52,23 @@ class SendQuotaTest < Minitest::Test
     q = quota(limit: 1)
     3.times { assert q.consume(nil) }
   end
+
+  def test_without_active_record_the_quota_is_in_memory
+    refute defined?(::ActiveRecord::Base), "this suite is Rails-free by design"
+    assert_equal :memory, quota.backing
+    assert_equal :memory, MailOnRails::SendQuota.new(limit: 1, window: 60, durable: false).backing
+  end
+
+  def test_an_injected_durable_store_is_used_and_told_the_resolved_limit_and_window
+    calls = []
+    store = Object.new
+    store.define_singleton_method(:consume) { |account, limit:, window:| calls << [ account, limit, window ]; false }
+    q = MailOnRails::SendQuota.new(limit: -> { 7 }, window: -> { 120 }, durable: store)
+
+    assert_equal :durable, q.backing
+    refute q.consume("a@example.test")
+    assert_equal [ [ "a@example.test", 7, 120.0 ] ], calls
+    assert q.consume(nil), "a nil account never reaches the store"
+    assert_equal 1, calls.size
+  end
 end

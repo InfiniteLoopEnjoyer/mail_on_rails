@@ -13,11 +13,18 @@
 # anonymous closes collapse into one counter row per (protocol, ip,
 # window). Connections that authenticated or delivered mail are exempt -
 # they are the rows this table exists for, and they are rare.
+require "mail_on_rails/netserv/ip"
+
 module MailOnRails
   class ClosedConnection < Record
     PROTOCOLS = %w[smtp imap].freeze
 
     scope :recent, ->(since) { where(closed_at: since..) }
+
+    # The per-source cap counts by Netserv.throttle_key (the /64 for IPv6),
+    # derived here so every writer - record, the rollup, a console insert -
+    # keys the same way. A rollup row's ip is already the key.
+    before_validation { self.throttle_key ||= Netserv.throttle_key(ip) if ip }
 
     class << self
       def retention_days = MailOnRails::Settings[:conn_log_retention_days]
@@ -67,15 +74,19 @@ module MailOnRails
         info[:user].present? || info[:messages].to_i.positive?
       end
 
+      # The cap and the rollup row key on Netserv.throttle_key (the /64 for
+      # IPv6, same reasoning as AuthAttempt): individual rows keep the full
+      # address in ip and the key in throttle_key; the rollup row's ip is
+      # the key itself.
       def under_cap?(protocol, ip, now)
         return true if ip.blank?
 
-        where(protocol: protocol, ip: ip, closed_at: window_start(now)..)
+        where(protocol: protocol, throttle_key: Netserv.throttle_key(ip), closed_at: window_start(now)..)
           .sum(:connection_count) < max_rows_per_ip
       end
 
       def roll_up(protocol, ip, now)
-        row = find_or_create_by!(protocol: protocol, ip: ip, rollup: true,
+        row = find_or_create_by!(protocol: protocol, ip: Netserv.throttle_key(ip), rollup: true,
                                  closed_at: window_start(now)) do |r|
           r.connection_count = 0
         end

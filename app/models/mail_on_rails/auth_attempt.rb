@@ -23,6 +23,8 @@
 # Successes are deliberately not recorded either: a single iOS folder
 # refresh opens ~5 connections and authenticates on each, so legitimate
 # traffic would bury the signal and dominate the table.
+require "mail_on_rails/netserv/ip"
+
 module MailOnRails
   class AuthAttempt < Record
     SOURCES = %w[imap smtp web].freeze
@@ -33,6 +35,11 @@ module MailOnRails
 
     scope :recent, ->(since) { where(occurred_at: since..) }
     scope :against_real_accounts, -> { where(account_exists: true) }
+
+    # The per-source cap counts by Netserv.throttle_key (the /64 for IPv6),
+    # derived here so every writer keys the same way. A rollup row's ip is
+    # already the key.
+    before_validation { self.throttle_key ||= Netserv.throttle_key(ip) if ip }
 
     class << self
       def retention_days = MailOnRails::Settings[:auth_log_retention_days]
@@ -68,14 +75,22 @@ module MailOnRails
       # Attempts against an address that actually exists are exempt above -
       # they are the whole point of keeping this, and they are rare. Only the
       # dictionary noise gets collapsed.
+      #
+      # The cap and the rollup row key on Netserv.throttle_key - the /64 for
+      # IPv6 - because a guesser with a /64 can otherwise mint a fresh
+      # address per attempt and never trip a per-address cap. Individual
+      # rows keep the full address in ip and the key in throttle_key; the
+      # rollup row's ip IS the key ("2001:db8::/64"), which is also how
+      # top_ranges spells the range.
       def under_cap?(ip, now)
         return true if ip.blank?
 
-        where(ip: ip, occurred_at: window_start(now)..).sum(:attempt_count) < max_rows_per_ip
+        where(throttle_key: Netserv.throttle_key(ip), occurred_at: window_start(now)..)
+          .sum(:attempt_count) < max_rows_per_ip
       end
 
       def roll_up(ip, source, now)
-        row = find_or_create_by!(ip: ip, source: source.to_s, rollup: true,
+        row = find_or_create_by!(ip: Netserv.throttle_key(ip), source: source.to_s, rollup: true,
                                  occurred_at: window_start(now)) do |r|
           r.outcome = "unknown_account"
           r.attempt_count = 0
@@ -133,11 +148,11 @@ module MailOnRails
           .sum(:attempt_count)
       end
 
-      # Groups IPv4 sources into /24s, which is the unit a spray actually
-      # arrives in - 21 addresses from one hosting range read as noise one at
-      # a time and as a single campaign together. Aggregated in Ruby because
-      # the set is already bounded by the row cap, and inet casts on a string
-      # column would tie this to Postgres.
+      # Groups IPv4 sources into /24s and IPv6 sources into /64s, which is
+      # the unit a spray actually arrives in - 21 addresses from one hosting
+      # range read as noise one at a time and as a single campaign together.
+      # Aggregated in Ruby because the set is already bounded by the row
+      # cap, and inet casts on a string column would tie this to Postgres.
       def top_ranges(since: 7.days.ago, limit: 15)
         counts = Hash.new(0)
         recent(since).where.not(ip: nil).group(:ip).sum(:attempt_count).each do |ip, n|
@@ -146,9 +161,14 @@ module MailOnRails
         counts.sort_by { |range, n| [ -n, range ] }.first(limit)
       end
 
+      # IPv6 ranges are the throttle key ("2001:db8::/64"), which is also
+      # how their rollup rows are already stored, so a rollup row maps to
+      # itself. Anything unparseable passes through as its own range.
       def range_for(ip)
         octets = ip.to_s.split(".")
-        octets.size == 4 ? "#{octets.first(3).join(".")}.0/24" : ip.to_s
+        return "#{octets.first(3).join(".")}.0/24" if octets.size == 4
+
+        Netserv.throttle_key(ip.to_s)
       end
 
       # The drill-down behind top_ranges: one range's individual addresses
@@ -161,9 +181,10 @@ module MailOnRails
         scope = if (prefix = range.to_s[%r{\A(\d{1,3}\.\d{1,3}\.\d{1,3})\.0/24\z}, 1])
           scope.where("ip LIKE ?", "#{prefix}.%")
         else
-          # range_for emits non-IPv4 sources verbatim, so the "range" is
-          # one address.
-          scope.where(ip: range.to_s)
+          # An IPv6 /64 has no stable string prefix once compressed, so
+          # its members are picked out in Ruby from the (row-capped) set
+          # of distinct sources; an unparseable "range" is one address.
+          scope.where(ip: scope.distinct.pluck(:ip).select { |ip| range_for(ip) == range.to_s })
         end
 
         sources = Hash.new { |h, k| h[k] = [] }

@@ -76,6 +76,11 @@ module MailOnRails
       # small constant.
       OPS_SYNC_INTERVAL = nil
 
+      # Pause before retrying accept(2) after EMFILE/ENFILE/ENOBUFS/ENOMEM:
+      # long enough for a finishing session to return its descriptor,
+      # short enough that a recovered listener answers promptly.
+      ACCEPT_BACKOFF = 0.1
+
       # One live connection's registry entry. peer_ip/spec/connected_at are
       # fixed at accept time; thread and session are filled in as the
       # connection comes up (spawn_session / handle). The session reference
@@ -88,6 +93,14 @@ module MailOnRails
       # the per-listener sequence number that keys the connection's
       # open_connections row.
       Conn = Struct.new(:thread, :session, :peer_ip, :spec, :connected_at, :started_at, :tarpit, :id)
+
+      # Netserv::Tls speaks Logger (warn/error/info); the store speaks
+      # log(level, message). Bridges the two for the TLS reload path.
+      StoreLogger = Struct.new(:store) do
+        def warn(message) = store.log(:warn, message)
+        def error(message) = store.log(:error, message)
+        def info(message) = store.log(:info, message)
+      end
 
       def self.run(store, listeners, tls_material)
         new(store, listeners, tls_material).run
@@ -125,7 +138,7 @@ module MailOnRails
       def run
         # Build the context at boot so TLS problems surface here, not on
         # the first connection.
-        @tls = @tls_material && Tls::ContextProvider.new(@tls_material)
+        @tls = @tls_material && Tls::ContextProvider.new(@tls_material, logger: StoreLogger.new(@store))
 
         active = @listeners.reject { |spec| spec[:tls] == :implicit && @tls.nil? }
         @lifecycle.synchronize do
@@ -407,11 +420,28 @@ module MailOnRails
           @bound_listeners += 1
           @lifecycle_cv.broadcast
         end
+        starved = false
         loop do
-          # Socket#accept returns [socket, Addrinfo] and destructures;
-          # an injected TCPServer (tests) returns just the socket, so
-          # addr is nil and peer_ip falls back to getpeername.
-          socket, addr = server.accept
+          begin
+            # Socket#accept returns [socket, Addrinfo] and destructures;
+            # an injected TCPServer (tests) returns just the socket, so
+            # addr is nil and peer_ip falls back to getpeername.
+            socket, addr = server.accept
+          rescue Errno::EMFILE, Errno::ENFILE, Errno::ENOBUFS, Errno::ENOMEM => e
+            # Descriptor/memory exhaustion is transient - sessions ending
+            # hand resources back - but letting it kill the accept thread
+            # leaves the port bound and deaf until the Runtime monitor
+            # notices. Back off briefly and keep accepting; one log line
+            # per burst, not one per refused accept.
+            @store.log(:error, "#{protocol_name} listener #{spec[:port]} cannot accept " \
+                               "(#{e.class}) - retrying") unless starved
+            starved = true
+            sleep ACCEPT_BACKOFF
+            next
+          rescue Errno::ECONNABORTED, Errno::EPROTO, Errno::EINTR
+            next # the peer was gone before accept(2) completed; nothing to serve
+          end
+          starved = false
           ip = peer_ip(socket, addr)
           # Admin-banned addresses (the Rails app's BannedIp) get a bare
           # close before any banner or limiter slot - a banned scanner

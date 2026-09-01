@@ -3,6 +3,7 @@
 require "resolv"
 require "ipaddr"
 require "socket"
+require "securerandom"
 require_relative "../netserv/config"
 require_relative "../idn"
 
@@ -133,6 +134,28 @@ module MailOnRails
       Answer = Struct.new(:records, :secure, keyword_init: true)
       Tlsa = Struct.new(:usage, :selector, :matching_type, :data, keyword_init: true)
 
+      # What a reply must echo to count as ours: the id, the QR bit, and
+      # (since a 16-bit id alone is guessable at line rate) the question we
+      # asked. Types compare by value: Resolv decodes class-insensitive
+      # types (PTR, CNAME, ...) under its generic TypeN_ClassN aliases.
+      Query = Struct.new(:id, :qname, :typeclass) do
+        def answered_by?(reply)
+          return false unless reply && reply.id == id
+          # Resolv decodes only the header of a truncated reply - no QR
+          # bit, no question - so TC is accepted on the id alone: all it
+          # triggers is the TCP retry, whose reply is matched in full. A
+          # forged TC datagram costs a round trip, never an answer.
+          return true if reply.tc == 1
+          return false unless reply.qr == 1
+
+          name, type = reply.question.first
+          return false if name.nil? || type.nil?
+
+          type::TypeValue == typeclass::TypeValue && type::ClassValue == typeclass::ClassValue &&
+            name.to_s.downcase.chomp(".") == qname.chomp(".")
+        end
+      end
+
       # TLSA records for a name like "_25._tcp.mx.example.com".
       def tlsa(name)
         records, secure = validated(name, "TLSA")
@@ -249,12 +272,17 @@ module MailOnRails
       # Raises TempError once every nameserver has timed out or
       # errored.
       def exchange(name, typeclass)
-        id = rand(0x10000)
+        # Unpredictable ids (RFC 5452 section 4.4): Kernel#rand is a
+        # seedable PRNG an off-path attacker can model after seeing a
+        # few ids, and a forged "no record" here downgrades an SPF or
+        # DMARC verdict without any signature to catch it.
+        id = SecureRandom.random_number(0x10000)
+        query = Query.new(id, absolute(name).downcase, typeclass)
         payload = build_query(id, name, typeclass)
         errors = []
         @nameservers.each do |server|
-          reply = udp_exchange(server, payload, id)
-          reply = tcp_exchange(server, payload, id) if reply&.tc == 1
+          reply = udp_exchange(server, payload, query)
+          reply = tcp_exchange(server, payload, query) if reply&.tc == 1
           return reply if reply
         rescue IO::TimeoutError, SystemCallError, SocketError, Resolv::DNS::DecodeError => e
           errors << "#{server}: #{e.class}"
@@ -274,23 +302,24 @@ module MailOnRails
         name.end_with?(".") ? name : "#{name}."
       end
 
-      def udp_exchange(server, payload, id)
+      def udp_exchange(server, payload, query)
         socket = UDPSocket.new(Addrinfo.ip(server).afamily)
         socket.timeout = @timeout # honored by IO and by Scheduler in workers
         socket.connect(server, @port)
         socket.send(payload, 0)
-        # A few tries: a mismatched id is a stray/spoofed datagram, not
+        # A few tries: a datagram that is not a response to our exact
+        # question (id, QR bit, qname, qtype) is a stray/spoofed one, not
         # the reply. Bounded so a flood can't spin this fiber forever.
         4.times do
           reply = decode(socket.recv(MAX_UDP))
-          return reply if reply&.id == id
+          return reply if query.answered_by?(reply)
         end
         nil
       ensure
         socket&.close
       end
 
-      def tcp_exchange(server, payload, id)
+      def tcp_exchange(server, payload, query)
         Socket.tcp(server, @port, connect_timeout: @timeout) do |socket|
           socket.timeout = @timeout
           socket.write([ payload.bytesize ].pack("n") + payload)
@@ -298,7 +327,7 @@ module MailOnRails
           raise TempError, "DNS TCP reply truncated from #{server}" if length.nil?
 
           reply = decode(socket.read(length).to_s)
-          raise TempError, "DNS TCP reply id mismatch from #{server}" unless reply&.id == id
+          raise TempError, "DNS TCP reply does not answer our query (#{server})" unless query.answered_by?(reply)
 
           reply
         end

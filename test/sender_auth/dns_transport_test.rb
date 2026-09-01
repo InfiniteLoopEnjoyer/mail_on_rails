@@ -208,6 +208,83 @@ class DnsTransportTest < Minitest::Test
     assert_raises(Dns::TempError) { dns.txt("example.com") }
   end
 
+  # RFC 5452: a matching id is not enough - 16 bits are guessable at line
+  # rate, so the reply must also echo our question and carry the QR bit.
+  test "a reply with the right id but a different question is ignored" do
+    dns = dns_with(timeout: 0.3) do |query, reply, _via|
+      reply.question.clear
+      reply.add_question(Resolv::DNS::Name.create("attacker.example."), Resolv::DNS::Resource::IN::TXT)
+      add_txt(reply, "example.com.", "v=spf1 +all")
+      reply
+    end
+
+    assert_raises(Dns::TempError) { dns.txt("example.com") }
+  end
+
+  test "a reply with the right id and name but another type is ignored" do
+    dns = dns_with(timeout: 0.3) do |query, reply, _via|
+      reply.question.clear
+      reply.add_question(Resolv::DNS::Name.create("example.com."), Resolv::DNS::Resource::IN::A)
+      add_txt(reply, "example.com.", "v=spf1 +all")
+      reply
+    end
+
+    assert_raises(Dns::TempError) { dns.txt("example.com") }
+  end
+
+  test "a datagram without the QR bit is a query, not our reply" do
+    dns = dns_with(timeout: 0.3) do |_query, reply, _via|
+      reply.qr = 0
+      add_txt(reply, "example.com.", "v=spf1 +all")
+      reply
+    end
+
+    assert_raises(Dns::TempError) { dns.txt("example.com") }
+  end
+
+  test "the question match is case-insensitive and tolerant of the trailing dot" do
+    dns = dns_with do |_query, reply, _via|
+      reply.question.clear
+      reply.add_question(Resolv::DNS::Name.create("EXAMPLE.COM."), Resolv::DNS::Resource::IN::TXT)
+      add_txt(reply, "example.com.", "v=spf1 -all")
+      reply
+    end
+
+    assert_equal [ "v=spf1 -all" ], dns.txt("example.com")
+  end
+
+  test "a tcp reply answering a different question raises TempError" do
+    dns = dns_with do |_query, reply, via|
+      if via == :udp
+        reply.tc = 1
+      else
+        reply.question.clear
+        reply.add_question(Resolv::DNS::Name.create("other.example."), Resolv::DNS::Resource::IN::TXT)
+      end
+      reply
+    end
+
+    assert_raises(Dns::TempError) { dns.txt("example.com") }
+  end
+
+  test "query ids come from SecureRandom, not Kernel#rand" do
+    seen = []
+    dns = dns_with do |query, reply, _via|
+      seen << query.id
+      add_txt(reply, "example.com.", "v=spf1 -all")
+      reply
+    end
+    original = SecureRandom.method(:random_number)
+    SecureRandom.define_singleton_method(:random_number) { |*_args| 0xBEEF }
+    begin
+      dns.txt("example.com")
+    ensure
+      SecureRandom.define_singleton_method(:random_number, original)
+    end
+
+    assert_equal [ 0xBEEF ], seen
+  end
+
   test "unreachable nameserver raises TempError" do
     closed = TCPServer.new("127.0.0.1", 0)
     port = closed.addr[1]

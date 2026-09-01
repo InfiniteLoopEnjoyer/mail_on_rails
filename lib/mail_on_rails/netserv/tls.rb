@@ -118,6 +118,21 @@ module MailOnRails
         def default_hostnames
           [ "localhost", Socket.gethostname ].reject(&:empty?).uniq
         end
+
+        # A warning when an operator-supplied private key is readable by
+        # its group or the world, or nil when it is not (or cannot be
+        # stat'ed - the read that follows reports that). Advisory: a
+        # renewal tool that writes 0644 is common and the listener must
+        # still come up, but the operator should hear about it once.
+        def key_permission_warning(path)
+          mode = File.stat(path).mode & 0o777
+          return nil if (mode & 0o077).zero?
+
+          format("[mail_on_rails] TLS private key %s is group/world-readable (mode %04o) - " \
+                 "restrict it to the service user (chmod 600)", path, mode)
+        rescue SystemCallError
+          nil
+        end
       end
 
       attr_reader :protocol
@@ -140,7 +155,7 @@ module MailOnRails
       def material(dir: nil, logger: nil)
         cert_path = Settings.static(@names[:cert])
         key_path = Settings.static(@names[:key])
-        return explicit_material(cert_path, key_path) if cert_path || key_path
+        return explicit_material(cert_path, key_path, logger: logger) if cert_path || key_path
 
         begin
           load_or_generate_self_signed(dir, logger)
@@ -150,8 +165,10 @@ module MailOnRails
         end
       end
 
-      # Explicit cert/key configuration: any problem is a fatal Error.
-      def explicit_material(cert_path, key_path)
+      # Explicit cert/key configuration: any problem is a fatal Error. A
+      # key file other users can read is only a warning (see
+      # key_permission_warning).
+      def explicit_material(cert_path, key_path, logger: nil)
         unless cert_path && key_path
           raise Error, "#{@names[:env].sub('/', ' and ')} must be set together"
         end
@@ -160,6 +177,9 @@ module MailOnRails
           self.class.context(cert: File.read(cert_path), key: File.read(key_path)) # verify at boot, not first connection
         rescue StandardError => e
           raise Error, "TLS material #{cert_path} / #{key_path} unusable: #{e.class}: #{e.message}"
+        end
+        if logger && (warning = self.class.key_permission_warning(key_path))
+          logger.warn(warning)
         end
         { cert_path: cert_path, key_path: key_path }
       end
@@ -193,11 +213,14 @@ module MailOnRails
       # Thread-safe SSLContext source, one per server. For path-based material
       # (real certs), the files' mtimes are checked on each call and the
       # context is rebuilt after certbot renews them - no process restart
-      # needed. PEM material (self-signed) is static.
+      # needed. PEM material (self-signed) is static. +logger+ (anything
+      # with #warn) hears about a renewed key file that arrived
+      # group/world-readable; the boot-time check is explicit_material's.
       class ContextProvider
-        def initialize(material)
+        def initialize(material, logger: nil)
           @cert_path = material[:cert_path]
           @key_path = material[:key_path]
+          @logger = logger
           @mutex = Mutex.new
           @ctx = Tls.context(read_material(material))
           @mtimes = current_mtimes if @cert_path
@@ -222,6 +245,9 @@ module MailOnRails
 
         def read_material(material)
           if material[:cert_path]
+            if @logger && (warning = Tls.key_permission_warning(material[:key_path]))
+              @logger.warn(warning)
+            end
             { cert: File.read(material[:cert_path]), key: File.read(material[:key_path]) }
           else
             material

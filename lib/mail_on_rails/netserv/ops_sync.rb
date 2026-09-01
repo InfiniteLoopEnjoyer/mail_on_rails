@@ -3,6 +3,7 @@
 require "socket"
 require "securerandom"
 require_relative "../settings"
+require_relative "ip"
 
 module MailOnRails
   module Netserv
@@ -164,8 +165,11 @@ module MailOnRails
         return unless kicks.is_a?(Array)
 
         kicks.each do |kick|
-          target = kick[:ip].to_s
-          count = @server.kick { |ip| ip == target }
+          # Both sides canonicalized: the row may spell an address the way
+          # an admin typed it (uppercase hex, v4-mapped, uncompressed) and
+          # the session keeps accept(2)'s spelling.
+          target = Netserv.canonical_ip(kick[:ip].to_s)
+          count = @server.kick { |ip| Netserv.canonical_ip(ip) == target }
           @store.ack_kick(kick[:id], kicked: count, processed_by: @listener_id)
           @store.log(:info, "#{@protocol_label} kick #{target}: dropped #{count} connection(s)")
         end

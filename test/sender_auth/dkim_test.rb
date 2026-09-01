@@ -95,6 +95,39 @@ class DkimTest < Minitest::Test
     assert_empty verify(MESSAGE)
   end
 
+  test "an RSA key under 1024 bits is permerror, not a pass (RFC 8301)" do
+    short = OpenSSL::PKey::RSA.new(512)
+    signed = Dkim.sign(MESSAGE, domain: "example.com", selector: "test", private_key: short).to_s
+    result = verify(signed, resolver(short)).first
+
+    assert_equal :permerror, result[:result]
+    assert_match(/too short.*512/, result[:detail])
+  end
+
+  test "a 1024-bit RSA key is still accepted" do
+    key = OpenSSL::PKey::RSA.new(1024)
+    signed = Dkim.sign(MESSAGE, domain: "example.com", selector: "test", private_key: key).to_s
+
+    assert_equal :pass, verify(signed, resolver(key)).first[:result]
+  end
+
+  test "a non-RSA key under k=rsa is permerror rather than a crash" do
+    ec = OpenSSL::PKey::EC.generate("prime256v1")
+    res = FakeResolver.new(txt: { "test._domainkey.example.com" => [ "v=DKIM1; k=rsa; p=#{[ ec.public_to_der ].pack("m0")}" ] })
+
+    assert_equal :permerror, verify(sign, res).first[:result]
+  end
+
+  test "bare-LF input verifies exactly like CRLF input" do
+    crlf = sign
+    lf = crlf.gsub("\r\n", "\n")
+    refute_equal crlf, lf
+
+    assert_equal verify(crlf), verify(lf)
+    assert_equal :pass, verify(lf).first[:result]
+    assert_equal :fail, verify(lf.sub("A test body.", "An evil body.")).first[:result]
+  end
+
   test "verifies an ed25519-sha256 signature (RFC 8463)" do
     key = OpenSSL::PKey.generate_key("ED25519")
     body = "A test body.\r\n"

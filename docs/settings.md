@@ -11,30 +11,30 @@ Precedence: gem default < environment variable < initializer override < settings
 | Setting | Type | Default | ENV | Scope | Description |
 | --- | --- | --- | --- | --- | --- |
 | `smtp_max_conn` | integer | 100 | `SMTP_MAX_CONN` | dynamic | Process-wide concurrent SMTP connection cap |
-| `smtp_max_conn_per_ip` | integer | 10 | `SMTP_MAX_CONN_PER_IP` | dynamic | Concurrent SMTP connections allowed per peer IP (0 disables) |
-| `smtp_auth_lockout_failures` | integer | 10 | `SMTP_AUTH_LOCKOUT_FAILURES` | dynamic | Failed AUTHs before an IP is locked out (0 disables) |
+| `smtp_max_conn_per_ip` | integer | 10 | `SMTP_MAX_CONN_PER_IP` | dynamic | Concurrent SMTP connections allowed per peer IP (IPv6: per /64) |
+| `smtp_auth_lockout_failures` | integer | 10 | `SMTP_AUTH_LOCKOUT_FAILURES` | dynamic | Failed AUTHs before an IP (IPv6: a /64) is locked out |
 | `smtp_auth_lockout_seconds` | integer | 900 | `SMTP_AUTH_LOCKOUT_SECONDS` | dynamic | How long an SMTP auth lockout lasts |
-| `smtp_conn_rate` | integer | 60 | `SMTP_CONN_RATE` | dynamic | SMTP connections per IP per window before tarpitting (0 disables) |
+| `smtp_conn_rate` | integer | 60 | `SMTP_CONN_RATE` | dynamic | SMTP connections per IP (IPv6: per /64) per window before tarpitting |
 | `smtp_conn_rate_window` | integer | 60 | `SMTP_CONN_RATE_WINDOW` | dynamic | Window for the SMTP connection rate, seconds |
-| `smtp_send_quota` | integer | 200 | `SMTP_SEND_QUOTA` | dynamic | Recipients an authenticated account may send per window (0 disables) |
+| `smtp_send_quota` | integer | 200 | `SMTP_SEND_QUOTA` | dynamic | Recipients an authenticated account may send per window, across every listener and the web composer (durable when the database is reachable) |
 | `smtp_send_quota_window` | integer | 3600 | `SMTP_SEND_QUOTA_WINDOW` | dynamic | Window for the send quota, seconds |
 | `smtp_trace` | boolean | false | `SMTP_TRACE` | dynamic | Log full SMTP protocol traces (new connections) |
-| `smtp_session_seconds` | integer | 3600 | `SMTP_SESSION_SECONDS` | static | Absolute SMTP session lifetime, seconds (0 disables; boot-only) |
+| `smtp_session_seconds` | integer | 3600 | `SMTP_SESSION_SECONDS` | static | Absolute SMTP session lifetime, seconds (boot-only) |
 
 ## imap_limits
 
 | Setting | Type | Default | ENV | Scope | Description |
 | --- | --- | --- | --- | --- | --- |
 | `imap_max_conn` | integer | 100 | `MAIL_ON_RAILS_IMAP_MAX_CONN` | dynamic | Process-wide concurrent IMAP connection cap |
-| `imap_max_conn_per_ip` | integer | 10 | `MAIL_ON_RAILS_IMAP_MAX_CONN_PER_IP` | dynamic | Concurrent IMAP connections allowed per peer IP (0 disables) |
-| `imap_auth_lockout_failures` | integer | 10 | `MAIL_ON_RAILS_IMAP_AUTH_LOCKOUT_FAILURES` | dynamic | Failed logins before an IP is locked out (0 disables) |
+| `imap_max_conn_per_ip` | integer | 10 | `MAIL_ON_RAILS_IMAP_MAX_CONN_PER_IP` | dynamic | Concurrent IMAP connections allowed per peer IP (IPv6: per /64) |
+| `imap_auth_lockout_failures` | integer | 10 | `MAIL_ON_RAILS_IMAP_AUTH_LOCKOUT_FAILURES` | dynamic | Failed logins before an IP (IPv6: a /64) is locked out |
 | `imap_auth_lockout_seconds` | integer | 900 | `MAIL_ON_RAILS_IMAP_AUTH_LOCKOUT_SECONDS` | dynamic | How long an IMAP auth lockout lasts |
-| `imap_conn_rate` | integer | 60 | `MAIL_ON_RAILS_IMAP_CONN_RATE` | dynamic | IMAP connections per IP per window before tarpitting (0 disables) |
+| `imap_conn_rate` | integer | 60 | `MAIL_ON_RAILS_IMAP_CONN_RATE` | dynamic | IMAP connections per IP (IPv6: per /64) per window before tarpitting |
 | `imap_conn_rate_window` | integer | 60 | `MAIL_ON_RAILS_IMAP_CONN_RATE_WINDOW` | dynamic | Window for the IMAP connection rate, seconds |
 | `imap_idle_poll` | integer | 30 | `MAIL_ON_RAILS_IMAP_IDLE_POLL` | dynamic | How often an idling IMAP session re-checks the store, seconds |
 | `imap_trace` | boolean | false | `MAIL_ON_RAILS_IMAP_TRACE` | dynamic | Log full IMAP protocol traces (new connections) |
 | `imap_max_line` | integer | 65536 | `MAIL_ON_RAILS_IMAP_MAX_LINE` | static | Cap on a single IMAP command line, bytes (boot-only) |
-| `imap_session_seconds` | integer | 86400 | `MAIL_ON_RAILS_IMAP_SESSION_SECONDS` | static | Absolute IMAP session lifetime, seconds (0 disables; default 24h - clients reconnect transparently, and a hijacked TCP session must not outlive the process; boot-only) |
+| `imap_session_seconds` | integer | 86400 | `MAIL_ON_RAILS_IMAP_SESSION_SECONDS` | static | Absolute IMAP session lifetime, seconds (default 24h - clients reconnect transparently, and a hijacked TCP session must not outlive the process; boot-only) |
 | `imap_append_fail_closed` | boolean | true | `MAIL_ON_RAILS_IMAP_APPEND_FAIL_CLOSED` | dynamic | Refuse IMAP APPEND (and the web-UI import that mirrors it) when the virus scanner is unreachable, instead of storing the message flagged unscanned (default on, mirroring the SMTP edge's 451; set 0 to keep mail clients working through a scanner outage) |
 
 ## filtering
@@ -103,7 +103,7 @@ Precedence: gem default < environment variable < initializer override < settings
 | Setting | Type | Default | ENV | Scope | Description |
 | --- | --- | --- | --- | --- | --- |
 | `honeypot_retention_days` | integer | 365 | `MAIL_ON_RAILS_HONEYPOT_RETENTION_DAYS` | dynamic | Days honeypot events are kept |
-| `honeypot_block_seconds` | integer | 3600 | `MAIL_ON_RAILS_HONEYPOT_BLOCK_SECONDS` | dynamic | Auto-ban duration for a triggered honeypot, seconds |
+| `honeypot_block_seconds` | integer | 3600 | `MAIL_ON_RAILS_HONEYPOT_BLOCK_SECONDS` | dynamic | Temporary block duration for a triggered honeypot canary, seconds |
 | `honeypot_collateral_days` | integer | 7 | `MAIL_ON_RAILS_HONEYPOT_COLLATERAL_DAYS` | dynamic | Lookback for legitimate traffic before auto-banning a shared IP, days |
 | `honeypot_allowlist` | list | (empty) | `MAIL_ON_RAILS_HONEYPOT_ALLOWLIST` | dynamic | CIDRs never auto-banned by the honeypot |
 | `honeypot_banner` | string | (none) | `MAIL_ON_RAILS_HONEYPOT_BANNER` | static | Deceptive product banner in SMTP/IMAP greetings (boot-only; blank: real banner) |

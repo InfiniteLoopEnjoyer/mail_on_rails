@@ -31,6 +31,8 @@
 # the canary's own and anything the attacker typed - are redacted at the tap,
 # the same policy AuthAttempt keeps: what an attacker sends is dictionary noise
 # and a liability, what they *do* (FETCH/SEARCH/relay envelopes) is the intel.
+require "mail_on_rails/netserv/ip"
+
 module MailOnRails
   class HoneypotEvent < Record
     TRIGGERS = %w[canary_auth exploit_probe].freeze
@@ -75,14 +77,18 @@ module MailOnRails
       # authenticated connection from this IP recently marks it shared, so a
       # single attacker behind it must not get the whole address blocked. Reads
       # ClosedConnection's notable (authenticated) history - no new bookkeeping.
+      # The block that follows lands on the throttle key (the /64 for IPv6),
+      # so the collateral question is asked of the whole key: a tenant
+      # anywhere in the same /64 makes it shared.
       def legitimate_traffic_from?(ip)
         return false if ip.blank?
 
-        scope = ClosedConnection.where(ip: ip).where.not(username: nil)
-                                .where(closed_at: collateral_days.days.ago..)
+        scope = ClosedConnection.where.not(username: nil).where(closed_at: collateral_days.days.ago..)
         canaries = EmailAccount.honeypots.pluck(:email)
         scope = scope.where.not(username: canaries) if canaries.any?
-        scope.exists?
+        # By address as well as by key: rows written before throttle_key
+        # existed carry only the address.
+        scope.where(ip: ip).or(scope.where(throttle_key: Netserv.throttle_key(ip))).exists?
       end
 
       # Records one honeypot hit from the payload the session assembles. Never
@@ -125,6 +131,8 @@ module MailOnRails
       return "observed" unless trigger == "canary_auth"
       return "observed (shared address)" if self.class.legitimate_traffic_from?(ip)
 
+      # block_ip! keys on the throttle key itself (the /64 for IPv6); the
+      # full address stays on this row for the dashboard.
       MailOnRails::AuthThrottle.block_ip!(ip, seconds: self.class.block_seconds)
       "throttled #{self.class.block_seconds / 60}m"
     end

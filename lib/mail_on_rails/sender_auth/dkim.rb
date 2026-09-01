@@ -17,6 +17,10 @@ module MailOnRails
     #   :temperror - DNS lookup failed transiently
     class Dkim
       MAX_SIGNATURES = 5 # bound work a hostile message can demand
+      # RFC 8301 section 3.2: verifiers MUST NOT accept RSA keys shorter
+      # than 1024 bits - 512-bit moduli have been factored for years, and
+      # a forged signature under such a key would still pass DMARC.
+      MIN_RSA_BITS = 1024
 
       class Unusable < StandardError; end
 
@@ -25,7 +29,7 @@ module MailOnRails
       end
 
       def verify(raw)
-        raw = raw.to_s.gsub(/(?<!\r)\n/, "\r\n")
+        raw = crlf(raw)
         header_block, _, body = raw.partition("\r\n\r\n")
         headers = header_block.split(/\r\n(?![ \t])/)
 
@@ -34,6 +38,15 @@ module MailOnRails
       end
 
       private
+
+      BARE_LF = /(?<!\r)\n/
+
+      # CRLF-canonical input, without copying a message that already is:
+      # inbound mail arrives CRLF off the wire and the bodies are large.
+      def crlf(raw)
+        raw = raw.to_s
+        raw.match?(BARE_LF) ? raw.gsub(BARE_LF, "\r\n") : raw
+      end
 
       def verify_signature(headers, sig_index, body)
         tags = parse_tags(headers[sig_index].split(":", 2).last)
@@ -210,7 +223,11 @@ module MailOnRails
         if key_type == "ed25519"
           OpenSSL::PKey.new_raw_public_key("ED25519", der)
         else
-          OpenSSL::PKey.read(der)
+          key = OpenSSL::PKey.read(der)
+          raise Unusable, "key type mismatch" unless key.is_a?(OpenSSL::PKey::RSA)
+          raise Unusable, "RSA key too short (#{key.n.num_bits} bits)" if key.n.num_bits < MIN_RSA_BITS
+
+          key
         end
       end
     end

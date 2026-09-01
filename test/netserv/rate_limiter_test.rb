@@ -81,4 +81,49 @@ class RateLimiterTest < Minitest::Test
     l.delay("192.0.2.1")
     assert_operator l.instance_variable_get(:@entries).size, :<=, 2
   end
+
+  test "ipv6 peers in one /64 share a rate budget; other /64s do not" do
+    l = limiter(limit: 2)
+    assert_in_delta 0.0, l.delay("2001:db8:1:2::1")
+    assert_in_delta 0.0, l.delay("2001:db8:1:2::2")
+    assert_in_delta 1.0, l.delay("2001:db8:1:2:aaaa::3"), 0.001, "the third connection from the /64 is over budget"
+    assert_in_delta 0.0, l.delay("2001:db8:1:3::1"), 0.001, "a neighbouring /64 starts fresh"
+    assert_equal [ "2001:db8:1:2::/64", "2001:db8:1:3::/64" ], l.instance_variable_get(:@entries).keys
+  end
+
+  test "ipv4 keys are unchanged" do
+    l = limiter(limit: 1)
+    l.delay("192.0.2.1")
+    l.delay("::ffff:192.0.2.1")
+    assert_equal [ "192.0.2.1" ], l.instance_variable_get(:@entries).keys
+  end
+
+  test "sweeps run at most once per second even while the table is large" do
+    l = limiter(limit: 1, window: 10)
+    (Limiter::SWEEP_THRESHOLD + 1).times { |i| l.delay("10.0.#{i / 250}.#{i % 250}") }
+
+    @now = 100.0
+    l.delay("192.0.2.1") # first call past the threshold sweeps (everything expired)
+    assert_in_delta 100.0, l.instance_variable_get(:@last_sweep)
+
+    (Limiter::SWEEP_THRESHOLD + 1).times { |i| l.delay("10.1.#{i / 250}.#{i % 250}") }
+    @now = 100.9
+    l.delay("192.0.2.2")
+    assert_in_delta 100.0, l.instance_variable_get(:@last_sweep), 0.001, "a sweep within the same second is skipped"
+
+    @now = 111.0 # a second has passed and the 10.1.* stamps have aged out
+    l.delay("192.0.2.3")
+    assert_in_delta 111.0, l.instance_variable_get(:@last_sweep)
+    assert_operator l.instance_variable_get(:@entries).size, :<=, 3
+  end
+
+  test "the table never grows past MAX_ENTRIES; the least recently seen key goes first" do
+    l = limiter(limit: 1, window: 3600)
+    (Limiter::MAX_ENTRIES + 100).times { |i| l.delay("2001:db8:#{i >> 16}:#{i & 0xffff}::1") }
+
+    entries = l.instance_variable_get(:@entries)
+    assert_equal Limiter::MAX_ENTRIES, entries.size
+    refute entries.key?("2001:db8:0:0::/64"), "the first key seen must have been evicted"
+    assert entries.key?(MailOnRails::Netserv.throttle_key("2001:db8:0:#{Limiter::MAX_ENTRIES + 99}::1"))
+  end
 end

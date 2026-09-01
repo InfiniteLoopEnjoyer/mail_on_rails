@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "ip"
+
 module MailOnRails
   module Netserv
     # Caps the number of simultaneously open connections a server will handle,
@@ -26,9 +28,12 @@ module MailOnRails
       # Tries to reserve a slot for +ip+. Returns true if acquired, false when
       # the process-wide or per-IP cap is hit. A nil ip (peer address was
       # unavailable at accept) counts against the process-wide cap only.
+      # Per-IP accounting keys on Netserv.throttle_key (the /64 for IPv6),
+      # so a peer rotating through its own /64 shares one budget.
       def acquire(ip = nil)
         max = resolve(@max)
         per_ip_max = positive(resolve(@per_ip_max)) # nil/0 disables the per-IP cap
+        ip = Netserv.throttle_key(ip)
         @mutex.synchronize do
           return false if @count >= max
           return false if ip && per_ip_max && @per_ip[ip] >= per_ip_max
@@ -46,6 +51,7 @@ module MailOnRails
       # with - callers thread it through the session lifecycle so both sides
       # of the per-IP accounting use the same key.
       def release(ip = nil)
+        ip = Netserv.throttle_key(ip)
         @mutex.synchronize do
           @count -= 1 if @count.positive?
           if ip && @per_ip.key?(ip)

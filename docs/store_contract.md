@@ -340,6 +340,26 @@ always finds "budget", `TEXT "udge"` may not). On MySQL/SQLite it uses
 a case-insensitive substring match over the extracted columns — more
 generous, as the contract allows.
 
+### `search_header(mailbox_id, field, query)` — optional
+
+Header-field search pushdown for `FROM`/`TO`/`SUBJECT` (and their
+`HEADER FROM` / `HEADER TO` / `HEADER SUBJECT` spellings). Optional: the
+IMAP server calls it behind `respond_to?`, so it need only fetch raw
+bytes for the header fields a store can't index; without it those keys
+fall back to a raw scan like any other `HEADER` field.
+
+`field` is the lowercased field name (`"from"`, `"to"`, `"subject"`);
+`query` is the substring to find. Returns `{ uids: [...] }` ascending,
+case-insensitive; an unknown mailbox or an unindexed field yields
+`{ uids: [] }` (the server then falls back to a raw scan for that key,
+so returning empty is always safe). Matching must be case-insensitive
+and RFC 3501 substring over the field value. The memory store matches
+the decoded header value exactly; the app's PostgreSQL/MySQL/SQLite
+adapter matches over the extracted `subject` / `from_address` /
+`to_addresses` columns — i.e. the **addresses**, not RFC 5322 display
+names (the documented trade-off: `FROM "alice@example.com"` matches,
+`FROM "Alice"` may not).
+
 ### `quota(account_id)` — optional
 
 Storage accounting for IMAP QUOTA (RFC 2087/9208). Optional: the IMAP
@@ -359,13 +379,21 @@ limit however the implementation stores it.
 
 ### `expunged_since(mailbox_id, since_modseq)`
 
-QRESYNC (RFC 7162): `{ uids: [...], complete: bool }` — the uids
-expunged (by expunge or move) after `since_modseq`, from per-mailbox
-tombstones. Tombstone history is bounded; when `since_modseq` predates
-the retained history the store must return `complete: false` with the
+QRESYNC (RFC 7162): the uids expunged (by expunge or move) after
+`since_modseq`, from per-mailbox tombstones. In the normal case the
+store returns `{ uids: [...], complete: true }`.
+
+Tombstone history is bounded; when `since_modseq` predates the retained
+history the store must instead return `complete: false` with the
 over-approximation of every uid ever allocated but no longer present
-(correct because uids are never reused). An unknown mailbox yields
-`{ uids: [], complete: true }`.
+(correct because uids are never reused). That fallback set is reported
+as **`{ ranges: [[lo, hi], ...], complete: false }`** — sorted,
+inclusive, disjoint `[lo, hi]` gaps between the present uids up to
+`uid_next` — never as a materialized `uids:` array, so a mailbox with a
+large `uid_next` cannot turn one resync into a multi-million-element
+allocation. Build it with `MailOnRails::Imap::Store.missing_uid_ranges`
+(shared helper); the server expands the ranges into a VANISHED set
+itself. An unknown mailbox yields `{ uids: [], complete: true }`.
 
 ## Conformance
 

@@ -27,6 +27,13 @@
 #             connections per folder refresh, so a stale device burns
 #             failures fast), so its block is deliberately short and any
 #             successful login clears the counter outright.
+#
+# The ip scope keys on Netserv.throttle_key: the address for IPv4, the /64
+# for IPv6 - an IPv6 guesser gets a fresh /128 per attempt for free, so a
+# per-address budget would bound nothing. Callers still pass the full
+# address; the key is derived here so every writer and reader agree.
+require "mail_on_rails/netserv/ip"
+
 module MailOnRails
   class AuthThrottle < Record
     IP = "ip"
@@ -86,7 +93,7 @@ module MailOnRails
         return if ip.blank? || seconds <= 0
 
         until_at = now + seconds
-        row = find_or_create_by!(scope: IP, key: ip.to_s) do |r|
+        row = find_or_create_by!(scope: IP, key: ip_key(ip)) do |r|
           r.window_started_at = now
           r.blocked_until = until_at
         end
@@ -119,18 +126,21 @@ module MailOnRails
 
       def normalize(email) = email.to_s.strip.downcase
 
+      # The ip-scope row key for a peer address (see the class comment).
+      def ip_key(ip) = Netserv.throttle_key(ip.to_s)
+
       private
 
       def targets(ip:, email:)
         list = []
-        list << [ IP, ip.to_s, max_failures_per_ip, ip_block_seconds ] if ip.present?
+        list << [ IP, ip_key(ip), max_failures_per_ip, ip_block_seconds ] if ip.present?
         list << [ ACCOUNT, normalize(email), max_failures_per_account, account_block_seconds ] if email.present?
         list
       end
 
       def entries_for(ip:, email:)
         relations = []
-        relations << where(scope: IP, key: ip.to_s) if ip.present?
+        relations << where(scope: IP, key: ip_key(ip)) if ip.present?
         relations << where(scope: ACCOUNT, key: normalize(email)) if email.present?
         return none if relations.empty?
 

@@ -89,6 +89,45 @@ class AuthThrottleTest < Minitest::Test
     assert_empty throttle.locked_ips
   end
 
+  test "ipv6 failures inside one /64 lock the /64; a neighbouring /64 is untouched" do
+    assert_nil @throttle.record("2001:db8:1:2::1")
+    assert_nil @throttle.record("2001:db8:1:2::2")
+    assert_equal :locked, @throttle.record("2001:db8:1:2:ffff::3")
+
+    assert @throttle.locked?("2001:db8:1:2::4"), "an address never seen before but inside the /64 is locked"
+    refute @throttle.locked?("2001:db8:1:3::1")
+    assert_equal [ "2001:db8:1:2::/64" ], @throttle.locked_ips.keys
+  end
+
+  test "ipv4 lockouts key on the address, v4-mapped spelling included" do
+    2.times { @throttle.record(IP) }
+    assert_equal :locked, @throttle.record("::ffff:#{IP}")
+    assert @throttle.locked?(IP)
+    assert_equal [ IP ], @throttle.locked_ips.keys
+  end
+
+  test "sweeps run at most once per second while the table is large" do
+    threshold = Throttle::SWEEP_THRESHOLD
+    (threshold + 1).times { |i| @throttle.record("10.#{i / 65_536}.#{(i / 256) % 256}.#{i % 256}") }
+    @now += 61
+    @throttle.record("192.0.2.99") # sweeps
+    swept_at = @throttle.instance_variable_get(:@last_sweep)
+    assert_in_delta @now, swept_at
+
+    (threshold + 1).times { |i| @throttle.record("10.#{i / 65_536}.#{(i / 256) % 256}.#{i % 256}") }
+    @now += 0.5
+    @throttle.record("192.0.2.98")
+    assert_in_delta swept_at, @throttle.instance_variable_get(:@last_sweep), 0.001, "no second sweep inside a second"
+  end
+
+  test "the table never grows past MAX_ENTRIES" do
+    (Throttle::MAX_ENTRIES + 50).times { |i| @throttle.record("2001:db8:#{i >> 16}:#{i & 0xffff}::1") }
+
+    entries = @throttle.instance_variable_get(:@entries)
+    assert_equal Throttle::MAX_ENTRIES, entries.size
+    refute entries.key?("2001:db8:0:0::/64"), "the least recently failing key is evicted first"
+  end
+
   test "expired entries are swept once the table grows large" do
     threshold = Throttle::SWEEP_THRESHOLD
     (threshold + 1).times { |i| @throttle.record("10.#{i / 65_536}.#{(i / 256) % 256}.#{i % 256}") }

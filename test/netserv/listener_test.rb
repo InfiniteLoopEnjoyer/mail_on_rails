@@ -102,3 +102,107 @@ class ListenerTest < Minitest::Test
     assert_raises(Errno::EADDRNOTAVAIL) { @server.send(:build_listener, "2001:db8::1", 0) }
   end
 end
+
+# The accept loop under resource exhaustion: accept(2) failing with
+# EMFILE (the process is out of descriptors - a flood, or a leak) must not
+# end the accept thread, which would leave the port bound and deaf until
+# the Runtime monitor restarts the server. It backs off, logs once per
+# burst, and serves the next connection normally.
+class AcceptLoopTest < Minitest::Test
+  class FakeStore
+    attr_reader :logged
+
+    def initialize = @logged = []
+    def log(level, message) = @logged << [ level, message ]
+    def banned_cidrs = []
+  end
+
+  # The smallest session the scaffolding will run: greets and hangs up.
+  class HelloSession
+    def initialize(socket, _store, _spec, _ctx)
+      @socket = socket
+    end
+
+    def run
+      @socket.write("220 hello\r\n")
+    end
+
+    def live_info = {}
+  end
+
+  class Server < MailOnRails::Netserv::Server
+    MAX_CONNECTIONS = 4
+    OPS_SYNC_INTERVAL = 60
+
+    def protocol_name = "TEST"
+    def busy_line = "421 busy"
+    def listener_label(spec) = "test:#{spec[:port]}"
+    def session_class = HelloSession
+  end
+
+  # A listener whose accept fails with the scripted errors first, then
+  # behaves like the real socket underneath.
+  class FlakyListener
+    def initialize(real, failures)
+      @real = real
+      @failures = failures
+    end
+
+    def accept
+      raise @failures.shift if @failures.any?
+
+      @real.accept
+    end
+
+    def close = @real.close
+    def closed? = @real.closed?
+    def local_address = @real.local_address
+  end
+
+  def setup
+    @store = FakeStore.new
+    @real = Socket.new(:INET, :STREAM)
+    @real.setsockopt(:SOCKET, :REUSEADDR, true)
+    @real.bind(Addrinfo.tcp("127.0.0.1", 0))
+    @real.listen(5)
+    @port = @real.local_address.ip_port
+  end
+
+  def teardown
+    @server&.shutdown(drain: 1)
+    @thread&.join(2)
+    @real.close unless @real.closed?
+  end
+
+  def run_server(failures)
+    listener = FlakyListener.new(@real, failures)
+    @server = Server.new(@store, [ { tcp_server: listener, port: @port, host: "127.0.0.1" } ], nil)
+    @thread = Thread.new { @server.run }
+    assert @server.wait_ready(5), "the listener must come up"
+  end
+
+  def greeting
+    client = TCPSocket.new("127.0.0.1", @port)
+    client.timeout = 5
+    client.gets
+  ensure
+    client&.close
+  end
+
+  test "EMFILE on accept is retried, logged once, and the next connection is served" do
+    run_server([ Errno::EMFILE.new("accept"), Errno::EMFILE.new("accept") ])
+
+    assert_equal "220 hello\r\n", greeting
+    assert @server.healthy?, "the accept thread must survive resource exhaustion"
+    starvation = @store.logged.select { |_level, message| message.include?("cannot accept") }
+    assert_equal 1, starvation.size, "one log line per burst, not per failed accept"
+    assert_match(/EMFILE/, starvation.first.last)
+  end
+
+  test "an aborted connection is skipped silently" do
+    run_server([ Errno::ECONNABORTED.new("accept") ])
+
+    assert_equal "220 hello\r\n", greeting
+    assert_empty @store.logged.select { |level, _| level == :error }
+  end
+end
