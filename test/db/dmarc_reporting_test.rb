@@ -87,6 +87,10 @@ class DmarcReportingTest < DbSuite::TestCase
     assert_equal "reports@remote.test", message.recipient
     assert_equal "dmarc@example.test", message.mail_from
     assert_match(/Report Domain: remote\.test Submitter: example\.test/, message.data)
+    mail = Mail.read_from_string(message.data)
+    assert_equal "No", mail.header["TLS-Required"]&.value,
+                 "reports must carry RFC 8689 TLS-Required: No - delivery beats transport policy " \
+                 "for non-confidential feedback (a rua host with a broken cert still needs its reports)"
 
     xml = report_xml(message)
     assert_match(%r{<domain>remote\.test</domain>}, xml)

@@ -167,6 +167,14 @@ module MailOnRails
       mail.subject = "Report Domain: #{domain} Submitter: #{submitter} Report-ID: <#{report_id}>"
       mail.date    = Time.current
       mail.header["Auto-Submitted"] = "auto-generated"
+      # RFC 7489 wants the feedback loop to keep flowing even when the
+      # receiver's mail server can't present a verifiable certificate -
+      # the report is not confidential, and a rua host with a broken cert
+      # would otherwise never learn anything from us. RFC 8689's escape
+      # hatch tells the deliverer to skip DANE/MTA-STS/verified-TLS
+      # enforcement for this one message (same posture as TLS-RPT, whose
+      # RFC 8460 4.1 recommends exactly this header).
+      mail.header["TLS-Required"] = "No"
       mail.text_part = Mail::Part.new(body: "This is a DMARC aggregate report from #{submitter} for #{domain}.\n")
       mail.attachments[filename] = { mime_type: "application/gzip", content: Zlib.gzip(xml) }
       mail.to_s

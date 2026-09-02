@@ -51,7 +51,11 @@ module MailOnRails
       # One question out, one decoded reply back (id-checked; truncated
       # replies retried over TCP). Fallback nameservers are consulted
       # only once every primary has failed; TempError raises when all of
-      # them have.
+      # them have. A server that answers SERVFAIL/REFUSED/etc. counts as
+      # failed, not answered - docker's embedded DNS SERVFAILs some
+      # DNSSEC queries (large NSEC3 denials) that the public fallbacks
+      # resolve fine, and accepting its rcode as the final word turned
+      # deliverable mail into 22-hour retry deaths.
       def query(name, type)
         request = build_query(name, type)
         payload = request.encode
@@ -59,7 +63,11 @@ module MailOnRails
         (@nameservers + @fallbacks).each do |server|
           reply = udp_exchange(server, payload, request.header.id)
           reply = tcp_exchange(server, payload, request.header.id) if reply&.header&.tc
-          return reply if reply
+          next if reply.nil?
+          rcode = reply.rcode
+          return reply if rcode == Dnsruby::RCode.NOERROR || rcode == Dnsruby::RCode.NXDOMAIN
+
+          errors << "#{server}: #{rcode}"
         rescue IO::TimeoutError, SystemCallError, SocketError, Dnsruby::DecodeError => e
           errors << "#{server}: #{e.class}"
         end
