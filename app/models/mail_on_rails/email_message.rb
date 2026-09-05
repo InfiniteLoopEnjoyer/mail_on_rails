@@ -172,8 +172,11 @@ module MailOnRails
     # removes it here (IMAP MOVE semantics: new UID + tombstone, EMAILID
     # preserved because it is content-derived). Every recorded verdict moves
     # with it - the analysis happened to the bytes, not to the folder.
+    # A move into or out of Junk is also the user's spam verdict on the
+    # sender (JunkFeedback); `source` labels who moved it (imap, web).
     # Returns the new row.
-    def move_to!(dest)
+    def move_to!(dest, source: "move")
+      origin = mailbox
       moved = nil
       transaction do
         # enforce_quota: false - a move within the account is net-zero.
@@ -184,6 +187,7 @@ module MailOnRails
                                          spam_action: spam_action, enforce_quota: false)
         destroy!
       end
+      JunkFeedback.filed(moved, from: origin, to: dest, source: source)
       moved
     end
 

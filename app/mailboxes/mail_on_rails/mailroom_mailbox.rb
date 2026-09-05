@@ -29,6 +29,12 @@ require "mail_on_rails/ingress_seal"
 # spam is filed into Junk instead of INBOX - as is, when
 # MAILROOM_DMARC_ENFORCE=enforce, mail that failed DMARC under the sender
 # domain's own p=reject/p=quarantine policy (log-only by default).
+#
+# The account's own SenderRule (written by the user's Junk moves, or by
+# hand) has the first word on virus-clean unauthenticated mail: a deny
+# files the sender into Junk whatever rspamd scored, an allow delivers to
+# INBOX past a spam score - but not past a DMARC failure, because a
+# trusted From is exactly what a phisher forges.
 module MailOnRails
   class MailroomMailbox < ActionMailbox::Base
     def process
@@ -44,10 +50,7 @@ module MailOnRails
         if verdict && verdict[:status] != "clean"
           quarantine(account, verdict)
         else
-          # Virus-clean but rspamd says spam - or the sender domain's own
-          # DMARC policy asks for rejection/quarantine and enforcement is on:
-          # file into Junk, not INBOX.
-          dest = sender_analysis&.spam? || dmarc_policy_junk? ? account.junk_mailbox : account.inbox
+          dest = filing_destination(account)
           message = EmailMessage.deliver_raw(dest, inbound_email.source,
                                              authenticated_as: authenticated_as, auth_results: auth_results,
                                              scan_status: verdict&.dig(:status), **spam_attributes)
@@ -148,6 +151,52 @@ module MailOnRails
     # is already trusted) and when rspamd is off or unreachable.
     def auth_results
       sender_analysis&.auth_results
+    end
+
+    # INBOX or Junk for virus-clean mail. The account's sender rule comes
+    # first: deny files into Junk regardless of the score; allow delivers to
+    # INBOX past a spam score, unless the message failed DMARC (an
+    # allowlisted From is what a phisher forges - authentication keeps the
+    # last word; a p=reject/p=quarantine failure reads dmarc=fail too, so
+    # the policy filing below is never bypassed). Without a rule: rspamd
+    # says spam, or the sender domain's own DMARC policy asks for
+    # rejection/quarantine and enforcement is on - Junk, not INBOX.
+    def filing_destination(account)
+      case sender_rule(account)
+      when :deny
+        Rails.logger.info "[mail_on_rails] sender rule: deny #{from_address} for #{account.email}, filing into Junk"
+        return account.junk_mailbox
+      when :allow
+        if sender_analysis&.dmarc == "fail"
+          Rails.logger.warn "[mail_on_rails] sender rule: allow #{from_address} for #{account.email} " \
+                            "ignored - message failed DMARC"
+        else
+          Rails.logger.info "[mail_on_rails] sender rule: allow #{from_address} for #{account.email}, delivering to INBOX"
+          return account.inbox
+        end
+      end
+
+      sender_analysis&.spam? || dmarc_policy_junk? ? account.junk_mailbox : account.inbox
+    end
+
+    # Rules only judge unauthenticated mail, like every other verdict here:
+    # an authenticated local submitter is already trusted.
+    def sender_rule(account)
+      return if authenticated_as
+
+      SenderRule.verdict_for(account, from_address)
+    end
+
+    # The visible From (what the user sees and what their Junk moves
+    # recorded), not the envelope sender. A malformed header reads as none.
+    def from_address
+      return @from_address if defined?(@from_address)
+
+      @from_address = begin
+        (mail.from || []).first.to_s.presence
+      rescue StandardError
+        nil
+      end
     end
 
     # The rspamd analysis for an inbound message - the single gate for every

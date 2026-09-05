@@ -42,7 +42,9 @@ here if you want to embed one in your own app.
 - **Inbound pipeline** - mail accepted by the SMTP gem is ingested as
   `ActionMailbox::InboundEmail` and processed by
   `MailOnRails::MailroomMailbox`; rspamd (SPF/DKIM/DMARC + spam) and
-  ClamAV clients are built in.
+  ClamAV clients are built in. Per-account sender allow/deny rules
+  (`SenderRule`) steer filing, and a user's Junk moves write them and
+  train rspamd's Bayes classifier (`JunkFeedback`, `LearnSpamJob`).
 - **Outbound delivery** - MX resolution, DANE (RFC 7672) and MTA-STS
   (RFC 8461) verified TLS, DKIM signing, per-recipient retry/backoff,
   and TLS-RPT (RFC 8460) report generation.
@@ -261,7 +263,12 @@ a bad message is refused (550) before acceptance, scanner-down answers
 list refresh; DMARC policy is enforced on the MX edge. Trusted routing
 headers stamped by the SMTP edge are HMAC-sealed (`IngressSeal`), so
 nothing that reaches the mailroom by another route can forge
-authenticated/verified status.
+authenticated/verified status. Filing a message into Junk - from any
+IMAP client or the web UI - records a per-account deny rule for its
+sender and trains rspamd's Bayes classifier as spam; moving it back out
+flips the rule to allow and relearns it as ham (rspamd unlearns the
+earlier verdict), so a mistaken filing is undone by undoing the move.
+An allow rule never overrides a DMARC failure.
 
 **Outbound mail**: DKIM signing; DANE and MTA-STS verified TLS with no
 cleartext fallback when a policy is in force; per-account send quotas
