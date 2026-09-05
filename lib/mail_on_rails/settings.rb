@@ -510,6 +510,15 @@ module MailOnRails
     setting :auth_account_block, type: :integer, default: 300, min: 1, env: "MAIL_ON_RAILS_AUTH_ACCOUNT_BLOCK",
             scope: :dynamic, category: :auth_bruteforce,
             desc: "Account block duration, seconds"
+    setting :auth_auto_ban, type: :boolean, default: false, env: "MAIL_ON_RAILS_AUTH_AUTO_BAN",
+            scope: :dynamic, category: :auth_bruteforce,
+            desc: "Permanently ban the source IP of a failed SMTP/IMAP login (a banned-IP row like a manual ban: " \
+                  "every listener and the web login refuse it until it is removed on the auth attempts page). " \
+                  "No exceptions - your own devices included, so a stale password on your phone bans your own " \
+                  "address (default off; the temporary throttle applies either way)"
+    setting :auth_auto_ban_failures, type: :integer, default: 1, min: 1, env: "MAIL_ON_RAILS_AUTH_AUTO_BAN_FAILURES",
+            scope: :dynamic, category: :auth_bruteforce,
+            desc: "Failed logins from one IP within the window before auth_auto_ban bans it (1 = the first failure)"
 
     # -- Log retention --------------------------------------------------
     setting :trash_retention_days, type: :integer, default: 30, min: 1,

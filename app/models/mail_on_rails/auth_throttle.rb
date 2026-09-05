@@ -106,6 +106,20 @@ module MailOnRails
         retry
       end
 
+      # Failures counted against an address's key in the live window - what
+      # record_failure just bumped it to. Zero once the window has lapsed
+      # (the next bump starts a fresh count); a block in force keeps its
+      # count. Read by BannedIp's automatic ban.
+      def ip_failures(ip, now: Time.current)
+        return 0 if ip.blank?
+
+        row = find_by(scope: IP, key: ip_key(ip))
+        return 0 unless row
+        return 0 if row.blocked_until.nil? && row.window_started_at < now - window_seconds
+
+        row.failure_count
+      end
+
       # A successful login clears that account's counter. The IP counter is
       # left alone on purpose: one lucky guess must not hand an attacker a
       # fresh budget, and the IP limit is set high enough that a legitimate

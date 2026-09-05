@@ -49,8 +49,7 @@ module MailOnRails
           if account
             AuthThrottle.clear_account(account.email)
           else
-            AuthThrottle.record_failure(ip: ip, email: email)
-            log_attempt(email, ip, source, "bad_credentials")
+            count_failure(email, ip, source)
           end
           { account_id: account&.id, email: account&.email, honeypot: account&.honeypot? || false }
         end
@@ -61,10 +60,19 @@ module MailOnRails
       # only learns of those failures when the daemon reports them.
       def record_auth_failure(email, ip: nil, source: nil)
         db do
-          AuthThrottle.record_failure(ip: ip, email: email)
-          log_attempt(email, ip, source, "bad_credentials")
+          count_failure(email, ip, source)
           {}
         end
+      end
+
+      # Every bad-credentials verdict, whoever adjudicated it: the throttle
+      # counter, the attempt log, and - when the operator switched
+      # auth_auto_ban on - the permanent ban (BannedIp decides, from the
+      # count the throttle just reached).
+      def count_failure(email, ip, source)
+        AuthThrottle.record_failure(ip: ip, email: email)
+        log_attempt(email, ip, source, "bad_credentials")
+        BannedIp.auto_ban_after_failure(ip: ip, email: email, source: source)
       end
 
       # SCRAM-SHA-256 verifier material for a daemon-side AUTHENTICATE/AUTH
