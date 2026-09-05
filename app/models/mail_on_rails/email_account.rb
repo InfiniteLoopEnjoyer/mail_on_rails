@@ -27,6 +27,9 @@ module MailOnRails
 
     has_many :mailboxes, dependent: :destroy
     has_many :email_aliases, dependent: :destroy
+    # Per-sender allow/deny verdicts (SenderRule); plain rows, no callbacks
+    # worth running on account deletion.
+    has_many :sender_rules, dependent: :delete_all
     # Host-app concerns (RBAC associations, Turbo broadcasts) attach via
     # ActiveSupport.on_load(:mail_on_rails_email_account).
 

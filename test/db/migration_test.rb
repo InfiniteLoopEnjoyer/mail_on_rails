@@ -32,6 +32,11 @@ class MigrationTest < DbSuite::TestCase
     assert index("mail_on_rails_honeypot_events", "index_honeypot_events_on_ip_and_occurred_at")
   end
 
+  test "one sender rule per account and address" do
+    rule = index("mail_on_rails_sender_rules", "index_sender_rules_on_account_and_address")
+    assert rule&.unique, "sender_rules (account, address) must be unique"
+  end
+
   test "rollup unique indexes exist under their canonical names on every adapter" do
     auth = index("mail_on_rails_auth_attempts", "index_auth_attempts_on_rollup_key")
     closed = index("mail_on_rails_closed_connections", "index_closed_connections_on_rollup_key")

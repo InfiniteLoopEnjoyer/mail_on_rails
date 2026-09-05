@@ -30,7 +30,7 @@ module MailOnRails
       # FK-safe deletion/drop order: children before their parents
       # (unprefixed; the prefix is applied at use).
       TABLES_CHILD_FIRST = %w[
-        email_messages expunged_messages mailboxes email_aliases
+        email_messages expunged_messages mailboxes email_aliases sender_rules
         vacation_replies dmarc_reports tls_rpt_reports email_accounts domains
         auth_attempts auth_throttles banned_ips closed_connections honeypot_events
         mta_sts_policies settings smtp_outbound_messages suppressed_recipients
