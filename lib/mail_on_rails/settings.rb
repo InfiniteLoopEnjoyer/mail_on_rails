@@ -332,6 +332,10 @@ module MailOnRails
     setting :smtp_rspamd_addr, type: :addr, default: "", env: "SMTP_RSPAMD_ADDR",
             scope: :dynamic, category: :filtering, validate: VALID_RSPAMD_ADDR,
             desc: "rspamd worker address (host:port) for spam analysis (empty disables)"
+    setting :smtp_rspamd_controller_addr, type: :addr, default: "", env: "SMTP_RSPAMD_CONTROLLER_ADDR",
+            scope: :dynamic, category: :filtering, validate: VALID_RSPAMD_ADDR,
+            desc: "rspamd controller address (host:port, usually port 11334) for Bayes learning when a message " \
+                  "is filed into or out of Junk; needs smtp_rspamd_password (empty disables learning)"
     setting :smtp_rspamd_timeout, type: :integer, default: 10, min: 1, env: "SMTP_RSPAMD_TIMEOUT",
             scope: :dynamic, category: :filtering,
             desc: "rspamd HTTP timeout, seconds"

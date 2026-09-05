@@ -19,6 +19,12 @@ module MailOnRails
   # never raises (any failure is :unavailable, and callers decide policy),
   # read per call so tests can toggle it. Disabled unless SMTP_RSPAMD_ADDR
   # is set (a "host:port" pointing at rspamd's normal worker, default 11333).
+  #
+  # `learn` is the other direction: it feeds a message a user filed into
+  # (or rescued out of) Junk to the Bayes classifier. rspamd serves
+  # /learnspam and /learnham from its *controller* worker (default port
+  # 11334, password-gated), a different listener from the scan worker, so
+  # learning has its own address setting and is off until it is set.
   module RspamdAnalyzer
     # `auth_results` is an Authentication-Results-style string built from the
     # mechanism verdicts (e.g. "mail.example.com; spf=pass; dkim=pass;
@@ -44,7 +50,11 @@ module MailOnRails
     end
 
     DEFAULT_PORT = 11333
+    DEFAULT_CONTROLLER_PORT = 11334
     DEFAULT_TIMEOUT = 10
+
+    # Controller endpoints by learn class.
+    LEARN_PATHS = { "spam" => "/learnspam", "ham" => "/learnham" }.freeze
 
     # rspamd surfaces each mechanism as a symbol; first match wins (the maps
     # are ordered pass-first). Anything unlisted leaves that mechanism nil,
@@ -83,6 +93,15 @@ module MailOnRails
       Settings[:smtp_rspamd_timeout]
     end
 
+    def controller_addr
+      Settings[:smtp_rspamd_controller_addr].to_s.strip
+    end
+
+    # Bayes learning is on once the controller address is configured.
+    def learning_enabled?
+      !controller_addr.empty?
+    end
+
     # True when the configured worker answers GET /ping. Exists for
     # /metrics (mail_on_rails_rspamd_up): authenticated submission fails
     # open when rspamd is down, so an outage should be alertable instead
@@ -91,14 +110,38 @@ module MailOnRails
     def up?(addr = self.addr, timeout: 2)
       return false if addr.empty?
 
-      uri = endpoint(addr)
-      http = Net::HTTP.new(uri.host, uri.port || DEFAULT_PORT)
-      http.open_timeout = timeout
-      http.read_timeout = timeout
-      http.use_ssl = uri.scheme == "https"
-      http.request(Net::HTTP::Get.new("/ping")).is_a?(Net::HTTPSuccess)
+      connection(addr, timeout).request(Net::HTTP::Get.new("/ping")).is_a?(Net::HTTPSuccess)
     rescue Timeout::Error, SystemCallError, IOError, SocketError, Net::ProtocolError
       false
+    end
+
+    # Trains the Bayes classifier with a message as "spam" or "ham" through
+    # the controller. rspamd keeps a learn cache, so re-learning a message
+    # as the other class first unlearns the earlier verdict (that is what
+    # makes "move it back out of Junk" an undo), while learning the same
+    # class twice is answered 404 "already learned" - not a failure here.
+    # Returns one of
+    #   :ok               learned
+    #   :already_learned  a repeat of the same class
+    #   :rejected         rspamd refused (bad password, a worker that has no
+    #                     /learn endpoints, too few tokens, ...) - permanent
+    #   :unavailable      transport failure or 5xx - worth retrying
+    # and never raises.
+    def learn(raw, klass, addr: controller_addr, timeout: self.timeout)
+      request = Net::HTTP::Post.new(LEARN_PATHS.fetch(klass.to_s))
+      request.body = raw
+      request["Content-Type"] = "application/octet-stream"
+      request["Password"] = clean(password) unless password.empty?
+
+      response = connection(addr, timeout, default_port: DEFAULT_CONTROLLER_PORT).request(request)
+      case response
+      when Net::HTTPSuccess then :ok
+      when Net::HTTPNotFound then response.body.to_s.include?("already learned") ? :already_learned : :rejected
+      when Net::HTTPClientError then :rejected
+      else :unavailable
+      end
+    rescue Timeout::Error, SystemCallError, IOError, SocketError, Net::ProtocolError
+      :unavailable
     end
 
     # Analyze a message. The keyword facts come from the edge-stamped headers
@@ -109,11 +152,7 @@ module MailOnRails
     # never raises.
     def analyze(raw, ip: nil, helo: nil, mail_from: nil, rcpt: nil, authenticated_as: nil,
                 addr: self.addr, timeout: self.timeout)
-      uri = endpoint(addr)
-      http = Net::HTTP.new(uri.host, uri.port || DEFAULT_PORT)
-      http.open_timeout = timeout
-      http.read_timeout = timeout
-      http.use_ssl = uri.scheme == "https"
+      http = connection(addr, timeout)
 
       request = Net::HTTP::Post.new("/checkv2")
       request.body = raw
@@ -173,6 +212,15 @@ module MailOnRails
     def endpoint(addr = self.addr)
       base = addr.include?("://") ? addr : "http://#{addr}"
       URI.parse(base)
+    end
+
+    def connection(addr, timeout, default_port: DEFAULT_PORT)
+      uri = endpoint(addr)
+      http = Net::HTTP.new(uri.host, uri.port || default_port)
+      http.open_timeout = timeout
+      http.read_timeout = timeout
+      http.use_ssl = uri.scheme == "https"
+      http
     end
 
     # Header values cross a trust boundary into rspamd's request line; strip

@@ -3,19 +3,21 @@
 require "socket"
 require "json"
 
-# Scripted rspamd stand-in for the /checkv2 HTTP endpoint: reads one POST
-# per connection, answers with the given action, and keeps the request
-# headers so tests can assert what the client forwarded (and whether it
-# called at all). Modeled on FakeClamd.
+# Scripted rspamd stand-in: reads one POST per connection, answers
+# /checkv2 with the given action and the controller's /learnspam,/learnham
+# with success (or, with learn_status: 404, rspamd's "already learned"
+# refusal), and keeps the requests so tests can assert what the client
+# sent (and whether it called at all). Modeled on FakeClamd.
 #
 #   FakeRspamd.serving("reject") { |addr, fake| ... }   # "127.0.0.1:<port>"
 class FakeRspamd
-  attr_reader :requests # one {headers:, body:} per handled request
+  attr_reader :requests # one {line:, headers:, body:} per handled request
 
-  def initialize(action, score: 15.0, required_score: 15.0)
+  def initialize(action, score: 15.0, required_score: 15.0, learn_status: 200)
     @action = action
     @score = score
     @required_score = required_score
+    @learn_status = learn_status
     @requests = []
   end
 
@@ -47,9 +49,29 @@ class FakeRspamd
     body = conn.read(headers["content-length"].to_i)
     @requests << { line: request_line, headers: headers, body: body }
 
-    payload = JSON.generate({ "action" => @action, "score" => @score,
-                              "required_score" => @required_score, "symbols" => {} })
-    conn.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" \
+    if request_line.to_s.start_with?("POST /learn")
+      respond(conn, *learn_reply(request_line))
+    else
+      payload = JSON.generate({ "action" => @action, "score" => @score,
+                                "required_score" => @required_score, "symbols" => {} })
+      respond(conn, "200 OK", payload)
+    end
+  end
+
+  private
+
+  def learn_reply(request_line)
+    case @learn_status
+    when 200 then [ "200 OK", JSON.generate({ "success" => true }) ]
+    when 404
+      klass = request_line.include?("/learnham") ? "ham" : "spam"
+      [ "404 Not Found", JSON.generate({ "error" => "<abc123> has been already learned as #{klass}, ignore it" }) ]
+    else [ "#{@learn_status} Error", JSON.generate({ "error" => "scripted failure" }) ]
+    end
+  end
+
+  def respond(conn, status, payload)
+    conn.write("HTTP/1.1 #{status}\r\nContent-Type: application/json\r\n" \
                "Content-Length: #{payload.bytesize}\r\nConnection: close\r\n\r\n#{payload}")
   end
 end

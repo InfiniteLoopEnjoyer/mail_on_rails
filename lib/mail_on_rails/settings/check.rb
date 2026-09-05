@@ -117,13 +117,17 @@ module MailOnRails
               "(the default refuses; remove the SMTP_RSPAMD_FAIL_CLOSED=0 override)"
           end
         end
-        posture_warning do
-          addr = Settings[:smtp_rspamd_addr].to_s
-          if !Settings.static(:smtp_rspamd_password).to_s.empty? &&
-             !addr.empty? && !addr.start_with?("https://") &&
-             !%w[localhost 127. ::1].any? { |local| addr.sub(%r{\Ahttps?://}, "").start_with?(local) }
-            "the rspamd controller password travels over cleartext HTTP to #{addr} - " \
-              "use https:// or a loopback address"
+        # The Password header rides on every rspamd request: the worker's
+        # /checkv2 and the controller's /learnspam,/learnham alike.
+        %i[smtp_rspamd_addr smtp_rspamd_controller_addr].each do |name|
+          posture_warning do
+            addr = Settings[name].to_s
+            if !Settings.static(:smtp_rspamd_password).to_s.empty? &&
+               !addr.empty? && !addr.start_with?("https://") &&
+               !%w[localhost 127. ::1].any? { |local| addr.sub(%r{\Ahttps?://}, "").start_with?(local) }
+              "the rspamd controller password travels over cleartext HTTP to #{addr} (#{name}) - " \
+                "use https:// or a loopback address"
+            end
           end
         end
         posture_warning do

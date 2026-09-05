@@ -50,6 +50,7 @@ Precedence: gem default < environment variable < initializer override < settings
 | `smtp_clamav_timeout` | integer | 10 | `SMTP_CLAMAV_TIMEOUT` | dynamic | clamd scan timeout, seconds |
 | `smtp_clamav_optional` | boolean | false | `SMTP_CLAMAV_OPTIONAL` | static | Allow the mail servers to boot in production with no clamd address - an explicit opt-out of virus scanning; without it an empty SMTP_CLAMAV_ADDR fails the production boot (boot-only) |
 | `smtp_rspamd_addr` | addr |  | `SMTP_RSPAMD_ADDR` | dynamic | rspamd worker address (host:port) for spam analysis (empty disables) |
+| `smtp_rspamd_controller_addr` | addr |  | `SMTP_RSPAMD_CONTROLLER_ADDR` | dynamic | rspamd controller address (host:port, usually port 11334) for Bayes learning when a message is filed into or out of Junk; needs smtp_rspamd_password (empty disables learning) |
 | `smtp_rspamd_timeout` | integer | 10 | `SMTP_RSPAMD_TIMEOUT` | dynamic | rspamd HTTP timeout, seconds |
 | `smtp_rspamd_password` | string |  | `SMTP_RSPAMD_PASSWORD` | static | rspamd controller password (boot-only) |
 | `smtp_rspamd_fail_closed` | boolean | true | `SMTP_RSPAMD_FAIL_CLOSED` | dynamic | Reject authenticated submission when rspamd is unreachable, instead of accepting unscored (inbound always fails open; default on, set 0 to fail open) |
