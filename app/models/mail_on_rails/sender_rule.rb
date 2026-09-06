@@ -57,7 +57,9 @@ module MailOnRails
     # source in place (moving a message back out of Junk turns its deny
     # into an allow). The create runs in a savepoint so a lost race inside
     # a caller's transaction (the IMAP backend moves under one) can be
-    # retried without poisoning it on PostgreSQL.
+    # retried without poisoning it on PostgreSQL. InnoDB reports the same
+    # race as a deadlock between the racing inserts' index locks rather
+    # than a duplicate key - same answer, retry.
     def self.record!(account, address, verdict, source:)
       rule = transaction(requires_new: true) do
         find_or_create_by!(email_account: account, address: normalize_value_for(:address, address)) do |row|
@@ -67,7 +69,7 @@ module MailOnRails
       end
       rule.update!(verdict: verdict, source: source) if rule.verdict != verdict || rule.source != source
       rule
-    rescue ActiveRecord::RecordNotUnique
+    rescue ActiveRecord::RecordNotUnique, ActiveRecord::Deadlocked
       retry
     end
   end
