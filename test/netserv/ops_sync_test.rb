@@ -146,15 +146,22 @@ class OpsSyncTest < Minitest::Test
   end
 
   test "lockouts are projected as deadlines rounded to the second, so a countdown is not a change" do
-    @server.lockouts = { "198.51.100.1" => 600.4 }
+    # The projection is floor(Time.now + remaining). Aim both ticks at one
+    # integer deadline from opposite sides of the second (0.7 s and 0.3 s
+    # past it), so each tick tolerates a few hundred ms of runner delay
+    # before its rounding could move - a fixed 50 ms countdown flaked on
+    # slow CI whenever the two ticks straddled a second boundary.
+    deadline = Time.now.to_i + 601
+    @server.lockouts = { "198.51.100.1" => deadline + 0.7 - Time.now.to_f }
     @sync.tick
     _, _, _, lockouts = syncs.last
     assert_equal [ "198.51.100.1" ], lockouts.keys
     assert_kind_of Time, lockouts["198.51.100.1"]
     assert_equal 0, lockouts["198.51.100.1"].usec
+    assert_equal deadline, lockouts["198.51.100.1"].to_i
     assert_equal 1, @server.notified
 
-    @server.lockouts = { "198.51.100.1" => 600.35 } # a few ms later
+    @server.lockouts = { "198.51.100.1" => deadline + 0.3 - Time.now.to_f } # the countdown moved on
     @sync.tick
     assert_equal 1, @server.notified, "the same deadline is not a change"
   end
