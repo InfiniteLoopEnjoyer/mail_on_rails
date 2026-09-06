@@ -70,6 +70,39 @@ class SenderRuleTest < DbSuite::TestCase
     assert_equal 0, MailOnRails::SenderRule.count
   end
 
+  # The race the thread test only sometimes hits, pinned deterministically:
+  # a rival commits the row after record!'s lookup missed but before its
+  # insert is validated, so the uniqueness validation (not the database)
+  # rejects the create. record! must retry into the update path. Not on
+  # SQLite: one writer at a time means the window cannot open there, and
+  # staging it deadlocks the rival against our open read transaction.
+  test "a duplicate landing between lookup and validation is retried, not raised" do
+    skip "SQLite serializes writers; the window cannot open" if DbSuite.sqlite?
+
+    target = "gap@example.org"
+    raced = false
+    rival = lambda do |row|
+      next if raced || !row.new_record? || row.address != target
+
+      raced = true
+      Thread.new do
+        ActiveRecord::Base.connection_pool.with_connection do
+          MailOnRails::SenderRule.create!(email_account_id: row.email_account_id, address: target,
+                                          verdict: "allow", source: "manual")
+        end
+      end.join
+    end
+    MailOnRails::SenderRule.set_callback(:validation, :before, rival)
+
+    rule = MailOnRails::SenderRule.record!(account, target, "deny", source: "imap")
+
+    assert raced, "the rival never got its window"
+    assert_equal 1, MailOnRails::SenderRule.where(address: target).count
+    assert_equal [ "deny", "imap" ], [ rule.reload.verdict, rule.source ]
+  ensure
+    MailOnRails::SenderRule.skip_callback(:validation, :before, rival) if rival
+  end
+
   test "concurrent upserts of one address end with one row" do
     account_id = account.id
     barrier = Queue.new

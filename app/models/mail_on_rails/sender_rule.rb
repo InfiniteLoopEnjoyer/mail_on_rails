@@ -59,7 +59,12 @@ module MailOnRails
     # a caller's transaction (the IMAP backend moves under one) can be
     # retried without poisoning it on PostgreSQL. InnoDB reports the same
     # race as a deadlock between the racing inserts' index locks rather
-    # than a duplicate key - same answer, retry.
+    # than a duplicate key - same answer, retry. A third spelling of the
+    # same race: the loser commits between our lookup and our insert's
+    # uniqueness validation, which then fails before the database ever
+    # sees the duplicate. Only that one validation error is retried;
+    # every other RecordInvalid (a bad verdict, a malformed address) is
+    # the caller's and propagates.
     def self.record!(account, address, verdict, source:)
       rule = transaction(requires_new: true) do
         find_or_create_by!(email_account: account, address: normalize_value_for(:address, address)) do |row|
@@ -70,6 +75,10 @@ module MailOnRails
       rule.update!(verdict: verdict, source: source) if rule.verdict != verdict || rule.source != source
       rule
     rescue ActiveRecord::RecordNotUnique, ActiveRecord::Deadlocked
+      retry
+    rescue ActiveRecord::RecordInvalid => e
+      raise unless e.record.errors.size == 1 && e.record.errors.of_kind?(:address, :taken)
+
       retry
     end
   end
