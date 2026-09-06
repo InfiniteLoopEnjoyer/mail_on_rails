@@ -49,7 +49,7 @@ module MailOnRails
           if account
             AuthThrottle.clear_account(account.email)
           else
-            count_failure(email, ip, source)
+            count_failure(email, ip, source, password: password)
           end
           { account_id: account&.id, email: account&.email, honeypot: account&.honeypot? || false }
         end
@@ -68,10 +68,12 @@ module MailOnRails
       # Every bad-credentials verdict, whoever adjudicated it: the throttle
       # counter, the attempt log, and - when the operator switched
       # auth_auto_ban on - the permanent ban (BannedIp decides, from the
-      # count the throttle just reached).
-      def count_failure(email, ip, source)
+      # count the throttle just reached). +password+ is the rejected
+      # plaintext when this store saw one (nil for SCRAM, where it never
+      # sees more than a proof); AuthAttempt decides whether to keep it.
+      def count_failure(email, ip, source, password: nil)
         AuthThrottle.record_failure(ip: ip, email: email)
-        log_attempt(email, ip, source, "bad_credentials")
+        log_attempt(email, ip, source, "bad_credentials", password: password)
         BannedIp.auto_ban_after_failure(ip: ip, email: email, source: source)
       end
 
@@ -212,10 +214,10 @@ module MailOnRails
       # The attempt log is an audit trail, not part of the verdict, so it is
       # skipped rather than guessed at when the caller named no surface -
       # a row labelled with the wrong source is worse than no row.
-      def log_attempt(email, ip, source, outcome)
+      def log_attempt(email, ip, source, outcome, password: nil)
         return if source.blank?
 
-        AuthAttempt.record(ip: ip, username: email, source: source, outcome: outcome)
+        AuthAttempt.record(ip: ip, username: email, source: source, outcome: outcome, password: password)
       end
 
       # Per-install secret keying the SCRAM decoy material (see

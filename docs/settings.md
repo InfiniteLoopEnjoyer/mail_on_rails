@@ -94,6 +94,7 @@ Precedence: gem default < environment variable < initializer override < settings
 | `auth_account_block` | integer | 300 | `MAIL_ON_RAILS_AUTH_ACCOUNT_BLOCK` | dynamic | Account block duration, seconds |
 | `auth_auto_ban` | boolean | false | `MAIL_ON_RAILS_AUTH_AUTO_BAN` | dynamic | Permanently ban the source IP of a failed SMTP/IMAP login (a banned-IP row like a manual ban: every listener and the web login refuse it until it is removed on the auth attempts page). No exceptions - your own devices included, so a stale password on your phone bans your own address (default off; the temporary throttle applies either way) |
 | `auth_auto_ban_failures` | integer | 1 | `MAIL_ON_RAILS_AUTH_AUTO_BAN_FAILURES` | dynamic | Failed logins from one IP within the window before auth_auto_ban bans it (1 = the first failure) |
+| `auth_log_passwords` | boolean | false | `MAIL_ON_RAILS_AUTH_LOG_PASSWORDS` | dynamic | Keep the password from a failed login to an address that exists here and show it on the auth attempts page, so a guess can be checked against old or breached passwords. Only plaintext logins carry one (SMTP/IMAP PLAIN and LOGIN, the web sign-in); SCRAM never reveals it. Encrypted at rest and pruned with the row. Most failures are real people mistyping, so this stores working credentials for these mailboxes (default off) |
 
 ## retention
 

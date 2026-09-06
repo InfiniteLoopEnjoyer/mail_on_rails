@@ -519,6 +519,13 @@ module MailOnRails
     setting :auth_auto_ban_failures, type: :integer, default: 1, min: 1, env: "MAIL_ON_RAILS_AUTH_AUTO_BAN_FAILURES",
             scope: :dynamic, category: :auth_bruteforce,
             desc: "Failed logins from one IP within the window before auth_auto_ban bans it (1 = the first failure)"
+    setting :auth_log_passwords, type: :boolean, default: false, env: "MAIL_ON_RAILS_AUTH_LOG_PASSWORDS",
+            scope: :dynamic, category: :auth_bruteforce,
+            desc: "Keep the password from a failed login to an address that exists here and show it on the " \
+                  "auth attempts page, so a guess can be checked against old or breached passwords. Only " \
+                  "plaintext logins carry one (SMTP/IMAP PLAIN and LOGIN, the web sign-in); SCRAM never reveals " \
+                  "it. Encrypted at rest and pruned with the row. Most failures are real people mistyping, so " \
+                  "this stores working credentials for these mailboxes (default off)"
 
     # -- Log retention --------------------------------------------------
     setting :trash_retention_days, type: :integer, default: 30, min: 1,

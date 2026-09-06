@@ -9,16 +9,19 @@
 # exists for retention and queryability, not because the data is otherwise
 # unavailable.
 #
-# **No password material is stored, in any form.** Most failed attempts are
-# real users mistyping or retrying a stale password, so the column would
-# fill with current, working credentials for these very mailboxes; the rest
-# is credential stuffing carrying passwords harvested elsewhere, which
-# users reuse. Hashing does not rescue it: the only reason to keep password
-# material is equality comparison across attempts, which needs a
+# **No password material is stored unless the operator opts in.** Most
+# failed attempts are real users mistyping or retrying a stale password, so
+# the column fills with current, working credentials for these very
+# mailboxes; the rest is credential stuffing carrying passwords harvested
+# elsewhere, which users reuse. Hashing does not rescue it: the only reason
+# to keep password material is comparison across attempts, which needs a
 # deterministic hash, and a deterministic hash of a password from a spray
-# dictionary is reversible by anyone who obtains this table. It would be
-# the liability without the protection. The spray/brute-force distinction
-# it would buy is already legible from how usernames and addresses fan out.
+# dictionary is reversible by anyone who obtains this table. So the default
+# is to keep nothing. With auth_log_passwords on, the plaintext of a failed
+# login to an address that *exists here* is kept (encrypted at rest, pruned
+# with the row) so the operator can tell an old breached password from a
+# fresh guess. Dictionary noise against unknown addresses never carries
+# one, and SCRAM logins cannot: the daemon only ever sees a proof.
 #
 # Successes are deliberately not recorded either: a single iOS folder
 # refresh opens ~5 connections and authenticates on each, so legitimate
@@ -33,8 +36,16 @@ module MailOnRails
     # One address's aggregate inside a range drill-down (range_detail).
     RangeIp = Data.define(:ip, :attempts, :last_seen, :usernames, :sources, :real_account)
 
+    # Longest password kept; anything past it is a paste, not a typo.
+    MAX_PASSWORD_LENGTH = 256
+
     scope :recent, ->(since) { where(occurred_at: since..) }
     scope :against_real_accounts, -> { where(account_exists: true) }
+
+    # Plaintext of a failed guess (see the file comment): a working
+    # credential for a real mailbox more often than not, so at rest it
+    # gets the same protection as the SCRAM verifiers and TOTP secrets.
+    encrypts :password
 
     # The per-source cap counts by Netserv.throttle_key (the /64 for IPv6),
     # derived here so every writer keys the same way. A rollup row's ip is
@@ -49,18 +60,24 @@ module MailOnRails
 
       def rollup_window = MailOnRails::Settings[:auth_log_rollup_window]
 
+      def log_passwords? = MailOnRails::Settings[:auth_log_passwords]
+
       # Records one failed attempt. Never raises: this sits on the auth path,
       # and losing an audit row is always better than failing a login (or
       # handing an attacker a way to make logins fail).
       # +outcome+ of "bad_credentials" is downgraded to "unknown_account" when
       # the address doesn't resolve, so callers don't each repeat that lookup
       # on the auth path just to pick a label.
-      def record(ip:, username:, source:, outcome:, now: Time.current)
+      # +password+ is the plaintext the client offered, when the caller has
+      # one; it is kept only for a bad_credentials verdict against a real
+      # address, and only while auth_log_passwords is on.
+      def record(ip:, username:, source:, outcome:, now: Time.current, password: nil)
         real = account_exists?(username, source)
         outcome = "unknown_account" if outcome.to_s == "bad_credentials" && !real
         if real || under_cap?(ip, now)
+          kept = real && outcome.to_s == "bad_credentials" ? keepable_password(password) : nil
           create!(occurred_at: now, ip: ip.presence, username: normalize(username),
-                  source: source.to_s, outcome: outcome.to_s, account_exists: real)
+                  source: source.to_s, outcome: outcome.to_s, account_exists: real, password: kept)
         else
           roll_up(ip, source, now)
         end
@@ -111,6 +128,15 @@ module MailOnRails
       end
 
       def normalize(username) = username.to_s.strip.downcase.presence
+
+      # nil unless the operator opted in. SASL hands the listeners raw
+      # bytes, so the value is scrubbed to valid UTF-8 (encryption
+      # serializes it as text) and cut at MAX_PASSWORD_LENGTH.
+      def keepable_password(password)
+        return nil unless log_passwords?
+
+        password.to_s.dup.force_encoding(Encoding::UTF_8).scrub("�").first(MAX_PASSWORD_LENGTH).presence
+      end
 
       # "Real" means an address mail would actually be accepted for (an
       # account or an alias), or - on the web surface - a login that exists.
