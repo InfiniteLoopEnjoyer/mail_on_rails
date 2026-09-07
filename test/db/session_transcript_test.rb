@@ -60,6 +60,33 @@ class SessionTranscriptTest < DbSuite::TestCase
     assert MailOnRails::SessionTranscript.find_by(id: fresh.id)
   end
 
+  # The captured-sessions table on the live pages.
+  test "recent_list is one protocol's captures in the window, newest first" do
+    old = MailOnRails::SessionTranscript.record(protocol: "smtp", closed_at: 3.days.ago, transcript: "old")
+    late = MailOnRails::SessionTranscript.record(protocol: "smtp", closed_at: 1.hour.ago, transcript: "late")
+    early = MailOnRails::SessionTranscript.record(protocol: "smtp", closed_at: 2.hours.ago, transcript: "early")
+    MailOnRails::SessionTranscript.record(protocol: "imap", closed_at: 1.minute.ago, transcript: "imap")
+
+    assert_equal [ late.id, early.id ], MailOnRails::SessionTranscript.recent_list(:smtp, since: 1.day.ago).pluck(:id)
+    assert_equal [ late.id ], MailOnRails::SessionTranscript.recent_list(:smtp, since: 1.day.ago, limit: 1).pluck(:id)
+    assert_includes MailOnRails::SessionTranscript.recent_list("smtp", since: 7.days.ago).pluck(:id), old.id
+  end
+
+  test "preview is the peer's first commands, server replies left out, cut to length" do
+    capture = MailOnRails::SessionTranscript.new(
+      transcript: "=> 220 mx ready\n<= EHLO scanner.test\n=> 250 OK\n<= AUTH LOGIN\n=> 503\n<=   \n<= GET / HTTP/1.1\n<= QUIT"
+    )
+    assert_equal "EHLO scanner.test · AUTH LOGIN · GET / HTTP/1.1", capture.preview
+    assert_equal 8, capture.line_count
+
+    long = MailOnRails::SessionTranscript.new(transcript: "<= #{"A" * 300}")
+    assert_equal MailOnRails::SessionTranscript::PREVIEW_CHARS, long.preview.length
+    assert long.preview.end_with?("…")
+
+    assert_equal "", MailOnRails::SessionTranscript.new(transcript: "=> 220 only server").preview
+    assert_equal 0, MailOnRails::SessionTranscript.new(transcript: nil).line_count
+  end
+
   test "a transcript failure never loses the history row" do
     # SessionTranscript.record rescues everything into nil; the history
     # row must still land, just unlinked.
