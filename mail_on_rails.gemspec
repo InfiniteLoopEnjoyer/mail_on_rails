@@ -88,6 +88,10 @@ Gem::Specification.new do |spec|
 
   # The json default gem shipped with ruby 4.0.6 (2.18.0) carries
   # CVE-2026-33210; the fixed floor has to be declared here so standalone
-  # (non-Rails-app) processes resolve a safe version.
-  spec.add_dependency "json", ">= 2.19.2"
+  # (non-Rails-app) processes resolve a safe version. Capped below 3:
+  # json 3.0 made JSON.parse's options keyword-only, and Active Support
+  # (through 8.1.3.1) still passes them as a positional hash, so every
+  # ActiveSupport::JSON.decode - jsonb columns included - raises. Lift
+  # the cap once Rails ships JSON.parse(json, **options).
+  spec.add_dependency "json", ">= 2.19.2", "< 3"
 end
