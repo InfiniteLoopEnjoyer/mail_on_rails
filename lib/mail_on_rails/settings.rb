@@ -578,6 +578,15 @@ module MailOnRails
     setting :honeypot_allowlist, type: :list, default: [], env: "MAIL_ON_RAILS_HONEYPOT_ALLOWLIST",
             scope: :dynamic, category: :honeypot,
             desc: "CIDRs never auto-banned by the honeypot"
+    setting :protocol_auto_ban, type: :boolean, default: false, env: "MAIL_ON_RAILS_PROTOCOL_AUTO_BAN",
+            scope: :dynamic, category: :honeypot,
+            desc: "Permanently ban the source IP of a session that speaks something other than mail at a " \
+                  "listener: an HTTP request, an SSH or SIP handshake, a TLS handshake on a plaintext port, " \
+                  "random binary, or an exploit-probe payload (a banned-IP row like a manual ban: every " \
+                  "listener and the web login refuse it until it is removed on the auth attempts page). " \
+                  "The honeypot allowlist is the only exception - a mail client set to the wrong port or " \
+                  "security type bans your own address too (default off; hits are recorded on the honeypot " \
+                  "page either way)"
     setting :honeypot_banner, type: :string, default: nil, env: "MAIL_ON_RAILS_HONEYPOT_BANNER",
             scope: :static, category: :honeypot, normalize: BLANK_TO_NIL,
             desc: "Deceptive product banner in SMTP/IMAP greetings (boot-only; blank: real banner)"

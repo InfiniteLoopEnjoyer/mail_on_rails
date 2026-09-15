@@ -1,9 +1,11 @@
-# A honeypot hit: an interaction that only an attacker would have. Two kinds
-# today (TRIGGERS): a successful login against a canary account (an EmailAccount
-# flagged honeypot: true, which no real user owns), and an exploit-probe
-# payload thrown at any listener (an Exim ${run{...} substitution, a shellshock
-# preamble, VRFY root, ...). Both are unambiguously hostile, so unlike
-# AuthAttempt/ClosedConnection this table needs no rollup - every row is signal.
+# A honeypot hit: an interaction that only an attacker would have (TRIGGERS):
+# a successful login against a canary account (an EmailAccount flagged
+# honeypot: true, which no real user owns), an exploit-probe payload thrown at
+# any listener (an Exim ${run{...} substitution, a shellshock preamble, VRFY
+# root, ...), another protocol spoken at a mail port (an HTTP request line, an
+# SSH banner, a TLS ClientHello on a plaintext port), or garbage bytes no mail
+# command contains. All are hostile, so unlike AuthAttempt/ClosedConnection
+# this table needs no rollup - every row is signal.
 #
 # Written from the protocol sessions' honeypot path through
 # Store::Base#record_honeypot_event (best-effort, respond_to?-guarded like
@@ -11,21 +13,26 @@
 # multi-tenant-safe response (apply_response) and enqueues DNS enrichment off
 # the connection thread.
 #
-# The response is deliberately never an automatic permanent ban - on a shared
+# By default the response is never an automatic permanent ban - on a shared
 # server a permanent IP block is collateral damage waiting to happen (CGNAT,
 # VPN and corporate NATs put many real tenants behind one address). Instead:
 #
-#   canary_auth   - near-zero false positive, so a *temporary*, auto-expiring
-#                   IP throttle (AuthThrottle), but only when the address is
-#                   neither allowlisted nor carrying recent legitimate tenant
-#                   traffic (a real account authenticating from the same IP
-#                   marks it shared, and it is left alone).
-#   exploit_probe - a regex match, higher false-positive and collateral risk,
-#                   so recorded only. An admin escalates it by hand from the
-#                   dashboard (a permanent BannedIp, or a live kick).
+#   canary_auth      - near-zero false positive, so a *temporary*, auto-expiring
+#                      IP throttle (AuthThrottle), but only when the address is
+#                      neither allowlisted nor carrying recent legitimate tenant
+#                      traffic (a real account authenticating from the same IP
+#                      marks it shared, and it is left alone).
+#   exploit_probe,
+#   foreign_protocol,
+#   garbage          - recorded only; an admin escalates by hand from the
+#                      dashboard (a permanent BannedIp, or a live kick).
 #
-# The action taken is stored in `response` so the dashboard is honest about
-# what happened, and a permanent ban stays a human decision.
+# An operator who would rather not review scanner noise switches
+# protocol_auto_ban on: the three probe-type triggers then write the same
+# permanent BannedIp a failed login does under auth_auto_ban, and like that
+# setting it deliberately skips the shared-address check - the honeypot
+# allowlist is the only exception. The action taken is stored in `response`
+# so the dashboard is honest about what happened.
 #
 # The transcript is the full redacted wire dialogue of the session. Passwords -
 # the canary's own and anything the attacker typed - are redacted at the tap,
@@ -35,7 +42,9 @@ require "mail_on_rails/netserv/ip"
 
 module MailOnRails
   class HoneypotEvent < Record
-    TRIGGERS = %w[canary_auth exploit_probe].freeze
+    TRIGGERS = %w[canary_auth exploit_probe foreign_protocol garbage].freeze
+    # The triggers protocol_auto_ban acts on: everything but a canary login.
+    PROBE_TRIGGERS = (TRIGGERS - %w[canary_auth]).freeze
     PROTOCOLS = %w[smtp imap].freeze
 
     scope :recent, ->(since) { where(occurred_at: since..) }
@@ -55,6 +64,9 @@ module MailOnRails
       # How far back a legitimate authenticated connection from an IP still
       # marks it "shared" and off-limits for an automatic block.
       def collateral_days = MailOnRails::Settings[:honeypot_collateral_days]
+
+      # Whether probe-type hits ban their source permanently.
+      def protocol_auto_ban? = MailOnRails::Settings[:protocol_auto_ban]
 
       # Never-touch source addresses (own monitoring, health checks, known
       # relays): comma/space-separated CIDRs.
@@ -115,8 +127,8 @@ module MailOnRails
 
     # The graduated response (see the class comment). Records what it did in
     # `response`; best-effort, so a response failure never breaks the event
-    # write. Never bans permanently and never kicks the live session - those
-    # stay human decisions on the dashboard.
+    # write. Never kicks the live session (a ban reaches it on the next ops
+    # tick); a permanent ban only under protocol_auto_ban.
     def apply_response
       update_column(:response, decide_response)
     rescue StandardError => e
@@ -126,15 +138,30 @@ module MailOnRails
     def decide_response
       return "observed" if ip.blank?
       return "allowlisted" if self.class.allowlisted?(ip)
-      # Probes are observe-only: too much false-positive/collateral risk to act
-      # on a regex automatically. The admin escalates from the dashboard.
-      return "observed" unless trigger == "canary_auth"
+      return probe_response if PROBE_TRIGGERS.include?(trigger)
       return "observed (shared address)" if self.class.legitimate_traffic_from?(ip)
 
       # block_ip! keys on the throttle key itself (the /64 for IPv6); the
       # full address stays on this row for the dashboard.
       MailOnRails::AuthThrottle.block_ip!(ip, seconds: self.class.block_seconds)
       "throttled #{self.class.block_seconds / 60}m"
+    end
+
+    # Probes are observe-only unless protocol_auto_ban is on: too much
+    # false-positive/collateral risk to act on a regex automatically without
+    # the operator having chosen it. Once chosen, no shared-address check -
+    # the same "anyone, my own devices included" stance as auth_auto_ban.
+    def probe_response
+      return "observed" unless self.class.protocol_auto_ban?
+
+      if (row = MailOnRails::BannedIp.auto_ban_for_probe(ip: ip, protocol: protocol, trigger: trigger,
+                                                          signature: signature))
+        "banned #{row.cidr}"
+      elsif MailOnRails::BannedIp.covering(ip)
+        "already banned"
+      else
+        "observed"
+      end
     end
 
     def enqueue_enrichment

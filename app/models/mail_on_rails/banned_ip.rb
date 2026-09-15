@@ -1,9 +1,10 @@
 # A permanent IP/CIDR ban, created from the auth attempts page, imported
-# from the Spamhaus DROP list, or - with auth_auto_ban switched on -
-# written automatically for the source of a failed SMTP/IMAP login.
-# AuthThrottle already blocks brute-force sources automatically, but only
-# for minutes at a time; this is "and stay out" - rows persist until
-# deleted from the UI.
+# from the Spamhaus DROP list, or written automatically: with auth_auto_ban
+# on, for the source of a failed SMTP/IMAP login; with protocol_auto_ban on,
+# for the source of a honeypot probe hit (HTTP at a mail port, garbage
+# bytes, an exploit payload). AuthThrottle already blocks brute-force
+# sources automatically, but only for minutes at a time; this is "and stay
+# out" - rows persist until deleted from the UI.
 #
 # Enforcement is deliberately spread over every surface a banned address
 # can reach: the in-process SMTP and IMAP listeners drop matching
@@ -13,7 +14,9 @@
 # before the web login. None of those readers restart.
 module MailOnRails
   class BannedIp < Record
-    SOURCES = %w[manual spamhaus_drop auth_failure].freeze
+    SOURCES = %w[manual spamhaus_drop auth_failure protocol_abuse].freeze
+    # The sources a setting writes rather than a person.
+    AUTOMATIC_SOURCES = %w[auth_failure protocol_abuse].freeze
 
     # Below these prefix lengths a typo bans most of the internet
     # (0.0.0.0/0-class mistakes); a deliberate /8 is already 16M addresses.
@@ -24,6 +27,7 @@ module MailOnRails
     scope :manual, -> { where(source: "manual") }
     scope :spamhaus_drop, -> { where(source: "spamhaus_drop") }
     scope :auth_failure, -> { where(source: "auth_failure") }
+    scope :protocol_abuse, -> { where(source: "protocol_abuse") }
     # Bans a person can lift on the auth attempts page (DROP rows come back
     # on the next import).
     scope :removable, -> { where.not(source: "spamhaus_drop") }
@@ -76,6 +80,39 @@ module MailOnRails
         note = "auto: failed #{source.presence || 'mail'} login"
         user = email.to_s.gsub(/[^[:graph:]]/, "")[0, 80]
         note += " as #{user}" unless user.empty?
+        note
+      end
+
+      # The automatic ban behind the protocol_auto_ban setting, called from
+      # HoneypotEvent's response for a probe-type trigger. The setting
+      # check stays with the caller so the event's response column can say
+      # what happened. Same permanent row and throttle keying as
+      # auto_ban_after_failure, same best-effort discipline (a listener
+      # thread is underneath this). Returns the new row, or nil when the
+      # address was already covered or nothing could be written.
+      def auto_ban_for_probe(ip:, protocol:, trigger:, signature: nil)
+        return if ip.blank?
+        return if covering(ip)
+
+        row = create!(cidr: Netserv.throttle_key(ip), source: "protocol_abuse",
+                      note: probe_ban_note(protocol, trigger, signature))
+        MailOnRails.logger.warn("[mail_on_rails] auto-banned #{row.cidr}: #{row.note}")
+        row
+      rescue ActiveRecord::RecordNotUnique
+        nil # another edge banned it first
+      rescue StandardError => e
+        MailOnRails.logger.error("[mail_on_rails] auto-ban of #{ip} failed: #{e.class}: #{e.message}")
+        nil
+      end
+
+      # "auto: http request on smtp". The trigger and signature are our own
+      # names (ProbeSignatures), never attacker bytes. A TLS handshake is the
+      # one shape a misconfigured real client also produces, so its note
+      # says so - that row is the one an operator may want to lift.
+      def probe_ban_note(protocol, trigger, signature)
+        what = (signature.presence || trigger).to_s.tr("_", " ")
+        note = "auto: #{what} on #{protocol}"
+        note += " (a mail client on the wrong port or security type looks like this)" if signature == "tls_handshake"
         note
       end
       # The ban covering +ip+, or nil (also nil for unparseable input - an

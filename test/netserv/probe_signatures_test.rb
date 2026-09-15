@@ -49,4 +49,70 @@ class ProbeSignaturesTest < Minitest::Test
     assert_equal "vrfy_privileged", match("VRFY postmaster")
     assert_equal "expn_probe", match("EXPN staff")
   end
+
+  def foreign(line) = MailOnRails::Netserv::ProbeSignatures.foreign_protocol(line)
+  def garbage(line) = MailOnRails::Netserv::ProbeSignatures.garbage(line)
+  def detect(line) = MailOnRails::Netserv::ProbeSignatures.detect(line)
+
+  # A TLS 1.0-1.3 ClientHello record header as it lands on a plaintext port.
+  CLIENT_HELLO = "\x16\x03\x01\x00\xf4\x01\x00\x00\xf0\x03\x03".b
+
+  def test_foreign_protocols_spoken_at_a_mail_port
+    assert_equal "http_request", foreign("GET / HTTP/1.1")
+    assert_equal "http_request", foreign("POST /cgi-bin/luci HTTP/1.0")
+    assert_equal "http_request", foreign("OPTIONS * HTTP/1.1")
+    assert_equal "http_request", foreign("CONNECT example.test:443 HTTP/1.1")
+    assert_equal "http_request", foreign("GET /")
+    assert_equal "http_request", foreign("HEAD http://example.test/ HTTP/1.1")
+    assert_equal "ssh_banner", foreign("SSH-2.0-OpenSSH_9.6")
+    assert_equal "sip_request", foreign("INVITE sip:100@203.0.113.9 SIP/2.0")
+    assert_equal "sip_request", foreign("OPTIONS sip:nm SIP/2.0")
+    assert_equal "tls_handshake", foreign(CLIENT_HELLO)
+  end
+
+  # Real commands share prefixes with the above: an IMAP tag can be "GET",
+  # an SMTP verb list never contains HTTP's, and a TLS record starts with
+  # bytes no command line does.
+  def test_real_mail_commands_are_not_foreign
+    assert_nil foreign("GET SELECT INBOX")
+    assert_nil foreign("A001 LOGIN user pass")
+    assert_nil foreign("EHLO client.test")
+    assert_nil foreign("MAIL FROM:<get@example.test>")
+    assert_nil foreign("OPTIONS NOOP")
+    assert_nil foreign("SSH LIST \"\" *")
+  end
+
+  def test_garbage_is_control_bytes_or_non_utf8
+    assert_equal "control_bytes", garbage("b\x00/{m<;s3gMm>.4 ;1")
+    assert_equal "control_bytes", garbage("\e[0m NOOP")
+    assert_equal "invalid_utf8", garbage("b\xff/{m<;s3gMm>.4 ;1".b)
+    assert_equal "invalid_utf8", garbage("\xc3\x28 NOOP".dup.force_encoding("UTF-8"))
+  end
+
+  # TAB, a bare LF and valid UTF-8 (an SMTPUTF8 address, a UTF-8 mailbox
+  # name) are sloppy or legitimate, never garbage.
+  def test_legitimate_lines_are_not_garbage
+    assert_nil garbage("MAIL FROM:<jürgen@example.test> SMTPUTF8")
+    assert_nil garbage("A001 SELECT \"Entwürfe\"")
+    assert_nil garbage("EHLO\tclient.test")
+    assert_nil garbage("EHLO a\nMAIL FROM:<x@y>")
+    assert_nil garbage("")
+  end
+
+  def test_detect_names_the_most_specific_reason_first
+    assert_equal [ "foreign_protocol", "tls_handshake" ], detect(CLIENT_HELLO)
+    assert_equal [ "foreign_protocol", "http_request" ], detect("GET / HTTP/1.1")
+    assert_equal [ "exploit_probe", "shellshock" ], detect("SELECT () { :; }; /bin/sh")
+    assert_equal [ "garbage", "control_bytes" ], detect("\x01\x02\x03 NOOP")
+    assert_nil detect("A001 NOOP")
+  end
+
+  # A UTF-8-tagged line (a caller other than the binmode socket) holding
+  # invalid bytes must not turn a regexp check into an ArgumentError.
+  def test_every_check_survives_an_invalid_utf8_line
+    line = "MAIL FROM:<\xff${run{/bin/sh}}@evil.test>".dup.force_encoding("UTF-8")
+    refute line.valid_encoding?
+    assert_equal [ "exploit_probe", "exim_run" ], detect(line)
+    assert_nil foreign(line)
+  end
 end

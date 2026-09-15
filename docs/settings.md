@@ -116,6 +116,7 @@ Precedence: gem default < environment variable < initializer override < settings
 | `honeypot_block_seconds` | integer | 3600 | `MAIL_ON_RAILS_HONEYPOT_BLOCK_SECONDS` | dynamic | Temporary block duration for a triggered honeypot canary, seconds |
 | `honeypot_collateral_days` | integer | 7 | `MAIL_ON_RAILS_HONEYPOT_COLLATERAL_DAYS` | dynamic | Lookback for legitimate traffic before auto-banning a shared IP, days |
 | `honeypot_allowlist` | list | (empty) | `MAIL_ON_RAILS_HONEYPOT_ALLOWLIST` | dynamic | CIDRs never auto-banned by the honeypot |
+| `protocol_auto_ban` | boolean | false | `MAIL_ON_RAILS_PROTOCOL_AUTO_BAN` | dynamic | Permanently ban the source IP of a session that speaks something other than mail at a listener: an HTTP request, an SSH or SIP handshake, a TLS handshake on a plaintext port, random binary, or an exploit-probe payload (a banned-IP row like a manual ban: every listener and the web login refuse it until it is removed on the auth attempts page). The honeypot allowlist is the only exception - a mail client set to the wrong port or security type bans your own address too (default off; hits are recorded on the honeypot page either way) |
 | `honeypot_banner` | string | (none) | `MAIL_ON_RAILS_HONEYPOT_BANNER` | static | Deceptive product banner in SMTP/IMAP greetings (boot-only; blank: real banner) |
 
 ## identity
