@@ -9,8 +9,11 @@ require "mail_on_rails/sender_auth/dns"
 # daily from config/recurring.yml; a domain with no TLSRPT record simply
 # keeps accumulating (and eventually pruning) events.
 module MailOnRails
-  class SendTlsRptReportsJob < BaseJob
+  class SendTlsRptReportsJob < AggregateReportJob
     queue_as :default
+
+    KIND = "tlsrpt"
+    LOCAL_PART = Domain::TLS_RPT_LOCAL_PART
 
     def perform(date = Date.yesterday)
       TlsRptEvent.on_day(date).distinct.pluck(:policy_domain).each do |domain|
@@ -23,19 +26,18 @@ module MailOnRails
     private
 
     def send_report(domain, date)
-      recipients = rua_addresses(domain)
+      recipients = deliverable(rua_addresses(domain))
       return if recipients.empty?
 
       events = TlsRptEvent.on_day(date).where(policy_domain: domain).to_a
       return if events.empty?
 
-      report_id = "#{date.beginning_of_day.to_i}.#{domain}.#{SecureRandom.hex(6)}@#{submitter}"
-      raw = build_mail(domain, date, report_id, build_report(domain, date, report_id, events))
-      recipients.each do |recipient|
-        SmtpOutboundMessage.create!(mail_from: from_address, recipient: recipient,
-                                    data: raw, next_attempt_at: Time.current)
-      end
-      Rails.logger.info "[mail_on_rails] TLS-RPT report for #{domain} queued to #{recipients.join(", ")}"
+      # RFC 8460 4.3: the report-id is a unique string; the message-id
+      # shape "<token@submitter>" is the convention Google et al. follow.
+      token = "#{date.beginning_of_day.to_i}.#{domain}.#{SecureRandom.hex(6)}"
+      report_id = "#{token}@#{submitter}"
+      raw = build_mail(domain, date, token, report_id, recipients, build_report(domain, date, report_id, events))
+      queue_report(domain, raw, recipients)
     end
 
     # mailto: destinations from the domain's TLSRPT record (RFC 8460
@@ -93,12 +95,17 @@ module MailOnRails
       block
     end
 
-    def build_mail(domain, date, report_id, json)
+    def build_mail(domain, date, token, report_id, recipients, json)
       filename = "#{submitter}!#{domain}!#{date.beginning_of_day.to_i}!#{date.end_of_day.to_i}.json.gz"
       mail = Mail.new
       mail.from    = from_address
+      mail.to      = recipients
       mail.subject = "Report Domain: #{domain} Submitter: #{submitter} Report-ID: <#{report_id}>"
       mail.date    = Time.current
+      # The distinctive shape the edge recognises when a bounce quotes it
+      # back (AggregateReport), so a rejecting rua host does not earn
+      # itself a DMARC report every night.
+      mail.message_id = message_id(token)
       mail.header["TLS-Report-Domain"]    = domain
       mail.header["TLS-Report-Submitter"] = submitter
       mail.header["Auto-Submitted"]       = "auto-generated"
@@ -109,24 +116,6 @@ module MailOnRails
       mail.text_part = Mail::Part.new(body: "This is an aggregate TLS report from #{submitter} for #{domain}.\n")
       mail.attachments[filename] = { mime_type: "application/tlsrpt+gzip", content: Zlib.gzip(json) }
       mail.to_s
-    end
-
-    # Reports come from the tls-rpt@ mailbox of our primary hosted domain,
-    # so replies and bounces land in an account that exists.
-    def from_address
-      "#{Domain::TLS_RPT_LOCAL_PART}@#{report_domain}"
-    end
-
-    def report_domain
-      @report_domain ||= Domain.order(:id).first&.name || Setting.effective_smtp_helo_hostname
-    end
-
-    def submitter
-      report_domain
-    end
-
-    def dns
-      MailOnRails::SenderAuth::Dns.shared
     end
   end
 end

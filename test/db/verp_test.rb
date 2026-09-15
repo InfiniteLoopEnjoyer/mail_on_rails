@@ -69,6 +69,23 @@ class VerpTest < DbSuite::TestCase
     MailOnRails::Settings.reset!
   end
 
+  test "aggregate reports from dmarc@ and tls-rpt@ get a VERP return path without List-ID" do
+    deliverer = MailOnRails::OutboundDeliverer.new
+
+    %w[dmarc@example.test tls-rpt@example.test].each do |sender|
+      report = MailOnRails::SmtpOutboundMessage.create!(mail_from: sender, recipient: RECIPIENT,
+                                                        data: PERSONAL_MAIL, next_attempt_at: Time.current)
+      assert report.aggregate_report?
+      assert_equal MailOnRails::VerpAddress.encode(report), deliverer.send(:verp_return_path, report, PERSONAL_MAIL)
+    end
+
+    lookalike = MailOnRails::SmtpOutboundMessage.create!(mail_from: "dmarc@unhosted.test", recipient: RECIPIENT,
+                                                         data: PERSONAL_MAIL, next_attempt_at: Time.current)
+    assert_not lookalike.aggregate_report?, "only a hosted domain's report account counts"
+    assert_nil deliverer.send(:verp_return_path, lookalike, PERSONAL_MAIL)
+    assert_not queue_message(PERSONAL_MAIL).aggregate_report?
+  end
+
   test "the envelope sender override carries the ESMTP params" do
     message = queue_message
     address = MailOnRails::VerpAddress.encode(message)

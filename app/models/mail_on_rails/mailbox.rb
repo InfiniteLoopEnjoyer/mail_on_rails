@@ -6,6 +6,11 @@ module MailOnRails
 
     INBOX = "INBOX"
 
+    # Where the composer files a copy of what it sent, and where the
+    # report jobs file the aggregate reports that went out under an
+    # account's address.
+    SENT = "Sent"
+
     # Where infected/unscanned inbound mail is filed for review. Hidden from
     # IMAP LIST (see ImapBackend#list_mailboxes) but an ordinary mailbox
     # otherwise, so the web UI shows it like any other folder.

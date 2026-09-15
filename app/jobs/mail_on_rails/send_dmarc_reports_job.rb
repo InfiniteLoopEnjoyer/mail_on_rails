@@ -11,8 +11,11 @@ require "mail_on_rails/sender_auth/dmarc"
 # daily from config/recurring.yml; a domain with no rua simply keeps
 # accumulating (and eventually pruning) events.
 module MailOnRails
-  class SendDmarcReportsJob < BaseJob
+  class SendDmarcReportsJob < AggregateReportJob
     queue_as :default
+
+    KIND = "dmarc"
+    LOCAL_PART = Domain::DMARC_LOCAL_PART
 
     # RFC 7489 6.2: dkim/spf result tokens the schema allows.
     DKIM_RESULTS = %w[none pass fail policy neutral temperror permerror].freeze
@@ -31,19 +34,15 @@ module MailOnRails
     private
 
     def send_report(domain, date)
-      recipients = rua_addresses(domain)
+      recipients = deliverable(rua_addresses(domain))
       return if recipients.empty?
 
       events = DmarcAggregateEvent.on_day(date).where(policy_domain: domain).to_a
       return if events.empty?
 
       report_id = "#{date.beginning_of_day.to_i}.#{domain}.#{SecureRandom.hex(6)}"
-      raw = build_mail(domain, date, report_id, build_report(domain, date, report_id, events))
-      recipients.each do |recipient|
-        SmtpOutboundMessage.create!(mail_from: from_address, recipient: recipient,
-                                    data: raw, next_attempt_at: Time.current)
-      end
-      Rails.logger.info "[mail_on_rails] DMARC report for #{domain} queued to #{recipients.join(", ")}"
+      raw = build_mail(domain, date, report_id, recipients, build_report(domain, date, report_id, events))
+      queue_report(domain, raw, recipients)
     end
 
     # mailto: destinations from the domain's own DMARC record (the same
@@ -160,12 +159,17 @@ module MailOnRails
       value.to_s.encode(xml: :text)
     end
 
-    def build_mail(domain, date, report_id, xml)
+    def build_mail(domain, date, report_id, recipients, xml)
       filename = "#{submitter}!#{domain}!#{date.beginning_of_day.to_i}!#{date.end_of_day.to_i}.xml.gz"
       mail = Mail.new
       mail.from    = from_address
+      mail.to      = recipients
       mail.subject = "Report Domain: #{domain} Submitter: #{submitter} Report-ID: <#{report_id}>"
       mail.date    = Time.current
+      # The distinctive shape the edge recognises when a bounce quotes it
+      # back (AggregateReport) - what stops a rejecting rua host from
+      # earning itself a report every night.
+      mail.message_id = message_id(report_id)
       mail.header["Auto-Submitted"] = "auto-generated"
       # RFC 7489 wants the feedback loop to keep flowing even when the
       # receiver's mail server can't present a verifiable certificate -
@@ -178,24 +182,6 @@ module MailOnRails
       mail.text_part = Mail::Part.new(body: "This is a DMARC aggregate report from #{submitter} for #{domain}.\n")
       mail.attachments[filename] = { mime_type: "application/gzip", content: Zlib.gzip(xml) }
       mail.to_s
-    end
-
-    # Reports come from the dmarc@ mailbox of our primary hosted domain,
-    # so replies and bounces land in an account that exists.
-    def from_address
-      "#{Domain::DMARC_LOCAL_PART}@#{report_domain}"
-    end
-
-    def report_domain
-      @report_domain ||= Domain.order(:id).first&.name || Setting.effective_smtp_helo_hostname
-    end
-
-    def submitter
-      report_domain
-    end
-
-    def dns
-      MailOnRails::SenderAuth::Dns.shared
     end
   end
 end

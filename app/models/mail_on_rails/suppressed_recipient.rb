@@ -68,6 +68,17 @@ module MailOnRails
     rescue ActiveRecord::RecordNotUnique
       retry
     end
+
+    # Drops one sender's hard-bounce rows whose latest bounce is older
+    # than +before+ - the report jobs' cooldown (AggregateReportJob): a
+    # full rua mailbox or a blocklist listing is not forever, and a
+    # report a month later is a fresh, cheap attempt. Complaint and
+    # unsubscribe rows are never touched; those stay until an operator
+    # lifts them.
+    def self.expire_bounces!(sender:, before:)
+      where(sender: normalize_value_for(:sender, sender), feedback_type: "hard-bounce")
+        .where(last_complaint_at: ...before).delete_all
+    end
   end
 end
 

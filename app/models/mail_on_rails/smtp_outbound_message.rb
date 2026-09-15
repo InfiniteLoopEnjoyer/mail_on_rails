@@ -30,6 +30,18 @@ module MailOnRails
       recipient.split("@").last.to_s.downcase
     end
 
+    # Queued by SendDmarcReportsJob / SendTlsRptReportsJob: the sender is a
+    # hosted domain's dmarc@ or tls-rpt@ account. Report mail goes out
+    # under VERP and a hard bounce suppresses its rua address for a
+    # cooldown (AggregateReportJob) - machine-to-machine feedback that
+    # nobody reads a bounce for.
+    REPORT_LOCAL_PARTS = [ Domain::DMARC_LOCAL_PART, Domain::TLS_RPT_LOCAL_PART ].freeze
+
+    def aggregate_report?
+      local, _, sender_domain = mail_from.to_s.downcase.partition("@")
+      REPORT_LOCAL_PARTS.include?(local) && sender_domain.present? && Domain.exists?(name: sender_domain)
+    end
+
     # -- sender DSN requests (RFC 3461), recorded at submission time ------
 
     def notify_set

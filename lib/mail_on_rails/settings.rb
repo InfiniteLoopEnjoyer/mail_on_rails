@@ -422,10 +422,12 @@ module MailOnRails
                   "the Gmail/Yahoo bulk-sender mandate (0 disables)"
     setting :smtp_verp, type: :boolean, default: true, env: "SMTP_VERP",
             scope: :dynamic, category: :outbound,
-            desc: "VERP for outbound list mail (messages carrying List-ID from a hosted domain): the envelope " \
-                  "sender becomes a signed per-message bounce+ address at the sender's domain, so asynchronous " \
-                  "bounces attribute themselves - hard (5.x.x) DSNs coming back suppress that sender's future " \
-                  "mail to the dead address (IngestBounceJob). Personal mail keeps its normal return path"
+            desc: "VERP for outbound list mail (messages carrying List-ID from a hosted domain) and for the " \
+                  "DMARC/TLS-RPT aggregate reports sent from dmarc@/tls-rpt@: the envelope sender becomes a " \
+                  "signed per-message bounce+ address at the sender's domain, so asynchronous bounces attribute " \
+                  "themselves - hard (5.x.x) DSNs coming back suppress that sender's future mail to the dead " \
+                  "address (IngestBounceJob; report addresses are retried after a 30-day cooldown). Personal " \
+                  "mail keeps its normal return path"
     setting :dkim_rotation_days, type: :integer, default: 0, min: 0, env: "MAIL_ON_RAILS_DKIM_ROTATION_DAYS",
             scope: :dynamic, category: :outbound,
             desc: "Rotate each hosted domain's DKIM key automatically once its selector is this many days old " \

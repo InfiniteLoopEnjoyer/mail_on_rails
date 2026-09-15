@@ -87,11 +87,15 @@ module MailOnRails
       :delivered
     rescue OutboundDeliverer::PermanentError => e
       Rails.logger.warn "[mail_on_rails] outbound #{message.id} to <#{message.recipient}> permanently failed: #{e.message}"
-      bounce(message, e.message) if message.record_failure!(e.message, permanent: true) == :failed
+      if message.record_failure!(e.message, permanent: true) == :failed
+        suppress_report_recipient(message, e.message)
+        bounce(message, e.message)
+      end
       :failed
     rescue OutboundDeliverer::TransientError => e
       if message.record_failure!(e.message, permanent: false) == :failed
         Rails.logger.warn "[mail_on_rails] outbound #{message.id} to <#{message.recipient}> giving up after #{message.attempts} attempts: #{e.message}"
+        suppress_report_recipient(message, e.message)
         bounce(message, e.message)
         :failed
       else
@@ -102,6 +106,23 @@ module MailOnRails
     rescue StandardError => e
       message.record_failure!("#{e.class}: #{e.message}", permanent: false)
       raise
+    end
+
+    # A DMARC/TLS-RPT report the remote side refused (a synchronous 5xx,
+    # or a host that never took it before retries ran out) marks its rua
+    # address the way an asynchronous VERP bounce would (IngestBounceJob),
+    # so the report jobs skip it for their cooldown instead of queueing
+    # the same failure every night. Reporter is the host named at the
+    # front of the deliverer's error, when there is one.
+    def suppress_report_recipient(message, error)
+      return unless message.aggregate_report?
+
+      SuppressedRecipient.record_bounce!(message.recipient, sender: message.mail_from,
+                                         reporter: error.to_s[/\A([^\s:]+):/, 1] || "outbound")
+      Rails.logger.warn "[mail_on_rails] report address <#{message.recipient}> suppressed for " \
+                        "<#{message.mail_from}> until the report cooldown lapses"
+    rescue StandardError => e
+      Rails.logger.error "[mail_on_rails] report bounce suppression for outbound #{message.id} failed: #{e.class}: #{e.message}"
     end
 
     # An RFC 3464 failure DSN into the local sender's INBOX, unless the

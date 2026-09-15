@@ -454,18 +454,23 @@ module MailOnRails
       params.any? ? Net::SMTP::Address.new(sender, *params) : sender
     end
 
-    # VERP for list mail: the return path becomes a signed per-message
-    # bounce+ address at the sender's domain (VerpAddress), so any
-    # asynchronous bounce attributes itself no matter how mangled its
-    # body. Same gate as the unsubscribe injection - only messages that
-    # carry List-ID (composer-set, or stamped for a mailing_list account)
-    # - plus the bounce@ account must exist to receive what comes back.
-    # Personal mail keeps its normal return path: its bounces belong in
-    # the author's inbox, read by a human. nil = no rewrite. Best-effort.
+    # VERP for list mail and aggregate reports: the return path becomes a
+    # signed per-message bounce+ address at the sender's domain
+    # (VerpAddress), so any asynchronous bounce attributes itself no
+    # matter how mangled its body. List mail is the same gate as the
+    # unsubscribe injection - messages that carry List-ID (composer-set,
+    # or stamped for a mailing_list account); DMARC/TLS-RPT reports
+    # qualify by their sender (SmtpOutboundMessage#aggregate_report?),
+    # because a report bouncing back into dmarc@ is exactly the loop
+    # AggregateReport describes. Either way the bounce@ account must
+    # exist to receive what comes back. Personal mail keeps its normal
+    # return path: its bounces belong in the author's inbox, read by a
+    # human. nil = no rewrite. Best-effort.
     def verp_return_path(message, data)
       return nil unless MailOnRails::Settings[:smtp_verp]
-      return nil unless data.partition("\r\n\r\n").first.split(/\r\n(?![ \t])/)
-                            .any? { |h| h.match?(/\AList-ID[ \t]*:/i) }
+      list_mail = data.partition("\r\n\r\n").first.split(/\r\n(?![ \t])/)
+                      .any? { |h| h.match?(/\AList-ID[ \t]*:/i) }
+      return nil unless list_mail || message.aggregate_report?
 
       sender_domain = message.mail_from.to_s.split("@").last.to_s.strip.downcase
       return nil if sender_domain.blank?

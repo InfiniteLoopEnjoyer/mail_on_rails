@@ -6,7 +6,9 @@ require "zlib"
 
 require File.expand_path("../../app/jobs/mail_on_rails/base_job", __dir__)
 require File.expand_path("../../app/jobs/mail_on_rails/dns_check_refresh_job", __dir__)
+require File.expand_path("../../app/jobs/mail_on_rails/aggregate_report_job", __dir__)
 require File.expand_path("../../app/jobs/mail_on_rails/send_dmarc_reports_job", __dir__)
+require File.expand_path("../../app/jobs/mail_on_rails/deliver_smtp_outbound_job", __dir__)
 require "fake_resolver"
 require "global_id"
 GlobalID.app ||= "mail-on-rails-db-suite"
@@ -139,5 +141,92 @@ class DmarcReportingTest < DbSuite::TestCase
     assert_equal 0, MailOnRails::SmtpOutboundMessage.count
   ensure
     MailOnRails::Settings.reset!
+  end
+
+  RUA = { "_dmarc.remote.test" => [ "v=DMARC1; p=reject; rua=mailto:reports@remote.test,mailto:more@remote.test" ] }.freeze
+
+  test "a report is addressed, carries the recognisable Message-ID, and is filed in dmarc@'s Sent folder" do
+    record_event(occurred_at: Date.yesterday.noon)
+
+    run_job(RUA)
+
+    queued = MailOnRails::SmtpOutboundMessage.order(:id).to_a
+    assert_equal %w[reports@remote.test more@remote.test], queued.map(&:recipient)
+    assert_equal 1, queued.map(&:data).uniq.size, "one report, one copy per rua address"
+    assert queued.first.aggregate_report?
+
+    mail = Mail.read_from_string(queued.first.data)
+    assert_equal %w[reports@remote.test more@remote.test], mail.to
+    assert_match(/\Admarc-report\.\d+\.remote\.test\.\h{12}@example\.test\z/, mail.message_id)
+    assert MailOnRails::AggregateReport.references?("In-Reply-To: <#{mail.message_id}>"),
+           "the edge must recognise the Message-ID when a bounce quotes it"
+
+    sent = MailOnRails::EmailAccount.find_by!(email: "dmarc@example.test").find_mailbox("Sent")
+    copy = sent.email_messages.sole
+    assert_equal queued.first.data, copy.raw, "the Sent copy is the exact bytes that went out"
+    assert_includes copy.flags, "\\Seen"
+    assert_equal "dmarc@example.test", copy.authenticated_as
+    assert_equal 0, MailOnRails::EmailAccount.find_by!(email: "dmarc@example.test").inbox.email_messages.count
+  end
+
+  test "a missing Sent folder costs the record, not the report" do
+    record_event(occurred_at: Date.yesterday.noon)
+    MailOnRails::EmailAccount.find_by!(email: "dmarc@example.test").find_mailbox("Sent").destroy!
+
+    run_job(RUA)
+
+    assert_equal 2, MailOnRails::SmtpOutboundMessage.count
+  end
+
+  test "a rua address that bounced a report is skipped until the cooldown lapses" do
+    record_event(occurred_at: Date.yesterday.noon)
+    MailOnRails::SuppressedRecipient.record_bounce!("reports@remote.test", sender: "dmarc@example.test",
+                                                                            reporter: "mx.remote.test")
+    # A complaint against the other address is not a bounce and never expires.
+    MailOnRails::SuppressedRecipient.record_complaint!("more@remote.test")
+
+    run_job(RUA)
+    assert_equal 0, MailOnRails::SmtpOutboundMessage.count, "both addresses are suppressed today"
+
+    MailOnRails::SuppressedRecipient.where(feedback_type: "hard-bounce")
+                                    .update_all(last_complaint_at: MailOnRails::AggregateReportJob::BOUNCE_COOLDOWN.ago - 1.hour)
+    run_job(RUA)
+    assert_equal [ "reports@remote.test" ], MailOnRails::SmtpOutboundMessage.pluck(:recipient),
+                 "the cooled-off bounce is retried; the complaint still holds"
+    assert_not MailOnRails::SuppressedRecipient.suppressed?("reports@remote.test", sender: "dmarc@example.test"),
+               "the expired bounce row is gone, so delivery will not refuse the retry either"
+    assert MailOnRails::SuppressedRecipient.suppressed?("more@remote.test")
+  end
+
+  def stubbing_delivery(error)
+    singleton = MailOnRails::OutboundDeliverer.singleton_class
+    original = MailOnRails::OutboundDeliverer.method(:deliver)
+    singleton.define_method(:deliver) { |_message| raise error }
+    yield
+  ensure
+    singleton.define_method(:deliver, original)
+  end
+
+  test "a report the remote side refuses suppresses its rua address; personal mail is left alone" do
+    record_event(occurred_at: Date.yesterday.noon)
+    run_job({ "_dmarc.remote.test" => [ "v=DMARC1; p=reject; rua=mailto:reports@remote.test" ] })
+    MailOnRails::SmtpOutboundMessage.create!(mail_from: "alice@example.test", recipient: "reports@remote.test",
+                                             data: "From: alice@example.test\r\n\r\nhi", next_attempt_at: Time.current)
+
+    error = MailOnRails::OutboundDeliverer::PermanentError.new("mx.remote.test: 550 5.1.1 no such user")
+    stubbing_delivery(error) { MailOnRails::DeliverSmtpOutboundJob.new.perform }
+
+    assert MailOnRails::SmtpOutboundMessage.all.all?(&:failed?)
+    assert MailOnRails::SuppressedRecipient.suppressed?("reports@remote.test", sender: "dmarc@example.test")
+    assert_not MailOnRails::SuppressedRecipient.suppressed?("reports@remote.test", sender: "alice@example.test"),
+               "a human's bounce belongs in their inbox, not in the suppression table"
+    record = MailOnRails::SuppressedRecipient.sole
+    assert_equal "hard-bounce", record.feedback_type
+    assert_equal "mx.remote.test", record.reporter
+
+    # Tomorrow's run skips the address instead of queueing the same failure.
+    MailOnRails::SmtpOutboundMessage.delete_all
+    run_job({ "_dmarc.remote.test" => [ "v=DMARC1; p=reject; rua=mailto:reports@remote.test" ] })
+    assert_equal 0, MailOnRails::SmtpOutboundMessage.count
   end
 end
