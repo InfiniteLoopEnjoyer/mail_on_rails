@@ -13,6 +13,13 @@
 # anonymous closes collapse into one counter row per (protocol, ip,
 # window). Connections that authenticated or delivered mail are exempt -
 # they are the rows this table exists for, and they are rare.
+#
+# It is also what the idle_auto_ban setting counts. The servers mark a
+# connection that did no mail work with the shape it had (info[:idle], see
+# Server#idle_reason); that lands in idle_reason on an individual row and
+# in idle_count on both kinds - 1 on an idle row, the idle share of
+# connection_count on a rollup row - so BannedIp can sum an address's idle
+# connections across both protocols however noisy it was.
 require "mail_on_rails/netserv/ip"
 
 module MailOnRails
@@ -44,6 +51,7 @@ module MailOnRails
         protocol = info[:protocol].to_s
         ip = info[:ip].presence
         now = info[:closed_at] || Time.current
+        idle = info[:idle].presence
         if notable?(info) || under_cap?(protocol, ip, now)
           # A captured transcript (smtp_trace_capture) rides along in the
           # payload; it is only stored for connections that get their own
@@ -58,9 +66,10 @@ module MailOnRails
                   connected_at: info[:connected_at],
                   duration_seconds: info[:duration_seconds],
                   tarpit_seconds: info[:tarpit_seconds],
+                  idle_count: idle ? 1 : 0, idle_reason: idle&.to_s,
                   transcript_id: transcript&.id)
         else
-          roll_up(protocol, ip, now)
+          roll_up(protocol, ip, now, idle: !idle.nil?)
         end
         nil
       rescue StandardError => e
@@ -85,12 +94,12 @@ module MailOnRails
           .sum(:connection_count) < max_rows_per_ip
       end
 
-      def roll_up(protocol, ip, now)
+      def roll_up(protocol, ip, now, idle: false)
         row = find_or_create_by!(protocol: protocol, ip: Netserv.throttle_key(ip), rollup: true,
                                  closed_at: window_start(now)) do |r|
           r.connection_count = 0
         end
-        increment_counter(:connection_count, row.id)
+        update_counters(row.id, connection_count: 1, idle_count: idle ? 1 : 0)
       rescue ActiveRecord::RecordNotUnique
         retry
       end
@@ -105,6 +114,34 @@ module MailOnRails
         where(closed_at: ...(now - retention_days.days)).delete_all
       end
 
+      # Idle connections from an address's throttle key since +since+, both
+      # protocols together - a scanner sweeping 25/465/587/143/993 is one
+      # source, not five. A rollup row sits at the start of its window, so
+      # the far edge of the count is off by at most one rollup window,
+      # toward counting less.
+      def idle_strikes(ip, since:)
+        return 0 if ip.blank?
+
+        where(protocol: PROTOCOLS, throttle_key: Netserv.throttle_key(ip), closed_at: since..).sum(:idle_count)
+      end
+
+      # "Has this address done real mail work lately?" - a connection that
+      # logged in (canary accounts aside) or delivered a message since
+      # +since+. Asked of the whole throttle key, like the ban it guards.
+      # Not HoneypotEvent.legitimate_traffic_from?: that asks whether a
+      # tenant lives behind the address, and an MX peer that delivers mail
+      # is no tenant but is just as wrong to ban for going quiet.
+      def worked_from?(ip, since:)
+        return false if ip.blank?
+
+        scope = where(closed_at: since..)
+        worked = scope.where.not(username: nil)
+        canaries = EmailAccount.honeypots.pluck(:email)
+        worked = worked.where.not(username: canaries) if canaries.any?
+        worked = worked.or(scope.where(messages: 1..))
+        worked.where(ip: ip).or(worked.where(throttle_key: Netserv.throttle_key(ip))).exists?
+      end
+
       # The history list on a live connections page: one protocol, newest
       # first, rollup counter rows included (rendered collapsed).
       def recent_list(protocol, since:, limit: 25)
@@ -115,7 +152,8 @@ module MailOnRails
       # Repeat offenders for a live connections page: total connections
       # per address in the window, busiest first. SUM(connection_count)
       # counts individual rows (default 1) and rollup counters alike, so
-      # collapsed scanner noise still weighs in exactly. Aggregates are
+      # collapsed scanner noise still weighs in exactly; idle is the same
+      # sum over idle_count (see the class comment). Aggregates are
       # normalized in Ruby because SQLite hands MAX(closed_at) back as a
       # string.
       def top_sources(protocol, since:, limit: 10)
@@ -126,11 +164,12 @@ module MailOnRails
           .pluck(:ip,
                  Arel.sql("SUM(connection_count)"),
                  Arel.sql("MAX(closed_at)"),
-                 Arel.sql("SUM(CASE WHEN username IS NOT NULL THEN 1 ELSE 0 END)"))
-          .map do |ip, connections, last_seen, authenticated|
+                 Arel.sql("SUM(CASE WHEN username IS NOT NULL THEN 1 ELSE 0 END)"),
+                 Arel.sql("SUM(idle_count)"))
+          .map do |ip, connections, last_seen, authenticated, idle|
             { ip: ip, connections: connections.to_i,
               last_seen: last_seen.is_a?(String) ? Time.zone.parse(last_seen) : last_seen,
-              authenticated: authenticated.to_i }
+              authenticated: authenticated.to_i, idle: idle.to_i }
           end
       end
     end

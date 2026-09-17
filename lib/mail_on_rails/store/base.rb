@@ -123,9 +123,15 @@ module MailOnRails
       # plain-values payload Server#report_closed assembles; best-effort
       # end to end - db's rescue plus ClosedConnection.record's own mean a
       # history failure can never disturb a connection teardown.
+      #
+      # A connection the server marked idle (info[:idle], no mail work
+      # done) is also a strike toward the idle_auto_ban setting - counted
+      # from the row just written, so the order matters.
       def record_closed_connection(info)
         db do
+          info = info.symbolize_keys
           ClosedConnection.record(info)
+          BannedIp.idle_strike(ip: info[:ip], protocol: info[:protocol], reason: info[:idle]) if info[:idle].present?
           {}
         end
       end

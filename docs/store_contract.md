@@ -126,7 +126,13 @@ connected_at:, closed_at:, duration_seconds:` plus the session's
 session captured a transcript (`smtp_trace_capture` on and the session
 ended abnormally) the payload also carries `transcript:` and
 `close_reason:`, which the Rails store persists as a linked
-`SessionTranscript` row. Optional:
+`SessionTranscript` row. A connection that did no mail work and that the
+peer (not a kick or a shutdown) ended carries `idle:` — the shape it had,
+from the session's `idle_reason` (`silent`, `greeting_only`, `tls_only`,
+`no_transaction`, `no_auth`) or `tls_handshake_failed` for an implicit-TLS
+handshake that never produced a session. The Rails store records it on
+the history row and counts it toward the `idle_auto_ban` setting.
+Optional:
 servers call it behind `respond_to?`, so a store without it (the memory
 stores) simply keeps no history. Best-effort — must never raise into
 the connection teardown. Returns `{}`.

@@ -574,7 +574,9 @@ module MailOnRails
             desc: "Temporary block duration for a triggered honeypot canary, seconds"
     setting :honeypot_collateral_days, type: :integer, default: 7, env: "MAIL_ON_RAILS_HONEYPOT_COLLATERAL_DAYS",
             scope: :dynamic, category: :honeypot,
-            desc: "Lookback for legitimate traffic before auto-banning a shared IP, days"
+            desc: "Lookback for legitimate traffic before auto-banning a shared IP, days (also how far back " \
+                  "idle_auto_ban looks for a login or a delivery; connection history older than " \
+                  "conn_log_retention_days is gone either way)"
     setting :honeypot_allowlist, type: :list, default: [], env: "MAIL_ON_RAILS_HONEYPOT_ALLOWLIST",
             scope: :dynamic, category: :honeypot,
             desc: "CIDRs never auto-banned by the honeypot"
@@ -587,6 +589,35 @@ module MailOnRails
                   "The honeypot allowlist is the only exception - a mail client set to the wrong port or " \
                   "security type bans your own address too (default off; hits are recorded on the honeypot " \
                   "page either way)"
+    setting :idle_auto_ban, type: :boolean, default: false, env: "MAIL_ON_RAILS_IDLE_AUTO_BAN",
+            scope: :dynamic, category: :honeypot,
+            desc: "Permanently ban an address that keeps connecting to the mail ports without ever doing " \
+                  "mail work - a banner or certificate grab, EHLO and gone, a login port nobody logs in on, " \
+                  "a connection held open in silence (sessions that try to log in, send MAIL FROM or trip " \
+                  "the honeypot are never counted). Decided ten minutes after idle_auto_ban_sessions such " \
+                  "connections inside idle_auto_ban_window, and never for: a honeypot-allowlisted or local " \
+                  "address, one that logged in or delivered mail within honeypot_collateral_days (open " \
+                  "sessions included), or one whose confirmed reverse DNS is under idle_auto_ban_exempt_ptr. " \
+                  "Put uptime monitors and the deploy host's own addresses on the honeypot allowlist first " \
+                  "(default off; the idle counts show on the /smtp and /imap pages either way)"
+    setting :idle_auto_ban_sessions, type: :integer, default: 3, min: 1, env: "MAIL_ON_RAILS_IDLE_AUTO_BAN_SESSIONS",
+            scope: :dynamic, category: :honeypot,
+            desc: "Idle connections from one address (SMTP and IMAP, every port, counted together) within " \
+                  "the window before idle_auto_ban bans it"
+    setting :idle_auto_ban_window, type: :integer, default: 86_400, min: 60, env: "MAIL_ON_RAILS_IDLE_AUTO_BAN_WINDOW",
+            scope: :dynamic, category: :honeypot,
+            desc: "Window idle_auto_ban counts idle connections over, seconds"
+    setting :idle_auto_ban_exempt_ptr, type: :list,
+            default: %w[google.com googlemail.com outlook.com yahoo.com yahoodns.net icloud.com apple.com
+                        amazonses.com messagingengine.com internet.nl hardenize.com checktls.com
+                        mxtoolbox.com ssllabs.com],
+            env: "MAIL_ON_RAILS_IDLE_AUTO_BAN_EXEMPT_PTR",
+            scope: :dynamic, category: :honeypot,
+            desc: "Reverse-DNS suffixes idle_auto_ban never bans: big senders that open a connection and " \
+                  "leave without delivering, and TLS/MTA-STS testers. Matched against forward-confirmed PTR " \
+                  "names only, looked up once when a ban is due. A value set here replaces the default list. " \
+                  "Never list a hosting cloud's customer space (amazonaws.com, googleusercontent.com) - " \
+                  "that is where scanners live"
     setting :honeypot_banner, type: :string, default: nil, env: "MAIL_ON_RAILS_HONEYPOT_BANNER",
             scope: :static, category: :honeypot, normalize: BLANK_TO_NIL,
             desc: "Deceptive product banner in SMTP/IMAP greetings (boot-only; blank: real banner)"

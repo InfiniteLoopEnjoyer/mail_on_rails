@@ -61,5 +61,26 @@ module MailOnRails
     rescue IPAddr::Error
       false
     end
+
+    # Address space a peer can only appear from when something local sits
+    # in front of the listener: loopback, RFC 1918, link-local, CGNAT and
+    # the IPv6 ULA range (a container network). Behind Docker's userland
+    # proxy every client arrives as the bridge gateway, so an automatic
+    # ban keyed on such an address would cover everyone at once. Narrower
+    # than NON_ROUTABLE on purpose: the documentation ranges are not
+    # local, they are what tests use as attacker addresses.
+    LOCAL = [
+      "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
+      "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fc00::/7", "fe80::/10"
+    ].map { |cidr| IPAddr.new(cidr) }.freeze
+
+    # False for anything that is not an address at all.
+    def self.local?(ip)
+      addr = ip.is_a?(IPAddr) ? ip : IPAddr.new(ip.to_s)
+      addr = addr.native if addr.ipv4_mapped?
+      LOCAL.any? { |net| net.include?(addr) }
+    rescue IPAddr::Error
+      false
+    end
   end
 end

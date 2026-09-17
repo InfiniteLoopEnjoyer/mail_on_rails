@@ -79,3 +79,27 @@ class RoutableTest < Minitest::Test
     refute routable?(nil)
   end
 end
+
+# Netserv.local?: the addresses an automatic ban must never key on -
+# whatever sits in front of the listener, not a peer of its own.
+class LocalTest < Minitest::Test
+  def local?(ip) = MailOnRails::Netserv.local?(ip)
+
+  test "loopback, private, link-local, cgnat and ula space is local" do
+    %w[127.0.0.1 10.1.2.3 172.18.0.1 192.168.1.1 169.254.169.254 100.64.0.1
+       ::1 fe80::1 fd46:7ac3:4fd7::1 ::ffff:172.18.0.1].each do |ip|
+      assert local?(ip), "#{ip} must be local"
+    end
+  end
+
+  test "public addresses are not - and neither are the documentation ranges" do
+    %w[93.184.216.34 2606:2800:220:1:248:1893:25c8:1946 203.0.113.9 198.51.100.7 2001:db8::1].each do |ip|
+      refute local?(ip), "#{ip} must not be local"
+    end
+  end
+
+  test "non-addresses are not local" do
+    refute local?("mail.example.test")
+    refute local?(nil)
+  end
+end

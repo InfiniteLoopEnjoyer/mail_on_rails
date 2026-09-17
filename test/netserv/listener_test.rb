@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "tmpdir"
+require "timeout"
 require "mail_on_rails/netserv/server"
 
 # The listener socket and the accept-time peer address: a "::" bind is
@@ -204,5 +206,124 @@ class AcceptLoopTest < Minitest::Test
 
     assert_equal "220 hello\r\n", greeting
     assert_empty @store.logged.select { |level, _| level == :error }
+  end
+end
+
+# What the teardown path tells the store about a connection that did no
+# mail work (info[:idle], the idle_auto_ban accounting): the session's own
+# verdict, a failed implicit-TLS handshake the session never saw - and
+# nothing at all for a connection WE ended, which says nothing about the
+# peer.
+class IdleReportTest < Minitest::Test
+  class RecordingStore
+    attr_reader :closed
+
+    def initialize = @closed = Queue.new
+    def log(_level, _message) = nil
+    def banned_cidrs = []
+    def record_closed_connection(info) = @closed << info
+  end
+
+  # Greets, then waits for the peer (or the server) to end the connection.
+  class QuietSession
+    def initialize(socket, _store, _spec, _ctx)
+      @socket = socket
+    end
+
+    def run
+      @socket.write("220 hello\r\n")
+      @socket.gets
+    end
+
+    def live_info = {}
+    def idle_reason = "silent"
+  end
+
+  class Server < MailOnRails::Netserv::Server
+    MAX_CONNECTIONS = 4
+    OPS_SYNC_INTERVAL = 60
+
+    def protocol_name = "TEST"
+    def busy_line = "421 busy"
+    def listener_label(spec) = "test:#{spec[:port]}"
+    def session_class = QuietSession
+  end
+
+  def setup
+    @store = RecordingStore.new
+    @listener = TCPServer.new("127.0.0.1", 0)
+    @port = @listener.local_address.ip_port
+  end
+
+  def teardown
+    @server&.shutdown(drain: 1)
+    @thread&.join(2)
+    @listener.close unless @listener.closed?
+  end
+
+  def run_server(tls: nil, spec: {})
+    @server = Server.new(@store, [ { tcp_server: @listener, port: @port, host: "127.0.0.1" }.merge(spec) ], tls)
+    @thread = Thread.new { @server.run }
+    assert @server.wait_ready(5), "the listener must come up"
+  end
+
+  def connect
+    client = TCPSocket.new("127.0.0.1", @port)
+    client.timeout = 5
+    client
+  end
+
+  def closed_info = Timeout.timeout(5) { @store.closed.pop }
+
+  def wait_for_session
+    Timeout.timeout(5) { sleep 0.01 until @server.connections.any? }
+  end
+
+  test "a peer that leaves hands the store the session's verdict" do
+    run_server
+    client = connect
+    client.gets
+    client.close
+
+    assert_equal "silent", closed_info[:idle]
+  end
+
+  test "a kicked connection is not held against the peer" do
+    run_server
+    client = connect
+    client.gets
+    wait_for_session
+
+    assert_equal 1, @server.kick { |_ip| true }
+    refute closed_info.key?(:idle)
+  ensure
+    client&.close
+  end
+
+  test "a connection cut by shutdown is not held against the peer" do
+    run_server
+    client = connect
+    client.gets
+    wait_for_session
+
+    @server.shutdown(drain: 0)
+    refute closed_info.key?(:idle)
+  ensure
+    client&.close
+  end
+
+  test "a failed implicit-TLS handshake is idle, though no session ever existed" do
+    Dir.mktmpdir("mail_on_rails_tls") do |dir|
+      pems = MailOnRails::Netserv::Tls.generate_self_signed([ "localhost" ])
+      File.write(cert = File.join(dir, "cert.pem"), pems[:cert])
+      File.write(key = File.join(dir, "key.pem"), pems[:key])
+      File.chmod(0o600, key)
+      run_server(tls: { cert_path: cert, key_path: key }, spec: { tls: :implicit })
+    end
+    client = connect
+    client.write("EHLO plaintext.example.test\r\n")
+    client.close
+
+    assert_equal "tls_handshake_failed", closed_info[:idle]
   end
 end

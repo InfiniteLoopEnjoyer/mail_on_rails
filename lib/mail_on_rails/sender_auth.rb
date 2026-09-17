@@ -2,6 +2,7 @@
 
 require_relative "settings"
 require_relative "sender_auth/dns"
+require_relative "sender_auth/confirmed_ptr"
 require_relative "sender_auth/from_header"
 require_relative "sender_auth/spf"
 require_relative "sender_auth/dkim"

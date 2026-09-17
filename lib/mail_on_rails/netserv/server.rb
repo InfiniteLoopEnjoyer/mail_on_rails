@@ -91,8 +91,11 @@ module MailOnRails
       # RateLimiter served this connection (nil when none), kept so the ops
       # UI can mark slowed connections live and in the history log. id is
       # the per-listener sequence number that keys the connection's
-      # open_connections row.
-      Conn = Struct.new(:thread, :session, :peer_ip, :spec, :connected_at, :started_at, :tarpit, :id)
+      # open_connections row. ended_by is set when WE closed the socket for
+      # our own reasons (:shutdown, :kick) - at teardown that is otherwise
+      # indistinguishable from the peer dropping, and the idle accounting
+      # must not blame a peer for a connection we cut short.
+      Conn = Struct.new(:thread, :session, :peer_ip, :spec, :connected_at, :started_at, :tarpit, :id, :ended_by)
 
       # Netserv::Tls speaks Logger (warn/error/info); the store speaks
       # log(level, message). Bridges the two for the TLS reload path.
@@ -237,7 +240,10 @@ module MailOnRails
 
         stragglers = @lifecycle.synchronize { @sessions.to_a }
         @store.log(:info, "#{protocol_name} closing #{stragglers.size} sessions after #{drain}s drain") if stragglers.any?
-        stragglers.each { |socket, _conn| close_quietly(socket) }
+        stragglers.each do |socket, conn|
+          conn.ended_by = :shutdown
+          close_quietly(socket)
+        end
         stragglers.each { |_socket, conn| conn.thread&.join(2) }
         # Last: the ops thread's final cleanup removes this listener's rows
         # so the dashboard does not wait out the stale window.
@@ -299,9 +305,12 @@ module MailOnRails
       # limiter slot. Returns how many connections were closed.
       def kick(&matcher)
         victims = @lifecycle.synchronize do
-          @sessions.filter_map { |socket, conn| socket if conn.peer_ip && matcher.call(conn.peer_ip) }
+          @sessions.select { |_socket, conn| conn.peer_ip && matcher.call(conn.peer_ip) }.to_a
         end
-        victims.each { |socket| close_quietly(socket) }
+        victims.each do |socket, conn|
+          conn.ended_by = :kick
+          close_quietly(socket)
+        end
         victims.size
       end
 
@@ -553,9 +562,28 @@ module MailOnRails
         if conn.session.respond_to?(:transcript_capture) && (capture = conn.session.transcript_capture)
           info.merge!(capture)
         end
+        idle = idle_reason(conn)
+        info[:idle] = idle if idle
         @store.record_closed_connection(info)
       rescue StandardError
         nil
+      end
+
+      # The shape of a connection that did no mail work, for the store's
+      # idle accounting (the idle_auto_ban setting); nil for one that did,
+      # and for one we ended ourselves - a kicked or shut-down session
+      # never got the chance. The session classifies itself (idle_reason);
+      # the one shape it cannot report is a failed implicit-TLS handshake,
+      # which ends before a session exists. A missing session on a
+      # plaintext listener is our own constructor failing, not the peer's
+      # doing. The lifetime reaper deliberately leaves no mark: holding a
+      # connection open in silence until it is reaped is the behavior
+      # being counted.
+      def idle_reason(conn)
+        return nil if conn.ended_by
+        return conn.spec[:tls] == :implicit ? "tls_handshake_failed" : nil if conn.session.nil?
+
+        conn.session.idle_reason if conn.session.respond_to?(:idle_reason)
       end
 
       # Flushes a triggered honeypot session's full transcript at teardown (the

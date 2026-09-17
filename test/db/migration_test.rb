@@ -37,6 +37,14 @@ class MigrationTest < DbSuite::TestCase
     assert rule&.unique, "sender_rules (account, address) must be unique"
   end
 
+  test "closed connections carry the idle accounting columns" do
+    count = column("mail_on_rails_closed_connections", "idle_count")
+    assert count, "closed_connections.idle_count must exist"
+    assert_equal false, count.null
+    assert_equal 0, count.default.to_i
+    assert column("mail_on_rails_closed_connections", "idle_reason"), "closed_connections.idle_reason must exist"
+  end
+
   test "rollup unique indexes exist under their canonical names on every adapter" do
     auth = index("mail_on_rails_auth_attempts", "index_auth_attempts_on_rollup_key")
     closed = index("mail_on_rails_closed_connections", "index_closed_connections_on_rollup_key")

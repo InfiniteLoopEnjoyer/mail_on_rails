@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "mail_on_rails/netserv/ip"
+
 module MailOnRails
   # The live connection table: what Netserv::Server#connections returns,
   # projected into the database by each server's Netserv::OpsSync so the
@@ -53,6 +55,27 @@ module MailOnRails
         transaction do
           where(listener_id: listener_id).delete_all
           insert_all(records) if records.any?
+        end
+      end
+
+      # The live half of ClosedConnection.worked_from?: is a session from
+      # this address's throttle key logged in (canary accounts aside) or
+      # delivering right now? History rows are only written at close, and a
+      # phone holds its authenticated IDLE connection open for half an hour
+      # while it abandons sibling sockets before login - without this, the
+      # idle ban would see only the abandoned ones. No throttle_key column
+      # here, so the key is compared in Ruby; the working rows are bounded
+      # by the listeners' connection caps. Deliberately not restricted to
+      # fresh listeners: a stale row errs toward not banning.
+      def working_from?(ip)
+        return false if ip.blank?
+
+        key = Netserv.throttle_key(ip)
+        canaries = EmailAccount.honeypots.pluck(:email)
+        where.not(username: nil).or(where(messages: 1..)).pluck(:peer_ip, :username, :messages).any? do |peer, user, messages|
+          next false unless Netserv.throttle_key(peer) == key
+
+          messages.to_i.positive? || (user.present? && canaries.exclude?(user))
         end
       end
     end
