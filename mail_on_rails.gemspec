@@ -86,7 +86,7 @@ Gem::Specification.new do |spec|
   # (daemons, netserv) raises LoadError under bundler unless declared.
   spec.add_dependency "logger"
 
-  # The json default gem shipped with ruby 4.0.6 (2.18.0) carries
+  # The json default gem shipped with ruby 4.0.7 (2.18.0) carries
   # CVE-2026-33210; the fixed floor has to be declared here so standalone
   # (non-Rails-app) processes resolve a safe version. Capped below 3:
   # json 3.0 made JSON.parse's options keyword-only, and Active Support
