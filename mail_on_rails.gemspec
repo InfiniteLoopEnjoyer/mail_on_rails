@@ -93,5 +93,5 @@ Gem::Specification.new do |spec|
   # (through 8.1.3.1) still passes them as a positional hash, so every
   # ActiveSupport::JSON.decode - jsonb columns included - raises. Lift
   # the cap once Rails ships JSON.parse(json, **options).
-  spec.add_dependency "json", ">= 2.19.2", "< 3"
+  spec.add_dependency "json", ">= 2.19.2", "< 4"
 end
