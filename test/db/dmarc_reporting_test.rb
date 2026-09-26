@@ -116,6 +116,25 @@ class DmarcReportingTest < DbSuite::TestCase
     assert_equal 0, MailOnRails::SmtpOutboundMessage.count
   end
 
+  test "a rua address at a hosted domain is skipped: we never report to ourselves" do
+    # A spoof attempt against our own domain is recorded like any other
+    # evaluation; the domain's rua (dmarc@ itself, as DnsPublisher
+    # publishes it) must not earn an SMTP delivery to our own MX.
+    record_event(occurred_at: Date.yesterday.noon, policy_domain: "example.test", from_domain: "example.test",
+                 envelope_from: "spoof@example.test", spf_domain: "example.test", dkim_results: "")
+
+    run_job({ "_dmarc.example.test" => [ "v=DMARC1; p=reject; rua=mailto:dmarc@example.test" ] })
+    assert_equal 0, MailOnRails::SmtpOutboundMessage.count
+    assert_equal 0, MailOnRails::EmailAccount.find_by!(email: "dmarc@example.test")
+                                             .find_mailbox("Sent").email_messages.count,
+                 "no report, no Sent copy"
+
+    # An outside aggregator the hosted domain delegates to still gets it.
+    run_job({ "_dmarc.example.test" => [ "v=DMARC1; p=reject; rua=mailto:dmarc@example.test,mailto:agg@thirdparty.test" ],
+              "example.test._report._dmarc.thirdparty.test" => [ "v=DMARC1" ] })
+    assert_equal [ "agg@thirdparty.test" ], MailOnRails::SmtpOutboundMessage.pluck(:recipient)
+  end
+
   test "external rua destination requires the RFC 7489 authorization record" do
     record_event(occurred_at: Date.yesterday.noon)
     rua = [ "v=DMARC1; p=reject; rua=mailto:agg@thirdparty.test" ]

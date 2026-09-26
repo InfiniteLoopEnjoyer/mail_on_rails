@@ -71,6 +71,14 @@ class TlsRptReportingTest < DbSuite::TestCase
     assert_equal message.data, sent.email_messages.sole.raw
   end
 
+  test "a rua address at a hosted domain is skipped: we never report to ourselves" do
+    record_event(policy_domain: "example.test", mx: "mx.example.test", result_type: "certificate-expired")
+
+    run_job({ "_smtp._tls.example.test" => [ "v=TLSRPTv1; rua=mailto:tls-rpt@example.test,mailto:tls@thirdparty.test" ] })
+
+    assert_equal [ "tls@thirdparty.test" ], MailOnRails::SmtpOutboundMessage.pluck(:recipient)
+  end
+
   test "no TLSRPT record queues nothing" do
     record_event
 

@@ -32,17 +32,37 @@ module MailOnRails
       Rails.logger.info "[mail_on_rails] #{self.class::KIND} report for #{domain} queued to #{recipients.join(", ")}"
     end
 
-    # The rua addresses minus any that bounced a recent report. Cooled-off
-    # bounce rows are removed first (the delivery job enforces the same
-    # table, so a stale row would otherwise fail the retry without a
-    # network attempt); complaint and unsubscribe rows are untouched.
+    # The rua addresses minus any that bounced a recent report, minus our
+    # own. Cooled-off bounce rows are removed first (the delivery job
+    # enforces the same table, so a stale row would otherwise fail the
+    # retry without a network attempt); complaint and unsubscribe rows
+    # are untouched.
     def deliverable(recipients)
       SuppressedRecipient.expire_bounces!(sender: from_address, before: BOUNCE_COOLDOWN.ago)
-      recipients.reject do |recipient|
+      external(recipients).reject do |recipient|
         next false unless SuppressedRecipient.suppressed?(recipient, sender: from_address)
 
         Rails.logger.info "[mail_on_rails] #{self.class::KIND} report to #{recipient} skipped: " \
                           "a recent report to it bounced (retried after #{BOUNCE_COOLDOWN.inspect})"
+        true
+      end
+    end
+
+    # A report exists to tell a domain's owner what some OTHER receiver
+    # saw. When the rua address is at a domain we host, the owner is us:
+    # every event the report would carry is already in our own tables,
+    # and the only way to "deliver" it is an SMTP connection to our own
+    # MX - which, from inside the container, resolves to loopback and
+    # fails, bounces into dmarc@, and suppresses our own address for a
+    # month. A hosted domain whose rua points at an outside aggregator
+    # still gets its report: that service wants every receiver's view,
+    # ours included.
+    def external(recipients)
+      recipients.reject do |recipient|
+        next false unless Domain.exists?(name: recipient.split("@").last.to_s.downcase)
+
+        Rails.logger.info "[mail_on_rails] #{self.class::KIND} report to #{recipient} skipped: " \
+                          "the address is at a hosted domain (a report to ourselves)"
         true
       end
     end
