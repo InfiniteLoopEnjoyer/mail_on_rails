@@ -17,11 +17,14 @@
 # to keep password material is comparison across attempts, which needs a
 # deterministic hash, and a deterministic hash of a password from a spray
 # dictionary is reversible by anyone who obtains this table. So the default
-# is to keep nothing. With auth_log_passwords on, the plaintext of a failed
-# login to an address that *exists here* is kept (encrypted at rest, pruned
-# with the row) so the operator can tell an old breached password from a
-# fresh guess. Dictionary noise against unknown addresses never carries
-# one, and SCRAM logins cannot: the daemon only ever sees a proof.
+# is to keep nothing. With auth_log_passwords on, the plaintext of every
+# failed plaintext login is kept (encrypted at rest, pruned with the row),
+# whether or not the address exists: a guess against a real address shows
+# an old breached password from a fresh one, and a guess against an
+# unknown address can still be one of the operator's own passwords in
+# circulation under a stale or mistyped name. Rollup rows (noise past the
+# per-IP cap) carry none, and SCRAM logins cannot: the daemon only ever
+# sees a proof.
 #
 # Successes are deliberately not recorded either: a single iOS folder
 # refresh opens ~5 connections and authenticates on each, so legitimate
@@ -69,13 +72,14 @@ module MailOnRails
       # the address doesn't resolve, so callers don't each repeat that lookup
       # on the auth path just to pick a label.
       # +password+ is the plaintext the client offered, when the caller has
-      # one; it is kept only for a bad_credentials verdict against a real
-      # address, and only while auth_log_passwords is on.
+      # one; it is kept for any guess that was actually checked (a real
+      # address or an unknown one - not a throttled attempt, where no
+      # password was looked at), and only while auth_log_passwords is on.
       def record(ip:, username:, source:, outcome:, now: Time.current, password: nil)
         real = account_exists?(username, source)
         outcome = "unknown_account" if outcome.to_s == "bad_credentials" && !real
         if real || under_cap?(ip, now)
-          kept = real && outcome.to_s == "bad_credentials" ? keepable_password(password) : nil
+          kept = outcome.to_s == "throttled" ? nil : keepable_password(password)
           create!(occurred_at: now, ip: ip.presence, username: normalize(username),
                   source: source.to_s, outcome: outcome.to_s, account_exists: real, password: kept)
         else

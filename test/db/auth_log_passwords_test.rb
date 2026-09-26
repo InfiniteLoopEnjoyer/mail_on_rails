@@ -2,10 +2,12 @@
 
 require_relative "test_helper"
 
-# auth_log_passwords: with the setting on, a failed plaintext login to an
-# address that exists here keeps the rejected password (encrypted) so the
-# operator can tell a breached old password from a fresh guess. Off by
-# default; never for unknown addresses, throttled attempts or SCRAM.
+# auth_log_passwords: with the setting on, every failed plaintext login
+# keeps the rejected password (encrypted), whether the address exists here
+# or not - a breached old password shows up under a real name, and one of
+# the operator's own passwords may show up under a stale or mistyped one.
+# Off by default; never for throttled attempts (nothing was checked) or
+# SCRAM (nothing was sent).
 class AuthLogPasswordsTest < DbSuite::TestCase
   ENV_KEY = "MAIL_ON_RAILS_AUTH_LOG_PASSWORDS"
 
@@ -53,11 +55,11 @@ class AuthLogPasswordsTest < DbSuite::TestCase
     refute_includes raw, "hunter2"
   end
 
-  test "on: a guess at an unknown address keeps nothing" do
+  test "on: a guess at an unknown address is kept too" do
     enable
-    fail_login(email: "nobody@example.test")
+    fail_login(email: "nobody@example.test", password: "correct-horse-battery")
 
-    assert_equal [ [ "nobody@example.test", "unknown_account", nil ] ], rows
+    assert_equal [ [ "nobody@example.test", "unknown_account", "correct-horse-battery" ] ], rows
   end
 
   test "on: a throttled attempt keeps nothing - it was never checked" do
