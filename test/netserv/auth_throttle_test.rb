@@ -128,6 +128,52 @@ class AuthThrottleTest < Minitest::Test
     refute entries.key?("2001:db8:0:0::/64"), "the least recently failing key is evicted first"
   end
 
+  # The audit's scenario: one lockout, then a single failure from each of
+  # 50k+ distinct /64s (one /48 suffices). LRU eviction used to flush the
+  # lockout along with the noise; locked entries are pinned until expiry.
+  test "a flood of distinct single failures cannot evict a live lockout" do
+    3.times { @throttle.record(IP) }
+    assert @throttle.locked?(IP)
+
+    (Throttle::MAX_ENTRIES + 50).times { |i| @throttle.record("2001:db8:#{i >> 16}:#{i & 0xffff}::1") }
+
+    assert @throttle.locked?(IP), "the lockout must survive the flood"
+    assert_equal [ IP ], @throttle.locked_ips.keys
+    assert_equal Throttle::MAX_ENTRIES, @throttle.instance_variable_get(:@entries).size
+    assert_nil @throttle.record(IP), "still locked: a further failure extends silently"
+
+    @now += 61
+    refute @throttle.locked?(IP), "and still expires on schedule"
+  end
+
+  # The pinned set is bounded too: a flood that earns 50k lockouts evicts
+  # its own oldest lockout, never more than 2x MAX_ENTRIES in total.
+  test "the locked table is capped at MAX_ENTRIES, oldest lockout first" do
+    first = "2001:db8:0:0::1"
+    3.times { @throttle.record(first) }
+    (Throttle::MAX_ENTRIES + 10).times do |i|
+      ip = "2001:db8:#{(i + 1) >> 16}:#{(i + 1) & 0xffff}::1"
+      3.times { @throttle.record(ip) }
+    end
+
+    locked = @throttle.instance_variable_get(:@locked)
+    assert_equal Throttle::MAX_ENTRIES, locked.size
+    assert_empty @throttle.instance_variable_get(:@entries)
+    refute @throttle.locked?(first), "the earliest lockout is the one that goes"
+    assert @throttle.locked?("2001:db8:0:#{Throttle::MAX_ENTRIES + 10}::1"), "the newest is kept"
+  end
+
+  test "an expired lockout leaves the pinned set on the next sweep" do
+    3.times { @throttle.record(IP) }
+    threshold = Throttle::SWEEP_THRESHOLD
+    (threshold + 1).times { |i| @throttle.record("10.#{i / 65_536}.#{(i / 256) % 256}.#{i % 256}") }
+    @now += 61
+    @throttle.record("192.0.2.99") # sweeps
+
+    assert_empty @throttle.instance_variable_get(:@locked)
+    refute @throttle.locked?(IP)
+  end
+
   test "expired entries are swept once the table grows large" do
     threshold = Throttle::SWEEP_THRESHOLD
     (threshold + 1).times { |i| @throttle.record("10.#{i / 65_536}.#{(i / 256) % 256}.#{i % 256}") }

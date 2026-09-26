@@ -83,9 +83,36 @@ module MailOnRails
     # when the header doesn't parse: cb_type is the "p=" channel-binding
     # type (nil for "n"/"y"), cb_declined is true for the "y" flag - the
     # client supports channel binding but believes this server does not.
+    #
+    # Two RFC 5802 rules are enforced here, so both edges get them from
+    # the one parse (nil reads as "malformed" to them, which fails the
+    # exchange before any verifier material is looked up):
+    #
+    #   - a client-first-message-bare opening with the reserved "m="
+    #     extension (§5.1: a server that does not understand it "MUST
+    #     fail authentication") is refused;
+    #   - a gs2 "a=" authorization identity that differs from the "n="
+    #     authentication identity is refused (§5.1 lets a server support
+    #     authzid; this one grants no identity but the authenticated one,
+    #     so a differing request must fail rather than be silently
+    #     ignored). An absent or empty "a=" means "as myself" and passes.
     def split_gs2(message)
-      m = message.match(/\A((?:[ny]|p=([\x21-\x2b\x2d-\x7e]+)),(?:a=[^,]*)?,)(.*)\z/m)
-      m && [ m[1], m[3], m[2], m[1].start_with?("y") ]
+      m = message.match(/\A((?:[ny]|p=([\x21-\x2b\x2d-\x7e]+)),(?:a=([^,]*))?,)(.*)\z/m)
+      return nil unless m
+      return nil if reject_client_first?(m[3], m[4])
+
+      [ m[1], m[4], m[2], m[1].start_with?("y") ]
+    end
+
+    # The two client-first checks above, as a predicate: true when the
+    # bare message must fail authentication. +authzid+ is the gs2 "a="
+    # value (nil/empty when absent), +bare+ the client-first-message-bare.
+    def reject_client_first?(authzid, bare)
+      return true if bare.start_with?("m=")
+      return false if authzid.nil? || authzid.empty?
+
+      authcid = bare[/\An=([^,]*)/, 1]
+      authcid.nil? || authcid != authzid
     end
 
     # Whether a session on +socket+ can prove a channel binding: only

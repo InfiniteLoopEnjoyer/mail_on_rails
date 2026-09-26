@@ -32,10 +32,14 @@ module MailOnRails
     class AuthThrottle
       SWEEP_THRESHOLD = 1_000 # purge expired entries when the table grows past this
       SWEEP_INTERVAL = 1.0 # ...but at most this often: a sweep is O(n) on the accept path
-      # Hard ceiling on tracked keys; past it the least recently failing
-      # key is evicted (a lockout evicted this way ends early, which is the
-      # right trade under a flood that would otherwise grow the table
-      # without bound).
+      # Hard ceiling on tracked keys, applied to the two tables separately:
+      # past it the least recently failing IDLE key is evicted, never a
+      # locked one - a flood of single failures from 50k distinct /64s
+      # (one /48) must not flush the lockouts it is trying to escape. The
+      # locked table has the same ceiling, so a flood that earns 50k
+      # lockouts evicts its own OLDEST lockout first (which ends early -
+      # the right trade under a flood that would otherwise grow the table
+      # without bound). Total memory is therefore bounded at 2x.
       MAX_ENTRIES = 50_000
 
       Entry = Struct.new(:count, :last_at, :locked_until)
@@ -44,7 +48,8 @@ module MailOnRails
         @limit = limit
         @window = window
         @clock = clock
-        @entries = {} # key => Entry, least recently failing first
+        @entries = {} # unlocked key => Entry, least recently failing first
+        @locked = {} # locked key => Entry, earliest locked first
         @last_sweep = nil
         @mutex = Mutex.new
       end
@@ -61,17 +66,26 @@ module MailOnRails
         now = @clock.call
         key = Netserv.throttle_key(ip)
         @mutex.synchronize do
-          sweep(now, window) if @entries.size > SWEEP_THRESHOLD && sweep_due?(now)
-          entry = @entries.delete(key) || Entry.new(0, now, nil)
-          @entries[key] = entry # re-inserted at the end: Hash order is the LRU order
-          @entries.shift while @entries.size > MAX_ENTRIES
-          entry.count = 0 if now - entry.last_at > window # quiet period forgives
+          sweep(now, window) if @entries.size + @locked.size > SWEEP_THRESHOLD && sweep_due?(now)
+          entry = @locked.delete(key) || @entries.delete(key) || Entry.new(0, now, nil)
+          if now - entry.last_at > window # quiet period forgives
+            entry.count = 0
+            entry.locked_until = nil
+          end
           entry.count += 1
           entry.last_at = now
           if entry.count >= limit
             newly = entry.count == limit
             entry.locked_until = now + window
+            # Re-inserted at the end: Hash order is the lock order, so the
+            # front is the lockout nearest to expiry.
+            @locked[key] = entry
+            @locked.shift while @locked.size > MAX_ENTRIES
             newly ? :locked : nil
+          else
+            @entries[key] = entry # re-inserted at the end: Hash order is the LRU order
+            @entries.shift while @entries.size > MAX_ENTRIES
+            nil
           end
         end
       end
@@ -82,7 +96,7 @@ module MailOnRails
         now = @clock.call
         key = Netserv.throttle_key(ip)
         @mutex.synchronize do
-          locked_until = @entries[key]&.locked_until
+          locked_until = (@locked[key] || @entries[key])&.locked_until
           !locked_until.nil? && locked_until > now
         end
       end
@@ -95,7 +109,7 @@ module MailOnRails
 
         now = @clock.call
         locked = @mutex.synchronize do
-          @entries.filter_map do |ip, e|
+          @locked.filter_map do |ip, e|
             [ ip, e.locked_until - now ] if e.locked_until && e.locked_until > now
           end
         end
@@ -117,12 +131,13 @@ module MailOnRails
         @last_sweep.nil? || now - @last_sweep >= SWEEP_INTERVAL
       end
 
-      # Drops entries whose lockout and failure window have both expired.
+      # Drops entries whose lockout and failure window have both expired,
+      # from either table.
       def sweep(now, window)
         @last_sweep = now
-        @entries.delete_if do |_ip, e|
-          (e.locked_until.nil? || e.locked_until <= now) && now - e.last_at > window
-        end
+        expired = ->(_ip, e) { (e.locked_until.nil? || e.locked_until <= now) && now - e.last_at > window }
+        @entries.delete_if(&expired)
+        @locked.delete_if(&expired)
       end
     end
   end

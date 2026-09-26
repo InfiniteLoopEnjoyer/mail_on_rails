@@ -38,4 +38,41 @@ class ScramTest < Minitest::Test
   def test_malformed_proof_length_is_rejected
     refute Scram.valid_proof?(credentials[:stored_key], auth_message, "short")
   end
+
+  # -- client-first parsing (RFC 5802 §5.1, §7) ---------------------------
+
+  def test_split_gs2_parses_the_three_header_flags
+    gs2, bare, cb_type, declined = Scram.split_gs2("n,,#{CLIENT_FIRST_BARE}")
+    assert_equal [ "n,,", CLIENT_FIRST_BARE, nil, false ], [ gs2, bare, cb_type, declined ]
+
+    _, _, cb_type, declined = Scram.split_gs2("y,,#{CLIENT_FIRST_BARE}")
+    assert_equal [ nil, true ], [ cb_type, declined ]
+
+    gs2, bare, cb_type, = Scram.split_gs2("p=tls-exporter,,#{CLIENT_FIRST_BARE}")
+    assert_equal [ "p=tls-exporter,,", CLIENT_FIRST_BARE, "tls-exporter" ], [ gs2, bare, cb_type ]
+
+    assert_nil Scram.split_gs2("x,,#{CLIENT_FIRST_BARE}")
+  end
+
+  # The reserved "m=" extension: a server that does not understand it
+  # MUST fail authentication, not skip past it.
+  def test_a_reserved_mext_fails_the_exchange
+    assert_nil Scram.split_gs2("n,,m=please-ignore,#{CLIENT_FIRST_BARE}")
+    assert_nil Scram.split_gs2("p=tls-exporter,,m=x,#{CLIENT_FIRST_BARE}")
+    assert Scram.reject_client_first?(nil, "m=x,n=user,r=abc")
+  end
+
+  # An authzid is only ever "myself": a request to act as someone else
+  # fails instead of being quietly ignored.
+  def test_an_authzid_must_match_the_authcid
+    assert_nil Scram.split_gs2("n,a=admin,#{CLIENT_FIRST_BARE}")
+    assert_nil Scram.split_gs2("n,a=user,n=other,r=abc"), "an absent authcid cannot match"
+
+    _, bare, = Scram.split_gs2("n,a=user,#{CLIENT_FIRST_BARE}")
+    assert_equal CLIENT_FIRST_BARE, bare, "the same identity twice is fine"
+    _, bare, = Scram.split_gs2("n,a=,#{CLIENT_FIRST_BARE}")
+    assert_equal CLIENT_FIRST_BARE, bare, "an empty a= means 'as myself'"
+    _, bare, = Scram.split_gs2("n,a=bob=2Cjr,n=bob=2Cjr,r=abc")
+    assert_equal "n=bob=2Cjr,r=abc", bare, "compared in the escaped form both sides use"
+  end
 end

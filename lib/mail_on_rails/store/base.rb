@@ -86,11 +86,14 @@ module MailOnRails
       # material never verifies. A throttled caller is refused all material
       # outright: the salt and iteration count are the only things a SCRAM
       # exchange hands out before the proof, and handing them to an
-      # attacker mid-block would let them grind offline.
-      def scram_credentials(email, ip: nil)
+      # attacker mid-block would let them grind offline. +source+ names
+      # the auth surface for the attempt log, as in authenticate; only a
+      # throttled refusal is logged here (the verdict itself is the
+      # daemon's, reported through record_auth_failure).
+      def scram_credentials(email, ip: nil, source: nil)
         db do
           if (blocked = AuthThrottle.check(ip: ip, email: email))
-            next throttled_result(blocked, email, ip)
+            next throttled_result(blocked, email, ip, source)
           end
 
           account = EmailAccount.find_by(email: email.to_s.strip.downcase)

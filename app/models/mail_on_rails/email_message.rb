@@ -1,10 +1,24 @@
 require "mail_on_rails/clamav_scanner"
+require "mail_on_rails/mime_limits"
 
 module MailOnRails
   class EmailMessage < Record
     # Raised by deliver_raw when storing the message would push the account
     # past its storage quota (EmailAccount#quota_bytes).
     class OverQuota < StandardError; end
+
+    # What the Mail gem can raise while parsing attacker-shaped input.
+    # SystemStackError (a deeply nested MIME tree) is an Exception, not a
+    # StandardError, so every rescue around a Mail-gem walk names it
+    # explicitly - a bare `rescue` would let it escape deliver_raw or a
+    # web render.
+    PARSE_ERRORS = [ StandardError, SystemStackError ].freeze
+
+    # What text_body shows for a message whose MIME structure is past
+    # MimeLimits: the raw source is stored intact, it just isn't walked.
+    TOO_COMPLEX_NOTICE = "[This message's MIME structure is too complex to render " \
+                         "(more than #{MimeLimits::MAX_DEPTH} nested levels or #{MimeLimits::MAX_PARTS} parts); " \
+                         "its raw source is stored intact.]"
 
     belongs_to :mailbox
 
@@ -73,7 +87,10 @@ module MailOnRails
       raw = raw.gsub(/(?<!\r)\n/, "\r\n") # normalize bare LF to CRLF
 
       account = mailbox.email_account
-      mail = Mail.read_from_string(raw) rescue nil
+      # Header-only parse: the Mail gem reads the body lazily, so this is
+      # cheap whatever the MIME structure; searchable_text below is the
+      # one body walk on this path and it goes through MimeLimits.
+      mail = parse(raw)
       # OBJECTID (RFC 8474): content-derived, so COPY/MOVE (which re-deliver
       # the same bytes) preserve the EMAILID.
       email_object_id = "E#{Digest::SHA256.hexdigest(raw)[0, 24]}"
@@ -89,10 +106,10 @@ module MailOnRails
           # forgeable Date: header. Callers wanting a historical date (archive
           # import, IMAP APPEND/COPY) pass internal_date explicitly.
           internal_date: internal_date || Time.current,
-          message_id: mail&.message_id.to_s.presence,
-          subject: mail&.subject.to_s.presence,
-          from_address: (mail&.from || []).first,
-          to_addresses: (mail&.to || []).join(", "),
+          message_id: header_field(mail, :message_id).to_s.presence,
+          subject: header_field(mail, :subject).to_s.presence,
+          from_address: address_list(header_field(mail, :from)).first,
+          to_addresses: address_list(header_field(mail, :to)).join(", "),
           body_text: searchable_text(raw, mail: mail),
           **thread_columns(mailbox.email_account, mail, email_object_id),
           authenticated_as: authenticated_as,
@@ -126,6 +143,36 @@ module MailOnRails
 
         create.call
       end
+    end
+
+    # The Mail gem's view of raw, or nil when it can't parse it at all.
+    def self.parse(raw)
+      Mail.read_from_string(raw)
+    rescue *PARSE_ERRORS
+      nil
+    end
+
+    # One header's parsed value, nil when the message or the field can't
+    # be read. The gem hands back an unstructured raw String for a header
+    # it couldn't parse, so callers must not assume the documented shape.
+    def self.header_field(mail, name)
+      mail&.public_send(name)
+    rescue *PARSE_ERRORS
+      nil
+    end
+
+    # The addresses in a parsed address header, as Strings. The Mail gem
+    # returns an Array of addr-specs for a good header and the raw String
+    # for one it couldn't parse (`To: <<<` comes back as "<<<"); an
+    # unparseable value is dropped rather than stored as an address -
+    # from_address keys SenderRule and the Junk feedback, and "<" is not a
+    # sender anyone meant to allow or deny.
+    ADDRESS_SHAPE = /\A[^\s<>@,;:"()\[\]]+@[^\s<>@,;:"()\[\]]+\z/
+
+    def self.address_list(value)
+      return [] unless value.is_a?(Array)
+
+      value.map(&:to_s).select { |address| address.match?(ADDRESS_SHAPE) }
     end
 
     # True when the sender authenticated, i.e. the From is verified, not spoofed.
@@ -209,13 +256,13 @@ module MailOnRails
 
     def attachments
       @attachments ||= begin
-        parsed.attachments.each_with_index.map do |part, index|
+        Array(body_mail&.attachments).each_with_index.map do |part, index|
           Attachment.new(index: index,
                          filename: part.filename.presence || "attachment-#{index + 1}",
                          content_type: part.mime_type.presence || "application/octet-stream",
                          size: part.body.decoded.bytesize)
         end
-      rescue StandardError
+      rescue *PARSE_ERRORS
         []
       end
     end
@@ -246,12 +293,13 @@ module MailOnRails
     # The threading columns for a message about to be stored: its ancestry
     # headers plus the thread_id they resolve to.
     def self.thread_columns(account, mail, fallback_anchor)
-      in_reply_to = Array(mail&.in_reply_to).first.to_s.presence
-      references = Array(mail&.references).map(&:to_s).reject(&:empty?)
+      in_reply_to = Array(header_field(mail, :in_reply_to)).first.to_s.presence
+      references = Array(header_field(mail, :references)).map(&:to_s).reject(&:empty?)
       {
         in_reply_to: in_reply_to,
         references_ids: references.join(" ").presence,
-        thread_id: resolve_thread_id(account, references, in_reply_to, mail&.message_id.to_s.presence, fallback_anchor)
+        thread_id: resolve_thread_id(account, references, in_reply_to,
+                                     header_field(mail, :message_id).to_s.presence, fallback_anchor)
       }
     end
 
@@ -273,34 +321,42 @@ module MailOnRails
       "T#{Digest::SHA256.hexdigest(ancestors.first || message_id || fallback_anchor)[0, 24]}"
     end
 
-    # Best-effort plain-text body for the web UI.
+    # Best-effort plain-text body for the web UI. A message past MimeLimits
+    # is never walked: the reader gets a notice, and the raw source.
     def text_body
-      mail = begin
-        parsed
-      rescue StandardError
-        nil
-      end
-      self.class.plain_text(mail, raw)
+      return TOO_COMPLEX_NOTICE if mime_too_complex?
+
+      self.class.plain_text(body_mail, raw)
+    end
+
+    # True when the stored message's MIME structure is past what the
+    # pipeline walks (see MimeLimits); such a message renders opaque.
+    def mime_too_complex?
+      @mime_too_complex = MimeLimits.too_complex?(raw) unless defined?(@mime_too_complex)
+      @mime_too_complex
     end
 
     # The body_text column's value: the body as plain text, made safe for
     # a text column (valid UTF-8, no NULs) and bounded so the generated
-    # tsvector over it on PostgreSQL can't blow the delivery INSERT.
+    # tsvector over it on PostgreSQL can't blow the delivery INSERT. A
+    # message past MimeLimits gets no body text at all: the guard runs
+    # before the Mail gem ever walks the tree, so a hostile structure costs
+    # one linear pass over the bytes, never a stack blow-up in delivery.
     def self.searchable_text(raw, mail: nil)
-      mail ||= begin
-        Mail.read_from_string(raw)
-      rescue StandardError
-        nil
-      end
-      text = plain_text(mail, raw)
+      return "" if MimeLimits.too_complex?(raw)
+
+      text = plain_text(mail || parse(raw), raw)
       text.dup.force_encoding(Encoding::UTF_8).scrub.delete("\u0000")[0, SEARCHABLE_TEXT_LIMIT].to_s
     end
 
     # The body as displayable/searchable plain text: the text part when the
     # message has one, the tag-stripped HTML otherwise (including single-part
     # text/html messages), and the raw bytes past the header split when
-    # parsing failed (mail: nil included).
+    # parsing failed (mail: nil included). Callers bound the structure
+    # (MimeLimits) before handing a mail in; the rescue is the backstop.
     def self.plain_text(mail, raw)
+      return unparsed_body(raw) unless mail
+
       part = mail.text_part || (mail if !mail.multipart? && mail.mime_type != "text/html")
       if part
         decoded_utf8(part)
@@ -309,7 +365,11 @@ module MailOnRails
         html = html_part && decoded_utf8(html_part)
         html ? html.gsub(/<[^>]+>/, " ").squish : ""
       end
-    rescue StandardError
+    rescue *PARSE_ERRORS
+      unparsed_body(raw)
+    end
+
+    def self.unparsed_body(raw)
       raw.to_s.split(/\r?\n\r?\n/, 2).last.to_s
     end
 
@@ -322,14 +382,15 @@ module MailOnRails
     # Cheap "does an HTML rendering exist" check for the view toggle.
     def html_part?
       html_source.present?
-    rescue StandardError
+    rescue *PARSE_ERRORS
       false
     end
 
     # Sanitised HTML body for the web UI (nil when the message has no HTML
-    # part). Safety lives in EmailHtmlSanitizer plus the sandboxed iframe the
-    # view puts the result in; remote images stay blocked unless the reader
-    # asked for them on this visit.
+    # part, or its structure is past MimeLimits). Safety lives in
+    # EmailHtmlSanitizer plus the sandboxed iframe the view puts the result
+    # in; remote images stay blocked unless the reader asked for them on
+    # this visit.
     def html_body(allow_remote_images: false)
       part = html_source
       return nil unless part
@@ -337,14 +398,29 @@ module MailOnRails
       EmailHtmlSanitizer.sanitize(decoded_utf8(part),
                                   inline_images: inline_images,
                                   allow_remote_images: allow_remote_images)
-    rescue StandardError
+    rescue *PARSE_ERRORS
       nil
     end
 
     private
 
+    # The parsed message for body walks (text/html parts, attachments,
+    # inline images): nil when the structure is past MimeLimits or the Mail
+    # gem can't parse it, so every walk above degrades to "no such part".
+    # `parsed` itself stays available for header reads, which the gem
+    # serves without touching the body.
+    def body_mail
+      return nil if mime_too_complex?
+
+      parsed
+    rescue *PARSE_ERRORS
+      nil
+    end
+
     def html_source
-      mail = parsed
+      mail = body_mail
+      return nil unless mail
+
       mail.html_part || (mail if !mail.multipart? && mail.mime_type == "text/html")
     end
 
@@ -353,14 +429,17 @@ module MailOnRails
     # into the page is serving its bytes, so an unscanned or infected message
     # renders with its inline images dead just like its attachment links.
     def inline_images
-      return {} unless attachments_downloadable? && parsed.multipart?
+      mail = body_mail
+      return {} unless mail && attachments_downloadable? && mail.multipart?
 
-      parsed.all_parts.filter_map do |part|
+      mail.all_parts.filter_map do |part|
         next unless part.content_id.present? && part.mime_type.to_s.start_with?("image/")
 
         cid = part.content_id.delete_prefix("<").delete_suffix(">")
         [ cid, EmailHtmlSanitizer::InlineImage.new(content_type: part.mime_type, data: part.body.decoded) ]
       end.to_h
+    rescue *PARSE_ERRORS
+      {}
     end
 
     def decoded_utf8(part)

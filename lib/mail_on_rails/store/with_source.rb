@@ -31,6 +31,19 @@ module MailOnRails
         @backend.record_auth_failure(email, ip: ip, source: source || @source)
       end
 
+      # The SCRAM verifier lookup is an authentication call too: a
+      # throttled one is refused there, and that refusal belongs in the
+      # attempt log under its surface like a throttled PLAIN login. A
+      # backend whose scram_credentials predates the source: keyword (the
+      # protocol gems' memory stores) is called the old way.
+      def scram_credentials(email, ip: nil, source: nil)
+        if accepts_source?(:scram_credentials)
+          @backend.scram_credentials(email, ip: ip, source: source || @source)
+        else
+          @backend.scram_credentials(email, ip: ip)
+        end
+      end
+
       def respond_to_missing?(name, include_private = false)
         @backend.respond_to?(name, include_private) || super
       end
@@ -40,6 +53,19 @@ module MailOnRails
           @backend.public_send(name, ...)
         else
           super
+        end
+      end
+
+      private
+
+      # Whether the backend's +name+ takes a source: keyword (or any
+      # keyword). Resolved once per wrapper - the backend never changes.
+      def accepts_source?(name)
+        @accepts_source ||= {}
+        @accepts_source.fetch(name) do
+          @accepts_source[name] = @backend.method(name).parameters.any? do |type, key|
+            type == :keyrest || (%i[key keyreq].include?(type) && key == :source)
+          end
         end
       end
     end

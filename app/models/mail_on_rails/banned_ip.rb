@@ -67,9 +67,11 @@ module MailOnRails
       # the throttle (the address for IPv4, the /64 for IPv6) so a v6
       # guesser cannot rotate inside its prefix. Deliberately no
       # exceptions: the operator chose "anyone", their own devices
-      # included. Best-effort - a listener thread calls this, and the
-      # login refusal it follows must never fail on the bookkeeping.
-      # Returns the new row, or nil when nothing was banned.
+      # included - with the one carve-out every automatic ban shares, a
+      # local address (see create_auto_ban). Best-effort - a listener
+      # thread calls this, and the login refusal it follows must never
+      # fail on the bookkeeping. Returns the new row, or nil when nothing
+      # was banned.
       def auto_ban_after_failure(ip:, email: nil, source: nil, now: Time.current)
         return unless auto_ban? && ip.present?
         return if AuthThrottle.ip_failures(ip, now: now) < auto_ban_failures
@@ -95,15 +97,40 @@ module MailOnRails
       # check stays with the caller so the event's response column can say
       # what happened. Same permanent row and throttle keying as
       # auto_ban_after_failure, same best-effort discipline (a listener
-      # thread is underneath this). Returns the new row, or nil when the
-      # address was already covered or nothing could be written.
-      def auto_ban_for_probe(ip:, protocol:, trigger:, signature: nil)
+      # thread is underneath this) - and the collateral checks
+      # auto_ban_for_idle makes (probe_ban_exemption): a probe signature
+      # is a regex, and RFC-legal mail can match it (a quoted local-part
+      # like "${run{...}}"@ relayed by a third party's MX), so the source
+      # is left alone when it is a local address or has done real mail
+      # work lately. The event itself is recorded either way. Returns the
+      # new row, or nil when the address was exempt, already covered or
+      # nothing could be written.
+      def auto_ban_for_probe(ip:, protocol:, trigger:, signature: nil, now: Time.current)
         return if ip.blank?
+        return if probe_ban_exemption(ip, now: now)
         return if covering(ip)
 
         create_auto_ban(ip, source: "protocol_abuse", note: probe_ban_note(protocol, trigger, signature))
       rescue StandardError => e
         auto_ban_failed(ip, e)
+      end
+
+      # Why a probe-type hit from +ip+ must not become a permanent ban, as
+      # a short phrase for the event's response column, or nil when it
+      # may: a local address (behind a proxy or bridge it is every
+      # client), or one that logged in or delivered mail within
+      # honeypot_collateral_days - closed connections and open ones alike,
+      # the same two checks the idle ban makes. The PTR exemption the
+      # idle ban also has is deliberately not repeated here: that lookup
+      # blocks, and this runs on the connection thread that just tripped
+      # the probe (the idle ban defers to a job for exactly that reason).
+      def probe_ban_exemption(ip, now: Time.current)
+        return "local address" if Netserv.local?(ip)
+
+        since = now - HoneypotEvent.collateral_days.days
+        return "shared address" if ClosedConnection.worked_from?(ip, since: since) || OpenConnection.working_from?(ip)
+
+        nil
       end
 
       # "auto: http request on smtp". The trigger and signature are our own
@@ -209,9 +236,13 @@ module MailOnRails
 
       # Canonical form: bare address for host entries (/32, /128), otherwise
       # the masked network with its prefix - so "1.2.3.4/24" and "1.2.3.0/24"
-      # can't coexist as distinct rows. Raises IPAddr::Error on garbage.
+      # can't coexist as distinct rows. A v4-mapped spelling ("::ffff:1.2.3.4",
+      # "::ffff:1.2.3.0/120") is stored as the IPv4 it names: peers are
+      # unmapped on every surface, so a row kept in the mapped form would
+      # never match anything. Raises IPAddr::Error on garbage.
       def canonicalize(input)
         addr = IPAddr.new(input.to_s.strip)
+        addr = addr.native if addr.ipv4_mapped?
         full = addr.ipv4? ? 32 : 128
         addr.prefix == full ? addr.to_s : "#{addr}/#{addr.prefix}"
       end
@@ -266,8 +297,22 @@ module MailOnRails
       end
 
       # The tail every automatic ban shares: the permanent row, keyed like
-      # the throttles (the address for IPv4, the /64 for IPv6).
+      # the throttles (the address for IPv4, the /64 for IPv6). Never for
+      # a local address, whatever the setting (idle_strikes_due screens
+      # those earlier; this is the backstop for the auth and probe paths):
+      # behind a userland proxy, a TCP load balancer without proxy
+      # protocol or a Docker bridge without ip6tables, every client
+      # arrives as the gateway address, and that one row would ban them
+      # all. Loud, because the failure that led here was real and the
+      # operator should know their listener sits behind such a hop.
       def create_auto_ban(ip, source:, note:)
+        if Netserv.local?(ip)
+          MailOnRails.logger.warn("[mail_on_rails] refusing to auto-ban local address #{ip} (#{source}: #{note}) - " \
+                                  "behind a proxy or bridge that address is every client; ban by hand if it is " \
+                                  "really one machine")
+          return nil
+        end
+
         row = create!(cidr: Netserv.throttle_key(ip), source: source, note: note)
         MailOnRails.logger.warn("[mail_on_rails] auto-banned #{row.cidr}: #{row.note}")
         row

@@ -50,12 +50,25 @@ module MailOnRails
 
       private
 
+      # One entry per push, whatever the bytes: a CR or LF inside +text+ is
+      # flattened to its visible escape (the IMAP trace log does the same),
+      # so a client line carrying "\n=> 235 Authentication successful" can
+      # never read as a server reply in the stored transcript.
       def push(direction, text)
-        line = "#{direction}#{text}"
+        line = "#{direction}#{flatten(text)}"
         @lines << line
         @bytes += line.bytesize + 1
         drop_oldest while over_cap?
         nil
+      end
+
+      # Byte-wise: the line may hold invalid UTF-8 (to_s scrubs at flush
+      # time), which a character regex would refuse to scan.
+      def flatten(text)
+        bytes = text.to_s.b
+        return text.to_s unless bytes.match?(/[\r\n]/n)
+
+        bytes.gsub(/\r|\n/n) { |byte| byte == "\r" ? "\\r" : "\\n" }
       end
 
       def over_cap?

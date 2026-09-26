@@ -176,6 +176,68 @@ class SettingsTest < Minitest::Test
     assert_equal 100, Settings[:smtp_max_conn], "deleted row falls back to the default"
   end
 
+  # -- who performs the TTL pull -----------------------------------------
+
+  # A DynamicOverrides with a scripted monotonic clock.
+  def overrides_with_clock(ttl:)
+    overrides = MailOnRails::Settings::DynamicOverrides.new(ttl: ttl)
+    @clock = 1000.0
+    test = self
+    overrides.define_singleton_method(:clock) { test.instance_variable_get(:@clock) }
+    overrides
+  end
+
+  test "while a background poller keeps calling poll!, readers never pull inline" do
+    overrides = overrides_with_clock(ttl: 5)
+    pulls = 0
+    rows = { "smtp_max_conn" => "9" }
+    overrides.store = -> { pulls += 1; rows.dup }
+
+    overrides.poll!
+    assert_equal 1, pulls
+    assert_equal 9, overrides.snapshot[:smtp_max_conn]
+
+    @clock += 6 # the ttl has lapsed
+    rows["smtp_max_conn"] = "11"
+    assert_equal 9, overrides.snapshot[:smtp_max_conn], "a reader on the accept path takes the snapshot as is"
+    assert_equal 1, pulls, "no inline pull while the poller is recent"
+
+    overrides.poll!
+    assert_equal 2, pulls
+    assert_equal 11, overrides.snapshot[:smtp_max_conn], "the poller's pull propagates the change"
+  end
+
+  test "without a poller (or once it goes quiet) readers pull for themselves on the ttl" do
+    overrides = overrides_with_clock(ttl: 5)
+    pulls = 0
+    rows = { "smtp_max_conn" => "9" }
+    overrides.store = -> { pulls += 1; rows.dup }
+
+    assert_equal 9, overrides.snapshot[:smtp_max_conn], "a web process with no ops thread still reads the DB tier"
+    assert_equal 1, pulls
+    @clock += 6
+    rows["smtp_max_conn"] = "11"
+    assert_equal 11, overrides.snapshot[:smtp_max_conn]
+    assert_equal 2, pulls
+
+    overrides.poll! # a poller appears...
+    @clock += 6
+    overrides.snapshot
+    assert_equal 2, pulls, "...and readers stop pulling"
+    @clock += 5 * MailOnRails::Settings::DynamicOverrides::POLL_GRACE # ...then goes quiet
+    rows["smtp_max_conn"] = "13"
+    assert_equal 13, overrides.snapshot[:smtp_max_conn], "readers resume the lazy pull"
+  end
+
+  test "a zero ttl keeps the test seam: every read pulls even with a poller" do
+    overrides = overrides_with_clock(ttl: 0)
+    pulls = 0
+    overrides.store = -> { pulls += 1; { "smtp_max_conn" => pulls.to_s } }
+    overrides.poll!
+    assert_equal 2, overrides.snapshot[:smtp_max_conn]
+    assert_equal 3, overrides.snapshot[:smtp_max_conn]
+  end
+
   # -- serialization ----------------------------------------------------
 
   test "definitions serialize canonically" do

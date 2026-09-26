@@ -91,6 +91,46 @@ class HardeningTest < Minitest::Test
     end
   end
 
+  # Beyond link-local: the other metadata endpoints (AWS IMDSv6, Alibaba's
+  # CGNAT address), the unspecified addresses, and the transition ranges
+  # that embed an IPv4 target - while the ranges accessories live in stay
+  # allowed. The host gate is exercised directly for the IPv6 literals:
+  # the host:port splitter in front of it has never taken a bare IPv6
+  # literal, so the gate is what a resolved hostname meets.
+  test "the scanner host gate refuses every metadata/CGNAT/unspecified literal, mapped spellings included" do
+    clamav = Settings.definition(:smtp_clamav_addr)
+    rspamd = Settings.definition(:smtp_rspamd_addr)
+
+    [ "fd00:ec2::254", "100.64.0.1", "100.100.100.200", "0.0.0.0", "::", "::ffff:169.254.169.254",
+      "::ffff:169.254.0.1", "64:ff9b::a9fe:a9fe", "2002:a9fe:a9fe::1", "fe80::1", "224.0.0.1",
+      "0.1.2.3", "ff02::1", "100::1" ].each do |host|
+      error = assert_raises(ArgumentError, "host #{host.inspect} must be rejected") { Settings::SCANNER_HOST.call(host) }
+      assert_match(/metadata/, error.message)
+    end
+    assert_raises(ArgumentError) { clamav.coerce("100.100.100.200:3310") }
+    assert_raises(ArgumentError) { clamav.coerce("0.0.0.0:3310") }
+    assert_raises(ArgumentError) { rspamd.coerce("http://100.100.100.200/") }
+
+    [ "127.0.0.1", "10.0.0.5", "172.18.0.3", "192.168.1.9", "::1", "fd46:7ac3:4fd7::5", "clamav" ].each do |host|
+      assert_nil Settings::SCANNER_HOST.call(host), "#{host} is where accessories live"
+    end
+    assert_equal "10.0.0.5:3310", clamav.coerce("10.0.0.5:3310")
+  end
+
+  test "a hostname resolving into metadata space that is not link-local is rejected too" do
+    clamav = Settings.definition(:smtp_clamav_addr)
+
+    with_resolved_addresses([ "fd00:ec2::254" ]) do
+      assert_raises(ArgumentError) { clamav.coerce("metadata.internal:3310") }
+    end
+    with_resolved_addresses([ "100.100.100.200" ]) do
+      assert_raises(ArgumentError) { clamav.coerce("metadata.internal:3310") }
+    end
+    with_resolved_addresses([ "10.0.0.5", "fd46:7ac3:4fd7::5" ]) do
+      assert_equal "clamav:3310", clamav.coerce("clamav:3310")
+    end
+  end
+
   # Hand-rolled singleton stub (minitest/mock isn't bundled): pin what the
   # hostname resolves to, so the rebinding check is deterministic.
   def with_resolved_addresses(addresses)

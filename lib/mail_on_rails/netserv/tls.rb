@@ -72,6 +72,17 @@ module MailOnRails
           # session has no use for it, and honoring client-initiated
           # renegotiation is a CPU-amplification lever.
           ctx.options |= OpenSSL::SSL::OP_NO_RENEGOTIATION
+          # No stateless session tickets: OpenSSL encrypts those with a
+          # per-context key that Ruby exposes no rotation hook for, so it
+          # would live as long as the context (until the next cert
+          # renewal) and a TLS 1.2 session resumed from a ticket would stay
+          # decryptable for that whole time. With the option set TLS 1.2
+          # resumes through the server-side session cache below (session
+          # ids; forward-secret once the entry ages out) and TLS 1.3 keeps
+          # issuing tickets but backs them with the same cache instead of
+          # the ticket key (its psk_dhe_ke resumption is forward secret
+          # either way).
+          ctx.options |= OpenSSL::SSL::OP_NO_TICKET
           ctx.session_id_context = "mail_on_rails"
           ctx
         end

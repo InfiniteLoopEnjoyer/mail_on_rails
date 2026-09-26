@@ -30,9 +30,13 @@ module MailOnRails
       OVERAGE_MEMORY = 64 # timestamps kept per IP beyond the limit; deeper is at max delay anyway
       SWEEP_THRESHOLD = 1_000 # purge idle IPs when the table grows past this
       SWEEP_INTERVAL = 1.0 # ...but at most this often: a sweep is O(n) on the accept path
-      # Hard ceiling on tracked keys. Past it the least recently seen key
-      # is evicted, so a flood from many distinct addresses costs bounded
-      # memory and never turns every accept into a full-table walk.
+      # Hard ceiling on tracked keys, applied to the two tables separately:
+      # past it the least recently seen WITHIN-BUDGET key is evicted, never
+      # a tarpitted one - a flood of single connections from 50k distinct
+      # /64s must not wash out the tarpits it is trying to escape. The
+      # tarpitted table has the same ceiling, so a flood that earns 50k
+      # tarpits evicts its own oldest first; total memory is bounded at 2x
+      # and no accept ever turns into a full-table walk.
       MAX_ENTRIES = 50_000
 
       # limit/window may be plain values or callables resolved per check
@@ -47,7 +51,8 @@ module MailOnRails
         @base_delay = base_delay
         @max_delay = max_delay
         @clock = clock
-        @entries = {} # key => connection timestamps within the window, oldest first; LRU order
+        @entries = {} # within-budget key => connection timestamps within the window, oldest first; LRU order
+        @tarpitted = {} # over-budget key => the same, earliest tarpitted first
         @last_sweep = nil
         @mutex = Mutex.new
       end
@@ -68,19 +73,22 @@ module MailOnRails
         now = @clock.call
         key = Netserv.throttle_key(ip)
         @mutex.synchronize do
-          sweep(now, window) if @entries.size > SWEEP_THRESHOLD && sweep_due?(now)
-          # Re-inserting moves the key to the end: Hash keeps insertion
-          # order, so the front is always the least recently seen.
-          stamps = @entries.delete(key) || []
-          @entries[key] = stamps
-          @entries.shift while @entries.size > MAX_ENTRIES
+          sweep(now, window, limit) if @entries.size + @tarpitted.size > SWEEP_THRESHOLD && sweep_due?(now)
+          stamps = @tarpitted.delete(key) || @entries.delete(key) || []
           stamps.shift while stamps.any? && now - stamps.first > window
           stamps.shift if stamps.size >= limit + OVERAGE_MEMORY # bound per-IP memory
           stamps << now
           over = stamps.size - limit
+          # Re-inserting moves the key to the end of its table: Hash keeps
+          # insertion order, so the front is always the least recently
+          # seen (or the earliest tarpitted).
           if over <= 0
+            @entries[key] = stamps
+            @entries.shift while @entries.size > MAX_ENTRIES
             0.0
           else
+            @tarpitted[key] = stamps
+            @tarpitted.shift while @tarpitted.size > MAX_ENTRIES
             [ @base_delay * (2**[ over - 1, 10 ].min), @max_delay ].min
           end
         end
@@ -107,10 +115,20 @@ module MailOnRails
         @last_sweep.nil? || now - @last_sweep >= SWEEP_INTERVAL
       end
 
-      # Drops IPs whose every timestamp has aged out of the window.
-      def sweep(now, window)
+      # Drops IPs whose every timestamp has aged out of the window, and
+      # returns a tarpitted IP to the idle table once enough of its
+      # timestamps have aged out that it is back within budget - its
+      # tarpit has expired, so it is fair game for LRU eviction again.
+      def sweep(now, window, limit)
         @last_sweep = now
         @entries.delete_if { |_ip, stamps| stamps.empty? || now - stamps.last > window }
+        @tarpitted.delete_if do |ip, stamps|
+          stamps.shift while stamps.any? && now - stamps.first > window
+          next true if stamps.empty?
+
+          @entries[ip] = stamps if stamps.size <= limit
+          stamps.size <= limit
+        end
       end
     end
   end

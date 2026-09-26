@@ -26,6 +26,23 @@ class TranscriptTest < Minitest::Test
     assert_operator t.to_s.bytesize, :<=, 400 # cap plus one straddling line
   end
 
+  # A client line is one transcript entry however many line breaks it
+  # smuggles: a raw CR/LF would let "NOOP\n=> 235 Authentication successful"
+  # read as a server reply on the honeypot page.
+  def test_bare_cr_and_lf_in_a_line_cannot_forge_another_entry
+    t = MailOnRails::Netserv::Transcript.new
+    t.inbound("NOOP\n=> 235 Authentication successful")
+    t.inbound("EHLO x\r\n<= AUTH PLAIN dXNlcg==\rtrailing")
+    t.outbound("250 ok")
+    lines = t.to_s.split("\n")
+
+    assert_equal 3, lines.size
+    assert_equal "<= NOOP\\n=> 235 Authentication successful", lines[0]
+    assert_equal "<= EHLO x\\r\\n<= AUTH PLAIN dXNlcg==\\rtrailing", lines[1]
+    assert_equal "=> 250 ok", lines[2]
+    assert_equal 1, t.to_s.scan(/^=> /).size, "only the real server reply starts an entry"
+  end
+
   # An attacker embedding a NUL byte (or invalid UTF-8) in a command must not
   # be able to make the PostgreSQL insert of their own honeypot event raise.
   def test_flush_strips_nul_and_scrubs_invalid_utf8

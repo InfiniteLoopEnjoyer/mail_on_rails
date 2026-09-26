@@ -6,12 +6,18 @@ module MailOnRails
   module Netserv
     # The admin ban list (the Rails app's BannedIp table), read through the
     # store's banned_cidrs so this layer stays Rails-free. Checked on the
-    # accept path for every connection; the store is asked at most once per
-    # TTL seconds and the parsed networks cached in between, so a ban lands
-    # within seconds of the row committing without a query per connection
-    # under load. In-process writers also call refresh! (via
-    # MailOnRails.refresh_denylists) so a new ban applies to the very next
-    # connection.
+    # accept path for every connection - and only ever against a frozen
+    # in-memory snapshot there: the accept thread never asks the store and
+    # never takes a lock, so a slow database can delay a ban's arrival but
+    # never a banner. The snapshot is refreshed off the accept path:
+    #
+    #   - Server#run loads it once before the first accept (the store is
+    #     fine to wait on at boot);
+    #   - the listener's OpsSync tick calls pull, which re-reads the store
+    #     once TTL seconds have passed since the last read, so a ban lands
+    #     within a few seconds of the row committing;
+    #   - in-process writers call refresh! (via MailOnRails.refresh_denylists)
+    #     so a new ban applies to the very next connection.
     #
     # Fail-soft everywhere, like TLS::ContextProvider: a store without a
     # ban list means the feature is off (the vendored memory stores return
@@ -25,11 +31,14 @@ module MailOnRails
       def initialize(store, ttl: TTL)
         @store = store.respond_to?(:banned_cidrs) ? store : nil
         @ttl = ttl
+        # Serializes the refreshers (an ops tick and an after_commit may
+        # coincide); readers never take it.
         @mutex = Mutex.new
-        @networks = []
+        @networks = [].freeze
         @checked_at = nil
       end
 
+      # Lock-free: reads whichever snapshot was last swapped in.
       def banned?(ip)
         return false if @store.nil? || ip.nil?
 
@@ -43,7 +52,7 @@ module MailOnRails
         # canonicalizes at accept; this repeats it so the gate never
         # depends on the caller having done so.
         addr = addr.native if addr.ipv4_mapped?
-        current_networks.any? { |net| net.ipv4? == addr.ipv4? && net.include?(addr) }
+        @networks.any? { |net| net.ipv4? == addr.ipv4? && net.include?(addr) }
       end
 
       # Immediate reload, bypassing the TTL.
@@ -54,20 +63,28 @@ module MailOnRails
         nil
       end
 
-      private
+      # Reload if TTL seconds have passed since the last store read (the
+      # OpsSync tick's call). Returns true when it read the store.
+      def pull
+        return false if @store.nil?
 
-      def current_networks
         @mutex.synchronize do
           now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          load_networks if @checked_at.nil? || now - @checked_at >= @ttl
-          @networks
+          return false unless @checked_at.nil? || now - @checked_at >= @ttl
+
+          load_networks
+          true
         end
       end
+
+      private
 
       # Holds @mutex. Anything but an array of entries - the error hash
       # Store::Base#db returns, or a raise from a store without its own
       # rescue - keeps the last good list (and the TTL stamp, so a down
-      # database is retried once per TTL, not per connection).
+      # database is retried once per TTL, not per tick). The parsed list
+      # is built aside and swapped in whole: readers see the old snapshot
+      # or the new one, never a half-built one.
       def load_networks
         @checked_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         cidrs = begin
@@ -81,7 +98,7 @@ module MailOnRails
           IPAddr.new(entry.to_s)
         rescue IPAddr::Error
           nil
-        end
+        end.freeze
       end
     end
   end

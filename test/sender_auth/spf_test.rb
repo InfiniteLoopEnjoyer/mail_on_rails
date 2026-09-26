@@ -86,6 +86,29 @@ class SpfTest < Minitest::Test
     assert_equal :pass, result[:result]
   end
 
+  # RFC 7208 7.3: the DIGIT transformer is 1..128. Anything else is the
+  # record's fault (permerror), and the evaluator must own that verdict:
+  # a 20-digit field used to reach Array#last as a bignum and raise
+  # RangeError out of check.
+  test "macro digit transformer past 128 is permerror, not an exception" do
+    records = { txt: { "example.com" => [ "v=spf1 exists:%{s99999999999999999999}.x.test -all" ] },
+                a: { "bob@example.com.x.test" => [ "127.0.0.2" ] } }
+    assert_equal :permerror, check(records)[:result]
+
+    records[:txt]["example.com"] = [ "v=spf1 exists:%{s129}.x.test -all" ]
+    assert_equal :permerror, check(records)[:result]
+
+    records[:txt]["example.com"] = [ "v=spf1 exists:%{s0}.x.test -all" ]
+    assert_equal :permerror, check(records)[:result]
+
+    records[:txt]["example.com"] = [ "v=spf1 exists:%{s128}.x.test -all" ]
+    assert_equal :pass, check(records)[:result]
+  end
+
+  test "an unparseable client ip is still none, not permerror" do
+    assert_equal :none, check({ txt: { "example.com" => [ "v=spf1 -all" ] } }, ip: "not-an-ip")[:result]
+  end
+
   test "self-referencing include hits the lookup limit" do
     result = check({ txt: { "example.com" => [ "v=spf1 include:example.com -all" ] } })
     assert_equal :permerror, result[:result]

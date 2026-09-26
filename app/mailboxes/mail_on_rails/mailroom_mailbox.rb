@@ -37,13 +37,23 @@ require "mail_on_rails/ingress_seal"
 # trusted From is exactly what a phisher forges.
 module MailOnRails
   class MailroomMailbox < ActionMailbox::Base
+    # Raised out of process when no recipient got a copy: Action Mailbox
+    # then records the InboundEmail as failed (and keeps the source for a
+    # look). It is a StandardError on purpose - the original failure may
+    # not be one (a SystemStackError out of the Mail gem), and only a
+    # StandardError reaches Action Mailbox's status tracking; anything else
+    # would strand the row in "processing" forever, blob and all.
+    class DeliveryFailed < StandardError; end
+
     def process
       return unless sealed_or_permitted?
 
       verdict = scan_verdict
       # uniq: several recipient addresses (an account plus its aliases) can
       # resolve to the same account - it still gets exactly one copy.
-      recipients.filter_map { |recipient| resolve_account(recipient.strip.downcase) }.uniq.each do |account|
+      accounts = recipients.filter_map { |recipient| resolve_account(recipient.strip.downcase) }.uniq
+      failures = {}
+      accounts.each do |account|
         # A full account loses only its own copy - the message was already
         # accepted at the SMTP edge, so there is no rejecting it now, and
         # co-recipients must still get theirs.
@@ -66,7 +76,11 @@ module MailOnRails
           # Quarantined, spam-filed and unscanned mail is never parsed:
           # with scanning disabled the report just stays in the mailbox.
           if dest.inbox? && (ingest_job = Domain.ingestion_job_for(account.email))
-            if verdict
+            if message.mime_too_complex?
+              # The ingest job walks the attachments itself; a structure
+              # past MimeLimits is never walked, in any process.
+              Rails.logger.warn "[mail_on_rails] report for #{account.email} left unparsed (MIME structure too complex)"
+            elsif verdict
               ingest_job.perform_later(message)
             else
               Rails.logger.warn "[mail_on_rails] report for #{account.email} left unparsed (virus scanning disabled)"
@@ -75,7 +89,21 @@ module MailOnRails
         end
       rescue EmailMessage::OverQuota => e
         Rails.logger.warn "[mail_on_rails] inbound message dropped for #{account.email}: #{e.message}"
+      rescue *EmailMessage::PARSE_ERRORS => e
+        # Any other failure is this recipient's alone: the co-recipients
+        # still get their copies, and the failure is logged in full - never
+        # swallowed - before the verdict below.
+        failures[account.email] = e
+        Rails.logger.error "[mail_on_rails] inbound email ##{inbound_email.id} failed for #{account.email}: " \
+                           "#{e.class}: #{e.message.to_s[0, 500]}\n  #{Array(e.backtrace).first(8).join("\n  ")}"
       end
+
+      # Partial success is still a delivery (the failures are logged
+      # above); nothing delivered at all is an honest failure.
+      return if failures.empty? || failures.size < accounts.size
+
+      raise DeliveryFailed, "no recipient received inbound email ##{inbound_email.id}: " +
+                            failures.map { |email, e| "#{email} (#{e.class}: #{e.message.to_s[0, 200]})" }.join("; ")
     end
 
     private
@@ -188,15 +216,13 @@ module MailOnRails
     end
 
     # The visible From (what the user sees and what their Junk moves
-    # recorded), not the envelope sender. A malformed header reads as none.
+    # recorded), not the envelope sender. A malformed header reads as none -
+    # the same reading EmailMessage stores, so the rule lookup here and the
+    # rule the Junk move writes agree on the address.
     def from_address
       return @from_address if defined?(@from_address)
 
-      @from_address = begin
-        (mail.from || []).first.to_s.presence
-      rescue StandardError
-        nil
-      end
+      @from_address = EmailMessage.address_list(EmailMessage.header_field(mail, :from)).first
     end
 
     # The rspamd analysis for an inbound message - the single gate for every

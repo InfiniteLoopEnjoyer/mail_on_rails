@@ -18,11 +18,16 @@ module MailOnRails
     #    (sync_ops_state) and THEN fires MailOnRails.on_connection_activity
     #    - the dashboard refresh never races the rows it announces;
     #    unchanged, it only heartbeats the listener row;
-    # 2. kicks live sessions whose peer the store's denylist now bans - a
+    # 2. polls the database-backed inputs the accept path reads - the
+    #    admin denylist (Netserv::Denylist#pull) and the settings
+    #    overrides (Settings.poll!) - each on its own TTL, so the accept
+    #    thread only ever reads in-memory snapshots and a slow database
+    #    delays a ban or a retune by seconds instead of delaying banners;
+    # 3. kicks live sessions whose peer the store's denylist now bans - a
     #    BannedIp row is the command, no separate kick needed - and those
     #    named by pending ConnectionKick rows (honeypot kick), acking each
     #    with the count;
-    # 3. sweeps the projections of listeners whose heartbeat went stale
+    # 4. sweeps the projections of listeners whose heartbeat went stale
     #    (a killed container that never ran its shutdown).
     #
     # Nothing here runs on the accept path or a connection thread: the
@@ -102,6 +107,8 @@ module MailOnRails
       # others nor kill the thread.
       def tick
         sync_picture
+        poll_settings
+        refresh_denylist
         kick_banned
         process_kicks
         sweep_stale
@@ -144,10 +151,27 @@ module MailOnRails
         warn_once(:sync, e)
       end
 
+      # The settings DB tier's TTL pull, taken off whichever thread would
+      # otherwise trip it (the accept thread's limit lambdas included).
+      # Settings without a store (Rails-free runs) no-op.
+      def poll_settings
+        Settings.poll!
+      rescue StandardError => e
+        warn_once(:settings, e)
+      end
+
+      # The denylist's TTL read of the store (see Denylist): the accept
+      # path only ever reads the snapshot this refreshes.
+      def refresh_denylist
+        @server.denylist&.pull
+      rescue StandardError => e
+        warn_once(:denylist, e)
+      end
+
       # Live sessions whose peer is now on the admin ban list: the
       # denylist only silences future accepts, so the ban's "drop what is
-      # open" half happens here. Denylist#banned? refreshes from the store
-      # on its own TTL, so an idle listener still notices a new ban.
+      # open" half happens here, against the snapshot refresh_denylist
+      # just pulled - so an idle listener still notices a new ban.
       def kick_banned
         denylist = @server.denylist
         return unless denylist
@@ -224,10 +248,13 @@ module MailOnRails
         @hostname = nil
       end
 
-      # Log each failing step once per distinct message, not every tick -
-      # a database outage must not turn the ops thread into a log flood.
+      # Log each failing step once per error class, not every tick - a
+      # database outage must not turn the ops thread into a log flood. The
+      # message is deliberately not part of the key: one that embeds a
+      # timestamp, a row id or peer bytes would be a fresh key every tick,
+      # and the seen-set would grow (and log) without bound.
       def warn_once(step, error)
-        key = "#{step}:#{error.class}:#{error.message}"
+        key = "#{step}:#{error.class}"
         @warned ||= {}
         return if @warned[key]
 

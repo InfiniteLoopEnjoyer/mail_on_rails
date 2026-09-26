@@ -74,6 +74,49 @@ class SendQuotaSlotTest < DbSuite::TestCase
     assert_equal 5, Slot.used("alice@example.test", window: 3600)
   end
 
+  # I2: across a bucket boundary two consumers hold different current
+  # buckets; locking only one's own row let both pass. Every live row is
+  # locked before the sum, so the two sets always share a row.
+  test "concurrent consumers straddling a bucket boundary cannot overspend either" do
+    Slot.consume("alice@example.test", limit: 5, window: 3600, now: @t0 - 120) # an older live bucket
+    barrier = Queue.new
+    results = Queue.new
+    threads = 8.times.map do |i|
+      Thread.new do
+        ActiveRecord::Base.connection_pool.with_connection do
+          barrier.pop
+          now = i.even? ? @t0 + 59 : @t0 + 60 # two adjacent buckets
+          results << Slot.consume("alice@example.test", limit: 5, window: 3600, now: now)
+        end
+      end
+    end
+    threads.size.times { barrier << true }
+    threads.each(&:join)
+
+    outcomes = Array.new(threads.size) { results.pop }
+    assert_equal 4, outcomes.count(true), "one slot was spent already; four remain (got #{outcomes.inspect})"
+    assert_equal 5, Slot.used("alice@example.test", window: 3600, now: @t0 + 60)
+  end
+
+  test "consume locks every live bucket of the account, in window order, before it sums" do
+    Slot.consume("alice@example.test", limit: 5, window: 3600, now: @t0 - 120)
+    statements = []
+    subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |*, payload|
+      statements << payload[:sql] if payload[:sql].match?(/SELECT.*send_quota_slots/i)
+    end
+    begin
+      assert Slot.consume("alice@example.test", limit: 5, window: 3600, now: @t0)
+    ensure
+      ActiveSupport::Notifications.unsubscribe(subscriber)
+    end
+
+    lock = statements.find { |sql| sql.match?(/window_start.*>=/i) && sql.match?(/ORDER BY/i) }
+    assert lock, "the live window is read as one ordered statement (got #{statements.inspect})"
+    refute_match(/LIMIT/i, lock, "never a single-row lock")
+    assert_match(/FOR UPDATE/i, lock) unless DbSuite.sqlite?
+    assert_match(/ORDER BY.*window_start.*id/im, lock)
+  end
+
   test "SendQuota uses the rows once the database is reachable, sharing the budget across instances" do
     smtp_listener = MailOnRails::SendQuota.new(limit: 2, window: 3600)
     web_process = MailOnRails::SendQuota.new(limit: 2, window: 3600)

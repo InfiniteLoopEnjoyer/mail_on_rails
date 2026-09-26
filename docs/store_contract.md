@@ -187,7 +187,7 @@ the store would force both memory stores and every test double to fake a
 `settings_snapshot` method. A store-free process (the protocol test
 suites, fuzzing) simply resolves settings from ENV/defaults.
 
-### `scram_credentials(email, ip: nil)`
+### `scram_credentials(email, ip: nil, source: nil)`
 
 SCRAM-SHA-256 verifier material (RFC 5802/7677) for the daemon's
 AUTHENTICATE exchange: `{ account_id:, email:, salt_base64:,
@@ -201,7 +201,10 @@ be used as a username oracle; the proof against that material never
 verifies. (`code: :notfound` is still tolerated by the server for an
 older store, but must not be produced by a new one.) Returns
 `{ throttled: true, retry_after: }` instead of any material when the
-caller is throttled.
+caller is throttled. `source` names the auth surface (`"imap"` /
+`"smtp"`) exactly as for `authenticate`; `Store::WithSource` supplies it,
+and a throttled refusal is logged under it. A store may omit the keyword
+(the vendored memory stores do); the wrapper then calls without it.
 
 ### `list_mailboxes(account_id)`
 
@@ -365,6 +368,26 @@ adapter matches over the extracted `subject` / `from_address` /
 `to_addresses` columns — i.e. the **addresses**, not RFC 5322 display
 names (the documented trade-off: `FROM "alice@example.com"` matches,
 `FROM "Alice"` may not).
+
+### `search_meta(mailbox_id, field, value)` — optional
+
+Column-comparison pushdown for the SEARCH keys that test one stored
+attribute: `LARGER`/`SMALLER`, `BEFORE`/`ON`/`SINCE`, `OLDER`/`YOUNGER`,
+`SAVEDBEFORE`/`SAVEDON`/`SAVEDSINCE`, `EMAILID`, `THREADID`. Optional:
+the IMAP server calls it behind `respond_to?`; without it those keys
+page through every message's metadata in the selected mailbox, which
+is work proportional to mailbox size for each SEARCH (the reason the
+pushdown exists - a stolen password can repeat `SEARCH SINCE
+1-Jan-1970` at will).
+
+`field` is `"size"` (bytes), `"internal_date"` or `"saved_date"` (epoch
+seconds), `"email_id"` or `"thread_id"`. `value` is an integer `Range`
+for the first three - inclusive or exclusive end, beginless or endless
+- or the exact id string for the last two. Returns `{ uids: [...] }`
+ascending; an unknown mailbox or field yields `{ uids: [] }`. The
+memory store compares in Ruby; the app's adapter issues one `where`
+over the `size` / `internal_date` / `created_at` / `email_object_id` /
+`thread_id` columns.
 
 ### `quota(account_id)` — optional
 

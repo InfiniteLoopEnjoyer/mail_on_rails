@@ -144,6 +144,11 @@ module MailOnRails
         @tls = @tls_material && Tls::ContextProvider.new(@tls_material, logger: StoreLogger.new(@store))
 
         active = @listeners.reject { |spec| spec[:tls] == :implicit && @tls.nil? }
+        # The ban list's first load happens here, before any accept: from
+        # then on the accept loop only reads the snapshot and the OpsSync
+        # tick keeps it fresh (see Netserv::Denylist). Fail-soft - a store
+        # error at boot means "no bans yet", retried on the first tick.
+        @denylist.refresh!
         @lifecycle.synchronize do
           @expected_listeners = active.size
           @lifecycle_cv.broadcast
@@ -317,7 +322,8 @@ module MailOnRails
       # Reloads the denylist from the store right now, bypassing its poll
       # interval - the Rails side calls this (via Runtime) after a
       # BannedIp commit, so a new ban is enforced on the very next
-      # connection rather than up to Denylist::TTL seconds later.
+      # connection rather than up to Denylist::TTL seconds (plus an ops
+      # tick) later.
       def refresh_denylist
         @denylist.refresh!
       end
@@ -454,7 +460,8 @@ module MailOnRails
           ip = peer_ip(socket, addr)
           # Admin-banned addresses (the Rails app's BannedIp) get a bare
           # close before any banner or limiter slot - a banned scanner
-          # earns silence, not a banner.
+          # earns silence, not a banner. A snapshot read: no store call
+          # and no lock on this thread (Denylist).
           if @denylist.banned?(ip)
             close_quietly(socket)
             next

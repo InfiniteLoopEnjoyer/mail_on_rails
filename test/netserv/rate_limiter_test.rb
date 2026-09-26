@@ -11,6 +11,11 @@ class RateLimiterTest < Minitest::Test
     Limiter.new(limit: limit, window: window, clock: -> { @now }, **kwargs)
   end
 
+  # Every tracked key, whichever table (within budget or tarpitted) holds it.
+  def tracked(l)
+    l.instance_variable_get(:@entries).merge(l.instance_variable_get(:@tarpitted))
+  end
+
   test "connections within the budget see no delay" do
     l = limiter
     3.times { assert_in_delta 0.0, l.delay("192.0.2.1") }
@@ -68,7 +73,7 @@ class RateLimiterTest < Minitest::Test
     l = limiter(limit: 3)
     500.times { l.delay("192.0.2.1") }
 
-    stamps = l.instance_variable_get(:@entries)["192.0.2.1"]
+    stamps = tracked(l)["192.0.2.1"]
     assert_operator stamps.size, :<=, 3 + Limiter::OVERAGE_MEMORY
     assert_in_delta 16.0, l.delay("192.0.2.1"), 0.001, "a deep flood must stay at max delay"
   end
@@ -88,14 +93,14 @@ class RateLimiterTest < Minitest::Test
     assert_in_delta 0.0, l.delay("2001:db8:1:2::2")
     assert_in_delta 1.0, l.delay("2001:db8:1:2:aaaa::3"), 0.001, "the third connection from the /64 is over budget"
     assert_in_delta 0.0, l.delay("2001:db8:1:3::1"), 0.001, "a neighbouring /64 starts fresh"
-    assert_equal [ "2001:db8:1:2::/64", "2001:db8:1:3::/64" ], l.instance_variable_get(:@entries).keys
+    assert_equal [ "2001:db8:1:3::/64", "2001:db8:1:2::/64" ], tracked(l).keys
   end
 
   test "ipv4 keys are unchanged" do
     l = limiter(limit: 1)
     l.delay("192.0.2.1")
     l.delay("::ffff:192.0.2.1")
-    assert_equal [ "192.0.2.1" ], l.instance_variable_get(:@entries).keys
+    assert_equal [ "192.0.2.1" ], tracked(l).keys
   end
 
   test "sweeps run at most once per second even while the table is large" do
@@ -125,5 +130,48 @@ class RateLimiterTest < Minitest::Test
     assert_equal Limiter::MAX_ENTRIES, entries.size
     refute entries.key?("2001:db8:0:0::/64"), "the first key seen must have been evicted"
     assert entries.key?(MailOnRails::Netserv.throttle_key("2001:db8:0:#{Limiter::MAX_ENTRIES + 99}::1"))
+  end
+
+  # The audit's scenario: one tarpitted peer, then one connection from each
+  # of 50k+ distinct /64s. LRU eviction used to reset the tarpit along
+  # with the noise; over-budget entries are pinned until they age out.
+  test "a flood of distinct single connections cannot wash out a live tarpit" do
+    l = limiter(limit: 2, window: 3600)
+    3.times { l.delay("192.0.2.1") }
+    assert_in_delta 2.0, l.delay("192.0.2.1")
+
+    (Limiter::MAX_ENTRIES + 100).times { |i| l.delay("2001:db8:#{i >> 16}:#{i & 0xffff}::1") }
+
+    assert_in_delta 4.0, l.delay("192.0.2.1"), 0.001, "the escalation must pick up where it left off"
+    assert_equal Limiter::MAX_ENTRIES, l.instance_variable_get(:@entries).size
+    assert_equal [ "192.0.2.1" ], l.instance_variable_get(:@tarpitted).keys
+  end
+
+  test "the tarpitted table is capped at MAX_ENTRIES, earliest tarpit first" do
+    l = limiter(limit: 1, window: 3600)
+    2.times { l.delay("2001:db8:0:0::1") }
+    (Limiter::MAX_ENTRIES + 10).times do |i|
+      ip = "2001:db8:#{(i + 1) >> 16}:#{(i + 1) & 0xffff}::1"
+      2.times { l.delay(ip) }
+    end
+
+    tarpitted = l.instance_variable_get(:@tarpitted)
+    assert_equal Limiter::MAX_ENTRIES, tarpitted.size
+    assert_empty l.instance_variable_get(:@entries)
+    refute tarpitted.key?("2001:db8::/64"), "the earliest tarpit is the one that goes"
+    assert tarpitted.key?(MailOnRails::Netserv.throttle_key("2001:db8:0:#{Limiter::MAX_ENTRIES + 10}::1"))
+  end
+
+  test "a tarpit that aged back within budget is unpinned by the sweep" do
+    l = limiter(limit: 1, window: 10)
+    2.times { l.delay("192.0.2.1") }
+    (Limiter::SWEEP_THRESHOLD + 1).times { |i| l.delay("10.0.#{i / 250}.#{i % 250}") }
+    assert_equal [ "192.0.2.1" ], l.instance_variable_get(:@tarpitted).keys
+
+    @now = 100.0 # every stamp aged out
+    l.delay("192.0.2.2") # sweeps
+
+    assert_empty l.instance_variable_get(:@tarpitted)
+    assert_in_delta 0.0, l.delay("192.0.2.1")
   end
 end

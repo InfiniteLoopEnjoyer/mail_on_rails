@@ -8,12 +8,15 @@
 # AuthThrottle rows.
 #
 # The sliding window is stored as fixed BUCKET_SECONDS buckets: one row
-# per (account, bucket start), incremented under a row lock. Every
-# consumer of an account in the same minute contends on the same row, so
-# the "sum the live window, then increment" step is serialized without a
-# table lock; buckets already in the past only ever get read. The window
-# sum takes the whole bucket straddling the window's start, so the cap
-# errs conservative by up to one bucket rather than lenient.
+# per (account, bucket start). A consumer locks every live bucket row of
+# the account (oldest first) before it sums them and increments its own,
+# so the "sum the live window, then increment" step is serialized without
+# a table lock - including across a bucket boundary, where two consumers
+# hold different current buckets: each has inserted its own row before it
+# locks, so their lock sets always share at least one row and one of them
+# waits. The window sum takes the whole bucket straddling the window's
+# start, so the cap errs conservative by up to one bucket rather than
+# lenient.
 #
 # Rows older than the window are pruned per account on every consume (a
 # quiet account leaves at most window/BUCKET_SECONDS rows behind);
@@ -32,10 +35,15 @@ module MailOnRails
         row = find_or_create_by!(account_key: key, window_start: bucket) { |r| r.used = 0 }
         consumed = false
         transaction do
-          # FOR UPDATE on PostgreSQL/MySQL; SQLite ignores it but its
-          # IMMEDIATE write transactions serialize this section anyway.
-          row.lock!
-          if live(key, window, now).sum(:used) < limit
+          # SELECT ... FOR UPDATE over the whole live window, in a fixed
+          # order so two consumers can never deadlock, on PostgreSQL/MySQL;
+          # SQLite ignores the FOR UPDATE but its IMMEDIATE write
+          # transactions serialize this section anyway. The sum is taken
+          # from the locked rows themselves, never from a second query.
+          rows = live(key, window, now).lock.order(:window_start, :id).to_a
+          raise ActiveRecord::RecordNotFound unless rows.any? { |r| r.id == row.id }
+
+          if rows.sum { |r| r.used.to_i } < limit
             row.increment!(:used)
             consumed = true
           end
@@ -49,7 +57,7 @@ module MailOnRails
       end
 
       # Slots consumed by +account+ inside the window (for the UI and
-      # tests; consume itself reads under the lock).
+      # tests; consume itself sums the rows it locked).
       def used(account, window:, now: Time.current)
         live(normalize(account), window, now).sum(:used)
       end

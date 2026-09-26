@@ -100,6 +100,14 @@ module MailOnRails
         @dynamic.refresh!
       end
 
+      # The DB tier's TTL pull, for a background thread to own (each
+      # listener's Netserv::OpsSync tick calls it) so that no accept or
+      # session thread ever performs the store read inline. No-op without
+      # a store.
+      def poll!
+        @dynamic.poll!
+      end
+
       # How long the DB snapshot is trusted between pulls. Test seam: app
       # suites run transactionally, where after_commit (the push half)
       # never fires - a 0 TTL makes every read see the current rows.
@@ -160,6 +168,19 @@ module MailOnRails
     # written, and an unresolvable host cannot be scanned anyway; the
     # residual is a post-validation rebinding, which needs connect-time
     # pinning this admin-only gate does not attempt.
+    #
+    # The refused space is Netserv::NON_ROUTABLE minus the ranges an
+    # accessory legitimately lives in (loopback, RFC 1918, ULA, docker
+    # bridges): the unspecified addresses, link-local, CGNAT (Alibaba's
+    # metadata service sits at 100.100.100.200), NAT64 and 6to4 (which
+    # embed an IPv4 target), multicast, and the one ULA address that is a
+    # metadata endpoint (AWS IMDSv6, fd00:ec2::254). v4-mapped spellings
+    # are unmapped first, so ::ffff:169.254.169.254 fails like the literal.
+    SCANNER_FORBIDDEN = [
+      "0.0.0.0/8", "100.64.0.0/10", "169.254.0.0/16", "224.0.0.0/3",
+      "::/128", "64:ff9b::/96", "100::/64", "2002::/16", "fd00:ec2::254/128",
+      "fe80::/10", "ff00::/8"
+    ].map { |cidr| IPAddr.new(cidr) }.freeze
     SCANNER_HOST = lambda do |host|
       raise ArgumentError, "must include a host" if host.empty?
 
@@ -175,8 +196,12 @@ module MailOnRails
           nil
         end
       end
-      if addresses.any?(&:link_local?)
-        raise ArgumentError, "must not point at link-local/metadata address space"
+      forbidden = addresses.any? do |address|
+        address = address.native if address.ipv4_mapped?
+        SCANNER_FORBIDDEN.any? { |net| net.include?(address) }
+      end
+      if forbidden
+        raise ArgumentError, "must not point at link-local/metadata/unspecified address space"
       end
     end
     SCANNER_PORT = lambda do |port|
@@ -221,6 +246,14 @@ module MailOnRails
     setting :smtp_max_conn_per_ip, type: :integer, default: 10, min: 1, env: "SMTP_MAX_CONN_PER_IP",
             scope: :dynamic, category: :smtp_limits,
             desc: "Concurrent SMTP connections allowed per peer IP (IPv6: per /64)"
+    # The per-IP caps are blind to one stolen password worked from many
+    # addresses; these bound the identity instead (Netserv::AccountLimiter,
+    # per process). A refusal over the cap is a temporary one and never
+    # counts as an authentication failure.
+    setting :smtp_max_sessions_per_account, type: :integer, default: 16, min: 1,
+            env: "SMTP_MAX_SESSIONS_PER_ACCOUNT", scope: :dynamic, category: :smtp_limits,
+            desc: "Concurrent authenticated submission sessions one account may hold per listener process; " \
+                  "a login over the cap is refused 454 (temporary) and the slot frees when the session ends"
     setting :smtp_auth_lockout_failures, type: :integer, default: 10, min: 1, env: "SMTP_AUTH_LOCKOUT_FAILURES",
             scope: :dynamic, category: :smtp_limits,
             desc: "Failed AUTHs before an IP (IPv6: a /64) is locked out"
@@ -263,6 +296,13 @@ module MailOnRails
     setting :imap_max_conn_per_ip, type: :integer, default: 10, min: 1, env: "MAIL_ON_RAILS_IMAP_MAX_CONN_PER_IP",
             scope: :dynamic, category: :imap_limits,
             desc: "Concurrent IMAP connections allowed per peer IP (IPv6: per /64)"
+    # Sized for a person, not a script: iOS opens ~5 connections per folder
+    # refresh and a desktop client caches ~5 more, times a few devices.
+    setting :imap_max_sessions_per_account, type: :integer, default: 32, min: 1,
+            env: "MAIL_ON_RAILS_IMAP_MAX_SESSIONS_PER_ACCOUNT", scope: :dynamic, category: :imap_limits,
+            desc: "Concurrent authenticated IMAP sessions one account may hold per listener process; a login " \
+                  "over the cap is refused NO [LIMIT] (the client retries, no password re-prompt) and the slot " \
+                  "frees when the session ends"
     setting :imap_auth_lockout_failures, type: :integer, default: 10, min: 1, env: "MAIL_ON_RAILS_IMAP_AUTH_LOCKOUT_FAILURES",
             scope: :dynamic, category: :imap_limits,
             desc: "Failed logins before an IP (IPv6: a /64) is locked out"
@@ -517,7 +557,11 @@ module MailOnRails
             desc: "Permanently ban the source IP of a failed SMTP/IMAP login (a banned-IP row like a manual ban: " \
                   "every listener and the web login refuse it until it is removed on the auth attempts page). " \
                   "No exceptions - your own devices included, so a stale password on your phone bans your own " \
-                  "address (default off; the temporary throttle applies either way)"
+                  "address - other than a local/private source address, which behind a proxy or a Docker bridge " \
+                  "is every client at once. An IPv6 source is banned as its whole /64, the unit providers " \
+                  "assign per customer; where a provider hands single addresses from one /64 to many " \
+                  "customers, one bad login bans all of them (default off; the temporary throttle applies " \
+                  "either way)"
     setting :auth_auto_ban_failures, type: :integer, default: 1, min: 1, env: "MAIL_ON_RAILS_AUTH_AUTO_BAN_FAILURES",
             scope: :dynamic, category: :auth_bruteforce,
             desc: "Failed logins from one IP within the window before auth_auto_ban bans it (1 = the first failure)"
@@ -581,15 +625,30 @@ module MailOnRails
     setting :honeypot_allowlist, type: :list, default: [], env: "MAIL_ON_RAILS_HONEYPOT_ALLOWLIST",
             scope: :dynamic, category: :honeypot,
             desc: "CIDRs never auto-banned by the honeypot"
+    # A stranger sets the honeypot table's growth rate (one probe line, then
+    # a session of NOOPs, is a 128 KiB row and a DNS job) - the same reason
+    # ClosedConnection and AuthAttempt roll up per address. min: 1 so the
+    # cap can never read as "off".
+    setting :honeypot_max_events_per_ip, type: :integer, default: 20, min: 1,
+            env: "MAIL_ON_RAILS_HONEYPOT_MAX_EVENTS_PER_IP",
+            scope: :dynamic, category: :honeypot,
+            desc: "Honeypot events recorded per source address (IPv6: per /64) per honeypot_cap_window; " \
+                  "further hits from that address inside the window are answered but not stored (the last " \
+                  "stored event notes that the cap was reached)"
+    setting :honeypot_cap_window, type: :integer, default: 3600, min: 60, env: "MAIL_ON_RAILS_HONEYPOT_CAP_WINDOW",
+            scope: :dynamic, category: :honeypot,
+            desc: "Window for the per-address honeypot event cap, seconds"
     setting :protocol_auto_ban, type: :boolean, default: false, env: "MAIL_ON_RAILS_PROTOCOL_AUTO_BAN",
             scope: :dynamic, category: :honeypot,
             desc: "Permanently ban the source IP of a session that speaks something other than mail at a " \
                   "listener: an HTTP request, an SSH or SIP handshake, a TLS handshake on a plaintext port, " \
                   "random binary, or an exploit-probe payload (a banned-IP row like a manual ban: every " \
                   "listener and the web login refuse it until it is removed on the auth attempts page). " \
-                  "The honeypot allowlist is the only exception - a mail client set to the wrong port or " \
-                  "security type bans your own address too (default off; hits are recorded on the honeypot " \
-                  "page either way)"
+                  "A mail client set to the wrong port or security type bans your own address too; the only " \
+                  "exceptions are the honeypot allowlist, a local/private source address (behind a proxy it is " \
+                  "everyone), and an address that logged in or delivered mail within honeypot_collateral_days " \
+                  "- a relay forwarding a message whose recipient merely looks like an exploit must not be " \
+                  "banned (default off; hits are recorded on the honeypot page either way)"
     setting :idle_auto_ban, type: :boolean, default: false, env: "MAIL_ON_RAILS_IDLE_AUTO_BAN",
             scope: :dynamic, category: :honeypot,
             desc: "Permanently ban an address that keeps connecting to the mail ports without ever doing " \

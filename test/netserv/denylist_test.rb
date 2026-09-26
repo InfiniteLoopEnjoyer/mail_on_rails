@@ -11,23 +11,27 @@ class DenylistTest < Minitest::Test
   # returns an error hash then).
   class FakeStore
     attr_accessor :cidrs
+    attr_reader :reads
 
     def initialize(cidrs = [])
       @cidrs = cidrs
+      @reads = 0
     end
 
     def banned_cidrs
+      @reads += 1
       raise @cidrs if @cidrs.is_a?(Class) && @cidrs <= StandardError
 
       @cidrs
     end
   end
 
-  # ttl 0 re-reads the store on every call, so tests never wait out the
-  # throttle.
+  # ttl 0 re-reads the store on every pull, so tests never wait out the
+  # throttle. Loaded once up front, the way Server#run does before its
+  # first accept.
   def denylist(cidrs = [], ttl: 0)
     @store = FakeStore.new(cidrs)
-    MailOnRails::Netserv::Denylist.new(@store, ttl: ttl)
+    MailOnRails::Netserv::Denylist.new(@store, ttl: ttl).tap(&:refresh!)
   end
 
   test "disabled against a store without a ban list" do
@@ -79,13 +83,40 @@ class DenylistTest < Minitest::Test
     assert_not list.banned?("?")
   end
 
-  test "picks up store changes" do
+  test "pull picks up store changes" do
     list = denylist(%w[203.0.113.7])
     assert list.banned?("203.0.113.7")
 
     @store.cidrs = %w[192.0.2.1]
+    assert list.pull
     assert_not list.banned?("203.0.113.7")
     assert list.banned?("192.0.2.1")
+  end
+
+  # The accept-path contract: banned? is a snapshot read. However stale
+  # the snapshot, the store is never asked on that call and no lock is
+  # taken - a slow database delays a ban, never a banner.
+  test "banned? never reads the store, even once the ttl has lapsed" do
+    list = denylist(%w[203.0.113.7]) # ttl 0: every pull is due
+    reads = @store.reads
+    @store.cidrs = %w[192.0.2.1]
+
+    assert list.banned?("203.0.113.7"), "the snapshot keeps serving"
+    assert_not list.banned?("192.0.2.1")
+    assert_equal reads, @store.reads, "no store call on the accept path"
+
+    mutex = list.instance_variable_get(:@mutex)
+    mutex.synchronize { assert list.banned?("203.0.113.7"), "no lock either: this would deadlock" }
+  end
+
+  test "a fresh list serves no bans until its first load" do
+    store = FakeStore.new(%w[203.0.113.7])
+    list = MailOnRails::Netserv::Denylist.new(store, ttl: 0)
+
+    assert_not list.banned?("203.0.113.7")
+    assert_equal 0, store.reads
+    list.refresh!
+    assert list.banned?("203.0.113.7")
   end
 
   test "the store read is throttled to the ttl" do
@@ -93,7 +124,9 @@ class DenylistTest < Minitest::Test
     assert list.banned?("203.0.113.7")
 
     @store.cidrs = %w[192.0.2.1]
-    # Within the ttl the old list keeps serving; no store read, no reload.
+    # Within the ttl a pull is a no-op; the old list keeps serving.
+    assert_not list.pull
+    assert_equal 1, @store.reads
     assert list.banned?("203.0.113.7")
     assert_not list.banned?("192.0.2.1")
   end
@@ -113,13 +146,16 @@ class DenylistTest < Minitest::Test
     assert list.banned?("203.0.113.7")
 
     @store.cidrs = RuntimeError
+    list.pull
     assert list.banned?("203.0.113.7")
 
     # Store::Base#db reports errors as a hash rather than raising.
     @store.cidrs = { error: "boom", code: :internal }
+    list.pull
     assert list.banned?("203.0.113.7")
 
     @store.cidrs = []
+    list.pull
     assert_not list.banned?("203.0.113.7")
   end
 end

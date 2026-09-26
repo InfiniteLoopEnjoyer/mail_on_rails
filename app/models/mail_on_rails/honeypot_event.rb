@@ -4,14 +4,20 @@
 # any listener (an Exim ${run{...} substitution, a shellshock preamble, VRFY
 # root, ...), another protocol spoken at a mail port (an HTTP request line, an
 # SSH banner, a TLS ClientHello on a plaintext port), or garbage bytes no mail
-# command contains. All are hostile, so unlike AuthAttempt/ClosedConnection
-# this table needs no rollup - every row is signal.
+# command contains. All are hostile, so every row is signal - but a stranger
+# still sets the growth rate (one probe line and then a session of NOOPs is
+# a 128 KiB transcript and a DNS job, per connection, all day), so like
+# AuthAttempt and ClosedConnection the table is capped per source: past
+# honeypot_max_events_per_ip hits from one address (IPv6: one /64) inside
+# honeypot_cap_window, further hits are answered by the session as before
+# but not stored, and the last stored row says so in its response.
 #
 # Written from the protocol sessions' honeypot path through
 # Store::Base#record_honeypot_event (best-effort, respond_to?-guarded like
 # record_closed_connection). Creating a row triggers a graduated,
-# multi-tenant-safe response (apply_response) and enqueues DNS enrichment off
-# the connection thread.
+# multi-tenant-safe response (apply_response) and fills in DNS attribution -
+# from the IpEnrichment cache when it already knows the address, otherwise
+# through a job off the connection thread.
 #
 # By default the response is never an automatic permanent ban - on a shared
 # server a permanent IP block is collateral damage waiting to happen (CGNAT,
@@ -29,10 +35,13 @@
 #
 # An operator who would rather not review scanner noise switches
 # protocol_auto_ban on: the three probe-type triggers then write the same
-# permanent BannedIp a failed login does under auth_auto_ban, and like that
-# setting it deliberately skips the shared-address check - the honeypot
-# allowlist is the only exception. The action taken is stored in `response`
-# so the dashboard is honest about what happened.
+# permanent BannedIp a failed login does under auth_auto_ban. The exceptions
+# are the honeypot allowlist and BannedIp.probe_ban_exemption - a local
+# address (behind a proxy it is everyone) or one that logged in or delivered
+# mail lately: a probe signature is a regex, and a third party's MX relaying
+# a message to an RFC-legal but exploit-shaped quoted local-part matches it
+# too. The action taken is stored in `response` so the dashboard is honest
+# about what happened.
 #
 # The transcript is the full redacted wire dialogue of the session. Passwords -
 # the canary's own and anything the attacker typed - are redacted at the tap,
@@ -46,6 +55,9 @@ module MailOnRails
     # The triggers protocol_auto_ban acts on: everything but a canary login.
     PROBE_TRIGGERS = (TRIGGERS - %w[canary_auth]).freeze
     PROTOCOLS = %w[smtp imap].freeze
+    # Appended to the response of the last row stored for a source inside
+    # a capped window, so the dashboard shows where the record stops.
+    CAP_MARKER = "(cap reached: later hits this window not stored)"
 
     scope :recent, ->(since) { where(occurred_at: since..) }
 
@@ -67,6 +79,11 @@ module MailOnRails
 
       # Whether probe-type hits ban their source permanently.
       def protocol_auto_ban? = MailOnRails::Settings[:protocol_auto_ban]
+
+      # Rows one source may insert per cap window before its further hits
+      # go unrecorded, and that window.
+      def max_events_per_ip = MailOnRails::Settings[:honeypot_max_events_per_ip]
+      def cap_window = MailOnRails::Settings[:honeypot_cap_window]
 
       # Never-touch source addresses (own monitoring, health checks, known
       # relays): comma/space-separated CIDRs.
@@ -103,23 +120,75 @@ module MailOnRails
         scope.where(ip: ip).or(scope.where(throttle_key: Netserv.throttle_key(ip))).exists?
       end
 
-      # Records one honeypot hit from the payload the session assembles. Never
-      # raises: this runs on a live connection thread, and losing an intel row
-      # is always better than disturbing the session.
+      # Records one honeypot hit from the payload the session assembles, or
+      # nothing once the source is past its cap (the session then has no
+      # event id, so its teardown transcript flush is skipped too). Never
+      # raises: this runs on a live connection thread, and losing an intel
+      # row is always better than disturbing the session.
       def record(info)
         info = info.symbolize_keys
+        ip = Netserv.canonical_ip(info[:ip].presence)
+        now = info[:occurred_at] || Time.current
+        return note_cap_reached(ip, now) unless under_cap?(ip, now)
+
         create!(protocol: info[:protocol].to_s, trigger: info[:trigger].to_s,
-                signature: info[:signature].presence, ip: info[:ip].presence,
+                signature: info[:signature].presence, ip: ip,
                 port: info[:port], username: info[:username].presence,
                 helo: info[:helo].presence, transcript: info[:transcript].to_s,
-                occurred_at: info[:occurred_at] || Time.current)
+                occurred_at: now)
       rescue StandardError => e
         Rails.logger.error("[mail_on_rails] honeypot event failed: #{e.class}: #{e.message}")
         nil
       end
 
+      # Whether +ip+ may still store a row in the cap window ending at +now+.
+      def under_cap?(ip, now)
+        return true if ip.blank?
+
+        cap_scope(ip).where(occurred_at: (now - cap_window)..now).count < max_events_per_ip
+      end
+
+      # The rows that count toward +ip+'s cap. IPv4: the address. IPv6:
+      # the /64, like every other per-source control - but this table
+      # stores only the full address, so the /64 is matched on the
+      # address's canonical spelling: the network's leading non-zero
+      # groups are printed verbatim in every member's compressed form
+      # (compression only ever swallows zero groups), so a LIKE on that
+      # prefix finds them all. A network whose prefix contains a zero
+      # group gets a coarser prefix and so counts its neighbourhood in
+      # with itself; that only makes the cap bite sooner, never later.
+      def cap_scope(ip)
+        addr = IPAddr.new(ip.to_s)
+        addr = addr.native if addr.ipv4_mapped?
+        return where(ip: addr.to_s) if addr.ipv4?
+
+        groups = addr.mask(64).to_string.split(":").first(4)
+        leading = groups.take_while { |group| group != "0000" }.map { |group| group.to_i(16).to_s(16) }
+        prefix = leading.empty? ? "" : "#{leading.join(':')}:"
+        where(arel_table[:ip].matches("#{sanitize_sql_like(prefix)}%", nil, true))
+      rescue IPAddr::Error
+        where(ip: ip.to_s)
+      end
+
       def prune!(now: Time.current)
         where(occurred_at: ...(now - retention_days.days)).delete_all
+      end
+
+      private
+
+      # Past the cap: nothing is stored, but the newest row the source did
+      # get in this window carries the marker once, so the dashboard shows
+      # the record stopped rather than the source going quiet. One read
+      # per suppressed hit, one write per window.
+      def note_cap_reached(ip, now)
+        row = cap_scope(ip).where(occurred_at: (now - cap_window)..now)
+                           .order(occurred_at: :desc, id: :desc).select(:id, :ip, :response).first
+        return nil if row.nil? || row.response.to_s.include?(CAP_MARKER)
+
+        row.update_column(:response, "#{row.response} #{CAP_MARKER}".strip)
+        Rails.logger.info("[mail_on_rails] honeypot events from #{Netserv.throttle_key(ip)} capped at " \
+                          "#{max_events_per_ip} per #{cap_window}s; further hits are not stored")
+        nil
       end
     end
 
@@ -149,10 +218,14 @@ module MailOnRails
 
     # Probes are observe-only unless protocol_auto_ban is on: too much
     # false-positive/collateral risk to act on a regex automatically without
-    # the operator having chosen it. Once chosen, no shared-address check -
-    # the same "anyone, my own devices included" stance as auth_auto_ban.
+    # the operator having chosen it. Once chosen, the collateral checks
+    # BannedIp.probe_ban_exemption makes (local or working address) still
+    # hold - the response names the reason so the dashboard is honest.
     def probe_response
       return "observed" unless self.class.protocol_auto_ban?
+      if (reason = MailOnRails::BannedIp.probe_ban_exemption(ip, now: occurred_at || Time.current))
+        return "observed (#{reason})"
+      end
 
       if (row = MailOnRails::BannedIp.auto_ban_for_probe(ip: ip, protocol: protocol, trigger: trigger,
                                                           signature: signature))
@@ -164,8 +237,18 @@ module MailOnRails
       end
     end
 
+    # Attribution from the IpEnrichment cache when it is fresh (one indexed
+    # read; a scanner's second hit costs no DNS at all), otherwise a job.
     def enqueue_enrichment
-      HoneypotEnrichmentJob.perform_later(id) if ip.present?
+      return if ip.blank?
+
+      if (cached = IpEnrichment.cached(ip))
+        update_column(:enrichment, cached)
+      else
+        HoneypotEnrichmentJob.perform_later(id)
+      end
+    rescue StandardError => e
+      Rails.logger.error("[mail_on_rails] honeypot enrichment failed: #{e.class}: #{e.message}")
     end
   end
 end

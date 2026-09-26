@@ -91,6 +91,31 @@ class AutoBanTest < DbSuite::TestCase
     assert_nil MailOnRails::BannedIp.covering("2001:db8:1:3::7")
   end
 
+  # L9: behind a userland proxy, a TCP load balancer without proxy protocol
+  # or a Docker bridge without ip6tables, every client is the gateway
+  # address; one stale password must not ban them all. Loud, so the
+  # operator learns their listener sits behind such a hop.
+  test "a local source address is never banned, loudly" do
+    enable
+    log = StringIO.new
+    logger_before = MailOnRails.logger
+    MailOnRails.logger = Logger.new(log)
+    begin
+      [ "172.18.0.1", "127.0.0.1", "10.0.0.4", "fd46:7ac3:4fd7::1", "::ffff:192.168.1.9", "169.254.10.1" ].each do |ip|
+        fail_login(ip: ip)
+        store.record_auth_failure("bob@example.test", ip: ip, source: "smtp")
+      end
+    ensure
+      MailOnRails.logger = logger_before
+    end
+
+    assert_empty bans
+    assert MailOnRails::AuthThrottle.ip_failures("172.18.0.1").positive?, "still throttled"
+    assert MailOnRails::AuthAttempt.where(outcome: "bad_credentials").exists?, "still logged"
+    assert_match(/refusing to auto-ban local address 172\.18\.0\.1 \(auth_failure: auto: failed imap login/, log.string)
+    assert_match(/every client/, log.string)
+  end
+
   test "no source address, no ban" do
     enable
     fail_login(ip: nil)

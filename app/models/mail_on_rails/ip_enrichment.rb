@@ -39,6 +39,24 @@ module MailOnRails
         where(updated_at: ...(now - 30.days)).delete_all
       end
 
+      # The cached attribution for +ip+ while it is fresh, else nil - for
+      # writers that would otherwise resolve the address themselves
+      # (HoneypotEvent, its job).
+      def cached(ip)
+        row = find_by(ip: ip)
+        row.enrichment.presence if row && !needs_lookup?(row)
+      end
+
+      # Files a lookup another path just paid for, so the pages and later
+      # honeypot hits from the same address read it from here. Losing the
+      # create race just means the other writer's row is the one updated.
+      def remember(ip, enrichment)
+        row = find_or_create_by!(ip: ip)
+        row.update_columns(enrichment: enrichment, looked_up_at: Time.current, updated_at: Time.current)
+      rescue ActiveRecord::RecordNotUnique, ActiveRecord::RecordInvalid
+        retry
+      end
+
       private
 
       def needs_lookup?(row)

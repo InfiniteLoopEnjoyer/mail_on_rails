@@ -49,7 +49,14 @@ module MailOnRails
       rescue TempError, Dns::TempError
         { result: :temperror, domain: domain }
       rescue IPAddr::InvalidAddressError
+        # Before ArgumentError: it is a subclass, and an unparseable client
+        # IP is "nothing to check", not a broken record.
         { result: :none, domain: domain }
+      rescue ArgumentError, RangeError
+        # The record's own fault (a term or macro the parser choked on) is a
+        # permerror by definition; the evaluator owns that verdict rather
+        # than leaving it to the verifier's blanket rescue.
+        { result: :permerror, domain: domain }
       end
 
       private
@@ -192,6 +199,12 @@ module MailOnRails
         result
       end
 
+      # RFC 7208 7.3: the DIGIT transformer must be nonzero, and a domain
+      # name has at most 127 labels, so implementations need support no
+      # more than 128. Anything past that is a broken record (permerror),
+      # not a bignum for Array#last to choke on.
+      MAX_MACRO_DIGITS = 128
+
       # RFC 7208 7: macro expansion for domain-specs. %{p} is expanded as
       # "unknown" without doing PTR lookups (permitted, and its use is
       # discouraged anyway).
@@ -206,13 +219,21 @@ module MailOnRails
             value = macro_value(letter.downcase, domain)
             parts = value.split(/[#{Regexp.escape(delims.empty? ? "." : delims)}]/)
             parts.reverse! unless reverse.empty?
-            parts = parts.last(Integer(digits)) unless digits.empty?
+            parts = parts.last(macro_digits(digits)) unless digits.empty?
             expanded = parts.join(".")
             letter == letter.upcase ? url_escape(expanded) : expanded
           end
         end.tap do |result|
           raise PermError, "empty domain-spec" if result.empty?
         end
+      end
+
+      def macro_digits(digits)
+        # Length first: a 20-digit field must never reach Integer().
+        count = digits.length <= MAX_MACRO_DIGITS.to_s.length ? Integer(digits, 10) : nil
+        raise PermError, "macro digit transformer out of range: #{digits}" unless count&.between?(1, MAX_MACRO_DIGITS)
+
+        count
       end
 
       def macro_value(letter, domain)

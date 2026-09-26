@@ -43,7 +43,7 @@ class OpsSyncTest < Minitest::Test
 
   class RecordingStore
     attr_reader :calls, :logs
-    attr_accessor :kicks, :banned, :raise_on
+    attr_accessor :kicks, :banned, :raise_on, :sync_error
 
     def initialize
       @calls = []
@@ -51,16 +51,20 @@ class OpsSyncTest < Minitest::Test
       @kicks = []
       @banned = []
       @raise_on = nil
+      @sync_error = -> { "db down" }
     end
 
     def log(level, message)
       @logs << [ level, message ]
     end
 
-    def banned_cidrs = @banned
+    def banned_cidrs
+      @calls << [ :banned_cidrs ]
+      @banned
+    end
 
     def sync_ops_state(listener:, connections: nil, lockouts: nil)
-      raise "db down" if @raise_on == :sync
+      raise @sync_error.call if @raise_on == :sync
 
       @calls << [ :sync, listener, connections, lockouts ]
       {}
@@ -207,6 +211,36 @@ class OpsSyncTest < Minitest::Test
     assert(@store.logs.any? { |_, m| m.include?("dropped 1 connection") })
   end
 
+  # The tick is what keeps the accept path's snapshots fresh: the denylist
+  # is pulled from the store here (never on an accept), and the settings
+  # DB tier is polled here so no limit lambda ever pulls inline.
+  test "the tick pulls the denylist and polls the settings store on their ttls" do
+    @server.denylist = MailOnRails::Netserv::Denylist.new(@store, ttl: 0)
+    @server.connections = [ { connection_id: 1, peer_ip: "203.0.113.9" } ]
+    @sync.tick
+    reads = @store.calls.count { |c| c.first == :banned_cidrs }
+    assert_equal 1, reads
+    assert_empty @server.kicked
+
+    @store.banned = [ "203.0.113.9" ]
+    assert_not @server.denylist.banned?("203.0.113.9"), "a new row is invisible until the tick pulls it"
+    @sync.tick
+    assert_equal [ "203.0.113.9" ], @server.kicked
+
+    pulls = 0
+    MailOnRails::Settings.store = -> { pulls += 1; { "smtp_max_conn" => "9" } }
+    begin
+      MailOnRails::Settings.cache_ttl = 600
+      @sync.tick
+      assert_equal 1, pulls
+      assert_equal 9, MailOnRails::Settings[:smtp_max_conn]
+      @sync.tick
+      assert_equal 1, pulls, "within the ttl the tick's poll is a no-op"
+    ensure
+      MailOnRails::Settings.reset!
+    end
+  end
+
   test "every tick sweeps stale listeners" do
     @sync.tick
     assert_includes @store.calls, [ :prune, 30 ]
@@ -220,6 +254,19 @@ class OpsSyncTest < Minitest::Test
     assert(@store.calls.any? { |c| c.first == :ack_kick }, "kicks still processed")
     warnings = @store.logs.select { |level, m| level == :warn && m.include?("ops sync sync failed") }
     assert_equal 1, warnings.size, "one warning for a repeating failure"
+  end
+
+  # A message that changes every tick (a timestamp, a row id, peer bytes)
+  # must neither re-log nor grow the seen-set: the key is step + class.
+  test "a failure whose message changes every tick still warns once" do
+    @store.raise_on = :sync
+    tick = 0
+    @store.sync_error = -> { "db down at #{tick += 1}" }
+    5.times { @sync.tick }
+
+    warnings = @store.logs.select { |level, m| level == :warn && m.include?("ops sync sync failed") }
+    assert_equal 1, warnings.size
+    assert_equal 1, @sync.instance_variable_get(:@warned).size
   end
 
   test "a store without the ops methods still gets change detection and the hook" do

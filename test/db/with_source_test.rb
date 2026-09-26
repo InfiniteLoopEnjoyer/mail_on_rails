@@ -21,6 +21,11 @@ class WithSourceTest < Minitest::Test
       {}
     end
 
+    def scram_credentials(email, ip: nil, source: nil)
+      @calls << [ :scram_credentials, email, ip, source ]
+      { account_id: nil, email: email }
+    end
+
     def log(level, message) = @calls << [ :log, level, message ]
 
     def select_mailbox(account_id, name) = @calls << [ :select_mailbox, account_id, name ]
@@ -49,6 +54,40 @@ class WithSourceTest < Minitest::Test
     @store.record_auth_failure("a@b.test", ip: "10.0.0.1")
 
     assert_equal [ :record_auth_failure, "a@b.test", "10.0.0.1", "imap" ], @backend.calls.last
+  end
+
+  # A throttled SCRAM lookup is refused inside scram_credentials, so that
+  # is where its attempt-log row has to get its surface from.
+  test "scram_credentials gains the default source, and an explicit one wins" do
+    @store.scram_credentials("a@b.test", ip: "10.0.0.1")
+    assert_equal [ :scram_credentials, "a@b.test", "10.0.0.1", "imap" ], @backend.calls.last
+
+    @store.scram_credentials("a@b.test", ip: "10.0.0.1", source: "smtp")
+    assert_equal [ :scram_credentials, "a@b.test", "10.0.0.1", "smtp" ], @backend.calls.last
+  end
+
+  # The protocol gems' memory stores predate the keyword.
+  test "a backend whose scram_credentials takes no source is called the old way" do
+    legacy = Class.new do
+      attr_reader :calls
+      def initialize = @calls = []
+      def scram_credentials(email, ip: nil) = @calls << [ email, ip ]
+    end.new
+    wrapped = MailOnRails::Store::WithSource.new(legacy, "imap")
+
+    wrapped.scram_credentials("a@b.test", ip: "10.0.0.1")
+    assert_equal [ [ "a@b.test", "10.0.0.1" ] ], legacy.calls
+  end
+
+  test "the Active Record backend logs a throttled SCRAM lookup under the wrapper's source" do
+    wrapped = MailOnRails::Store::WithSource.new(MailOnRails::Store::Base.new, "smtp")
+    MailOnRails::AuthThrottle.block_ip!("203.0.113.9", seconds: 600)
+
+    result = wrapped.scram_credentials("bob@example.test", ip: "203.0.113.9")
+
+    assert result[:throttled]
+    row = MailOnRails::AuthAttempt.where(outcome: "throttled").sole
+    assert_equal [ "smtp", "203.0.113.9", "bob@example.test" ], [ row.source, row.ip, row.username ]
   end
 
   test "other contract methods delegate untouched" do

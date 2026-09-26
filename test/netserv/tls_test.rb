@@ -68,3 +68,19 @@ class TlsKeyPermissionsTest < Minitest::Test
     assert Tls::ContextProvider.new({ cert_path: @cert, key_path: @key }).context
   end
 end
+
+# The listener context's resumption posture: no stateless tickets under a
+# never-rotated key; resumption runs through the server-side session cache.
+class TlsContextOptionsTest < Minitest::Test
+  Tls = MailOnRails::Netserv::Tls
+
+  test "session tickets are off and the session cache is on" do
+    ctx = Tls.context(Tls.generate_self_signed([ "localhost" ]))
+
+    assert_equal OpenSSL::SSL::OP_NO_TICKET, ctx.options & OpenSSL::SSL::OP_NO_TICKET
+    assert_equal OpenSSL::SSL::OP_NO_RENEGOTIATION, ctx.options & OpenSSL::SSL::OP_NO_RENEGOTIATION
+    assert_equal OpenSSL::SSL::SSLContext::SESSION_CACHE_SERVER,
+                 ctx.session_cache_mode & OpenSSL::SSL::SSLContext::SESSION_CACHE_SERVER
+    assert_equal "mail_on_rails", ctx.session_id_context
+  end
+end
