@@ -721,7 +721,7 @@ module MailOnRails
       return data if sender.empty?
 
       # The envelope sender may be an alias of the flagged account.
-      account = EmailAccount.find_by(email: sender) || EmailAlias.find_by(email: sender)&.email_account
+      account = EmailAccount.find_by(email: sender) || EmailAlias.exact.find_by(email: sender)&.email_account
       return data unless account&.mailing_list?
 
       headers = data.partition("\r\n\r\n").first.split(/\r\n(?![ \t])/)

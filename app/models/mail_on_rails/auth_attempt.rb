@@ -143,7 +143,10 @@ module MailOnRails
       end
 
       # "Real" means an address mail would actually be accepted for (an
-      # account or an alias), or - on the web surface - a login that exists.
+      # account or an exact alias), or - on the web surface - a login that
+      # exists. Pattern aliases are left out on purpose: under a catch-all
+      # every guessed login would read as real and the targeted-attack
+      # signal would mean nothing.
       def account_exists?(username, source)
         name = normalize(username)
         return false if name.blank?
@@ -153,7 +156,7 @@ module MailOnRails
           # logins are real via config.mail_on_rails.web_login_lookup.
           !!MailOnRails.web_login_lookup&.call(name)
         else
-          EmailAccount.exists?(email: name) || EmailAlias.exists?(email: name)
+          EmailAccount.exists?(email: name) || EmailAlias.exact.exists?(email: name)
         end
       end
 

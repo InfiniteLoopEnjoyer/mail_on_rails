@@ -144,13 +144,15 @@ module MailOnRails
       Rails.logger.error "[mail_on_rails] vacation responder failed for #{account.email}: #{e.class}: #{e.message}"
     end
 
-    # A recipient address is either an account's own address, one of its
-    # aliases (the two sets are kept disjoint by model validations), or a
-    # signed VERP bounce+ sub-address, which delivers into the domain's
-    # bounce@ account (whose address then routes IngestBounceJob).
+    # A recipient address is, in this order: an account's own address, one
+    # of its exact aliases (the two sets are kept disjoint by model
+    # validations), a signed VERP bounce+ sub-address (delivering into the
+    # domain's bounce@ account, whose address then routes IngestBounceJob),
+    # or the oldest pattern alias matching it. Patterns come last so a
+    # catch-all can never shadow a system address or a VERP return path.
     def resolve_account(address)
-      EmailAccount.find_by(email: address) || EmailAlias.find_by(email: address)&.email_account ||
-        verp_account(address)
+      EmailAccount.find_by(email: address) || EmailAlias.exact.find_by(email: address)&.email_account ||
+        verp_account(address) || EmailAlias.account_for_pattern(address)
     end
 
     def verp_account(address)

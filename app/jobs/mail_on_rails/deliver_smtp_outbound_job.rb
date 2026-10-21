@@ -161,7 +161,7 @@ module MailOnRails
       # The envelope sender may be an alias of the authoring account
       # (send-as-alias); either way the DSN belongs in that account.
       address = message.mail_from.to_s.downcase
-      account = EmailAccount.find_by(email: address) || EmailAlias.find_by(email: address)&.email_account
+      account = EmailAccount.find_by(email: address) || EmailAlias.exact.find_by(email: address)&.email_account
       return unless account
 
       notice = yield

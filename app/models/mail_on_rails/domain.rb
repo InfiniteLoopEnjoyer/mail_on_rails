@@ -312,12 +312,12 @@ module MailOnRails
     # alias's account instead of colliding with it.
     def ensure_postmaster_account!
       account = EmailAccount.find_by(email: postmaster_address) ||
-                EmailAlias.find_by(email: postmaster_address)&.email_account ||
+                EmailAlias.exact.find_by(email: postmaster_address)&.email_account ||
                 EmailAccount.create!(email: postmaster_address, name: "Postmaster", password: EmailAccount.generate_password)
       operational = [ POSTMASTER_LOCAL_PART, ABUSE_LOCAL_PART, MAILER_DAEMON_LOCAL_PART ]
       aliases = [ abuse_address, mailer_daemon_address ] + operational.map { |local| "#{local}@#{mail_host_name}" }
       aliases.each do |address|
-        unless EmailAccount.exists?(email: address) || EmailAlias.exists?(email: address)
+        unless EmailAccount.exists?(email: address) || EmailAlias.exact.exists?(email: address)
           EmailAlias.create!(email: address, email_account: account)
         end
       end
@@ -331,7 +331,7 @@ module MailOnRails
     def ensure_fbl_account!
       account = EmailAccount.find_by(email: fbl_address) ||
                 EmailAccount.create!(email: fbl_address, name: "Complaint reports", password: EmailAccount.generate_password)
-      unless EmailAccount.exists?(email: jmrp_address) || EmailAlias.exists?(email: jmrp_address)
+      unless EmailAccount.exists?(email: jmrp_address) || EmailAlias.exact.exists?(email: jmrp_address)
         EmailAlias.create!(email: jmrp_address, email_account: account)
       end
       account
@@ -342,7 +342,7 @@ module MailOnRails
     # alone when the address is already taken.
     def ensure_unsubscribe_account!
       EmailAccount.find_by(email: unsubscribe_address) ||
-        EmailAlias.find_by(email: unsubscribe_address)&.email_account ||
+        EmailAlias.exact.find_by(email: unsubscribe_address)&.email_account ||
         EmailAccount.create!(email: unsubscribe_address, name: "Unsubscribe requests",
                              password: EmailAccount.generate_password)
     end
@@ -351,7 +351,7 @@ module MailOnRails
     # raw DSNs stay inspectable here), and its address routes ingestion.
     def ensure_bounce_account!
       EmailAccount.find_by(email: bounce_address) ||
-        EmailAlias.find_by(email: bounce_address)&.email_account ||
+        EmailAlias.exact.find_by(email: bounce_address)&.email_account ||
         EmailAccount.create!(email: bounce_address, name: "Bounce processing (VERP)",
                              password: EmailAccount.generate_password)
     end

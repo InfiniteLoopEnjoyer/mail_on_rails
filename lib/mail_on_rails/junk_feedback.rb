@@ -61,7 +61,7 @@ module MailOnRails
     def record_rule(account, from_address, verdict, source)
       address = SenderRule.normalize_value_for(:address, from_address)
       return if address.blank? || !address.match?(SenderRule::ADDRESS)
-      return if address == account.email || account.email_aliases.exists?(email: address)
+      return if address == account.email || account.email_aliases.exact.exists?(email: address)
 
       SenderRule.record!(account, address, verdict, source: source)
     end

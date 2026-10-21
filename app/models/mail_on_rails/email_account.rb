@@ -43,6 +43,17 @@ module MailOnRails
     scope :honeypots, -> { where(honeypot: true) }
     scope :real, -> { where(honeypot: false) }
 
+    # The account that receives mail addressed to +address+ (already
+    # normalized: stripped, downcased, A-label domain), or nil: the
+    # account's own address, an exact alias, else the oldest matching
+    # pattern alias (EmailAlias.account_for_pattern). Signed VERP bounce+
+    # sub-addresses are the callers' concern (mailroom and SMTP store),
+    # checked between exact aliases and patterns.
+    def self.for_address(address)
+      find_by(email: address) || EmailAlias.exact.find_by(email: address)&.email_account ||
+        EmailAlias.account_for_pattern(address)
+    end
+
     after_create :create_default_mailboxes
 
     # -- storage quota -----------------------------------------------------------
@@ -137,7 +148,7 @@ module MailOnRails
     # an account or an alias, never both. Own aliases count too: renaming an
     # account onto one of its aliases would shadow that alias forever.
     def email_not_an_alias_address
-      errors.add(:email, "is already in use as an alias") if email.present? && EmailAlias.exists?(email: email)
+      errors.add(:email, "is already in use as an alias") if email.present? && EmailAlias.exact.exists?(email: email)
     end
 
     def vacation_dates_ordered

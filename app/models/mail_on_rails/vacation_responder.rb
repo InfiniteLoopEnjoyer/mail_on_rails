@@ -88,14 +88,12 @@ module MailOnRails
 
     def own_address?(account, address)
       normalized = address.to_s.strip.downcase
-      account.email == normalized || account.email_aliases.exists?(email: normalized)
+      account.email == normalized || account.email_aliases.exact.exists?(email: normalized) ||
+        EmailAlias.account_for_pattern(normalized) == account
     end
 
     def local_inbox(recipient)
-      address = recipient.to_s.downcase
-      local = EmailAccount.find_by(email: address) ||
-              EmailAlias.find_by(email: address)&.email_account
-      local&.inbox
+      EmailAccount.for_address(recipient.to_s.downcase)&.inbox
     end
 
     def build_reply(account, original, recipient)
