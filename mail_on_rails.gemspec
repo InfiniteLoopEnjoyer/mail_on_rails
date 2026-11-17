@@ -68,8 +68,12 @@ Gem::Specification.new do |spec|
   # stub resolver built on dnsruby's codec and RRSIG verification, plus
   # our patches (NSEC3/NSEC denial proofs, Ed25519/Ed448, wildcard
   # verification) until they land upstream. The outbound DANE path
-  # validates with this - no external resolver is trusted.
-  spec.add_dependency "dnsruby", ">= 1.74"
+  # validates with this - no external resolver is trusted. Capped below
+  # 2: dnsruby 2.0 rewrote the verifier those patches hook into (and
+  # ships its own EdDSA and validation budgets), and under it every
+  # chain here comes out :bogus. Lift the cap by porting the dnssec
+  # directory to 2.x, not by loosening the pin.
+  spec.add_dependency "dnsruby", ">= 1.74", "< 2"
 
   # The ICANN Public Suffix List, for DMARC organizational-domain
   # computation (relaxed alignment, aggregate-report grouping). Loaded
@@ -86,7 +90,7 @@ Gem::Specification.new do |spec|
   # (daemons, netserv) raises LoadError under bundler unless declared.
   spec.add_dependency "logger"
 
-  # The json default gem shipped with ruby 4.0.7 (2.18.0) carries
+  # The json default gem shipped with ruby 4.0.9 (2.18.0) carries
   # CVE-2026-33210; the fixed floor has to be declared here so standalone
   # (non-Rails-app) processes resolve a safe version. Capped below 3:
   # json 3.0 made JSON.parse's options keyword-only, and Active Support
