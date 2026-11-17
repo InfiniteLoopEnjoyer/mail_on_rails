@@ -4,8 +4,9 @@
 # keys (RSA-SHA256, ECDSA P-256, Ed25519), publishes them as DNSKEY/DS
 # records, and signs RRsets with genuine signatures - so the resolver
 # tests exercise the same cryptography as production, just under a test
-# trust anchor. Signing mirrors verify_rrset's canonical construction
-# (RFC 4034 section 3.1.8.1).
+# trust anchor. The signed data is assembled here from whole canonical
+# RRs (RFC 4034 section 3.1.8.1), independently of Signature's own
+# construction, so the two check each other.
 class TestZone
   ALG_RSASHA256 = 8
   ALG_ECDSAP256 = 13

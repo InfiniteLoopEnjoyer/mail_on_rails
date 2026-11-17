@@ -5,7 +5,7 @@ require "test_helper"
 # Plain-NSEC denial proofs (RFC 4035), including the minimal-response
 # shapes Cloudflare-style "black lies" responders produce.
 class NsecProofTest < Minitest::Test
-  Proof = Dnsruby::NsecProof
+  Proof = MailOnRails::Dnssec::NsecProof
 
   # A small example. zone: apex -> a -> c -> x.w -> *.z (canonical order:
   # example, a, c, x.w, *.z... wildcards sort as a literal "*" label).
@@ -71,6 +71,24 @@ class NsecProofTest < Minitest::Test
     assert_nil Proof.no_data(Dnsruby::Name.create("sub.example."), Dnsruby::Types.MX, delegation)
     result = Proof.no_data(Dnsruby::Name.create("sub.example."), Dnsruby::Types.DS, delegation)
     assert_equal :no_data, result.proof, "DS is the one type the parent still owns"
+  end
+
+  test "a delegation NSEC denies the gap after it, but nothing beneath it" do
+    # The root zone in miniature: every NSEC but the apex's sits at a
+    # delegation. A TLD that does not exist is denied by two of them.
+    root = [
+      nsec(".", "aaa.", "NS SOA RRSIG NSEC DNSKEY"),
+      nsec("nokia.", "northwesternmutual.", "NS DS RRSIG NSEC")
+    ]
+    result = Proof.name_error(Dnsruby::Name.create("example.nonexistent."), root)
+    assert_equal :name_error, result.proof
+    assert_equal :secure, result.status
+    assert_empty result.closest_encloser.labels, "the closest encloser is the root itself"
+
+    # Canonical order puts deep.nokia. inside the same NSEC's span, but
+    # nokia.'s own zone is the authority there (RFC 6840 section 4.1).
+    assert Proof.covers?(root[1], "deep.nokia.")
+    assert_nil Proof.name_error(Dnsruby::Name.create("deep.nokia."), root)
   end
 
   test "wildcard no data proves the wildcard exists but lacks the type" do

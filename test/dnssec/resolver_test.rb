@@ -234,6 +234,21 @@ class ResolverTest < Minitest::Test
     assert_equal [ "192.0.2.7" ], answer.records.map { |r| r.address.to_s }
   end
 
+  test "a delegation signed only with an algorithm we cannot verify is :insecure" do
+    transport = self.class.base_transport
+    # DSA (3): RFC 8624 forbids validating it, so the DS RRset - itself
+    # properly signed by test. - names no usable key, and the child is
+    # outside DNSSEC rather than broken (RFC 4035 section 5.2).
+    dsa_ds = TestZone.rrset(Dnsruby::RR.create("dsa.test. 300 IN DS 12345 3 2 #{"ab" * 32}"))
+    transport.add DnsResponse.build("dsa.test.", "DS", answer: [ signed(dsa_ds, TEST) ])
+    transport.add DnsResponse.build("www.dsa.test.", "A",
+                                    answer: [ TestZone.rrset(Dnsruby::RR.create("www.dsa.test. 300 IN A 192.0.2.8")) ])
+
+    answer = resolver(transport).resolve("www.dsa.test.", "A")
+    assert_equal :insecure, answer.status
+    assert_equal [ "192.0.2.8" ], answer.records.map { |r| r.address.to_s }
+  end
+
   test "an unsigned answer inside a signed zone is :bogus" do
     transport = self.class.base_transport
     # The walk to legitimize the unsigned answer finds b.example.test.

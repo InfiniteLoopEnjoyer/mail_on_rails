@@ -7,7 +7,7 @@ require "test_helper"
 # signs with Opt-Out, so its proofs come back :insecure; rebuilding the
 # same chain with flags: 0 asserts the :secure variants.
 class Nsec3ProofTest < Minitest::Test
-  Proof = Dnsruby::Nsec3Proof
+  Proof = MailOnRails::Dnssec::Nsec3Proof
 
   SOA = Dnsruby::RR.create("example. 3600 IN SOA ns1.example. bugs.x.w.example. 1 3600 300 3600000 3600")
 

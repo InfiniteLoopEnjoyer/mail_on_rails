@@ -3,9 +3,10 @@
 require "test_helper"
 require "securerandom"
 
-# Dnsruby::Header draws message ids from Kernel#rand upstream; the patch in
-# nsec3_patch.rb routes them through SecureRandom so an off-path attacker
-# cannot model the sequence (RFC 5452 section 4.4).
+# The transport sends dnsruby-built queries, so their message ids must be
+# unpredictable to an off-path attacker (RFC 5452 section 4.4). dnsruby
+# 2.0 draws them from SecureRandom itself (1.74 used Kernel#rand and
+# needed a patch here); this pins the property we depend on.
 class SecureIdTest < Minitest::Test
   def with_fixed_random_number(value)
     original = SecureRandom.method(:random_number)

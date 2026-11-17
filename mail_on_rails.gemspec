@@ -65,15 +65,13 @@ Gem::Specification.new do |spec|
   spec.add_dependency "cloudflare"
 
   # In-process DNSSEC validation (lib/mail_on_rails/dnssec): a validating
-  # stub resolver built on dnsruby's codec and RRSIG verification, plus
-  # our patches (NSEC3/NSEC denial proofs, Ed25519/Ed448, wildcard
-  # verification) until they land upstream. The outbound DANE path
-  # validates with this - no external resolver is trusted. Capped below
-  # 2: dnsruby 2.0 rewrote the verifier those patches hook into (and
-  # ships its own EdDSA and validation budgets), and under it every
-  # chain here comes out :bogus. Lift the cap by porting the dnssec
-  # directory to 2.x, not by loosening the pin.
-  spec.add_dependency "dnsruby", ">= 1.74", "< 2"
+  # stub resolver that uses dnsruby for its parts - the message codec,
+  # record classes, canonical RDATA, DNSKEY parsing, DS digests, the
+  # NSEC3 hash - and does the validating itself (signatures, denial
+  # proofs, chain walk). The outbound DANE path validates with this - no
+  # external resolver is trusted. 2.x: Ed25519/Ed448 keys and
+  # unpredictable message ids come from dnsruby itself as of 2.0.
+  spec.add_dependency "dnsruby", "~> 2.0"
 
   # The ICANN Public Suffix List, for DMARC organizational-domain
   # computation (relaxed alignment, aggregate-report grouping). Loaded

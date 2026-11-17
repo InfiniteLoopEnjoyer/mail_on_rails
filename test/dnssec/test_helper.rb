@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Standalone harness like the other protocol suites: no Rails, just
-# dnsruby plus the NSEC3 patches under test.
+# dnsruby plus the validator under test.
 $LOAD_PATH.unshift File.expand_path("../../lib", __dir__)
 
 require "minitest/autorun"
@@ -85,7 +85,7 @@ module Rfc5155Zone
   end
 
   # A response carrying the given NSEC3 RRs (and any other authority
-  # records) - the shape Nsec3Proof.verify and verify_nsecs consume.
+  # records) - the shape Nsec3Proof.verify consumes.
   def response(qname, qtype, rcode: Dnsruby::RCode.NOERROR, authority: [], answer: [])
     msg = Dnsruby::Message.new(qname, qtype)
     msg.header.rcode = rcode

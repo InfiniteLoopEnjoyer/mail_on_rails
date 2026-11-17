@@ -48,8 +48,8 @@ module MailOnRails
 
       # DS records naming algorithms we cannot verify make the zone
       # insecure, not bogus (RFC 4035 section 5.2) - so the usable set
-      # must reflect what verify_rrset can actually do.
-      SUPPORTED_ALGORITHMS = [ 3, 5, 6, 7, 8, 10, 13, 14, 15, 16 ].freeze
+      # is exactly what Signature.verify can do.
+      SUPPORTED_ALGORITHMS = Signature::ALGORITHMS
       SUPPORTED_DS_DIGESTS = [ 1, 2, 4 ].freeze
 
       class Budget
@@ -71,7 +71,7 @@ module MailOnRails
         end
       end
 
-      Ctx = Struct.new(:budget, :verifier, :stack)
+      Ctx = Struct.new(:budget, :now, :stack)
 
       # +transport+ needs only query(name, type) => Dnsruby::Message.
       # +now+ is the verification clock (tests pin it to replay captured
@@ -97,9 +97,7 @@ module MailOnRails
       end
 
       def resolve(qname, qtype)
-        verifier = Dnsruby::SingleVerifier.new(Dnsruby::SingleVerifier::VerifierType::ANCHOR)
-        verifier.verification_time = @now.call
-        ctx = Ctx.new(Budget.new(**@budget_opts), verifier, [])
+        ctx = Ctx.new(Budget.new(**@budget_opts), @now.call, [])
         chase(to_name(qname), Dnsruby::Types.new(qtype), ctx, 0)
       rescue Budget::Exceeded => e
         Answer.new(status: :bogus, records: [], reason: "resource budget exceeded (#{e.message}) - hostile response shape?")
@@ -179,8 +177,8 @@ module MailOnRails
 
       def wildcard_proof_status(msg, qname, rrsig_labels, keys, zone, ctx)
         nsec3s, nsecs, unusable = verified_denial_records(msg, keys, zone, ctx)
-        result = Dnsruby::Nsec3Proof.wildcard_answer(qname, rrsig_labels, nsec3s) ||
-                 Dnsruby::NsecProof.wildcard_answer(qname, rrsig_labels, nsecs)
+        result = Nsec3Proof.wildcard_answer(qname, rrsig_labels, nsec3s) ||
+                 NsecProof.wildcard_answer(qname, rrsig_labels, nsecs)
         return :insecure if result.nil? && only_unusable_nsec3?(nsec3s, nsecs, unusable)
 
         result&.status
@@ -213,12 +211,12 @@ module MailOnRails
         nsec3s, nsecs, unusable = verified_denial_records(msg, zone[:keys], zone_name, ctx)
         result =
           if msg.rcode == Dnsruby::RCode.NXDOMAIN
-            Dnsruby::Nsec3Proof.name_error(qname, nsec3s) ||
-              Dnsruby::NsecProof.name_error(qname, nsecs)
+            Nsec3Proof.name_error(qname, nsec3s) ||
+              NsecProof.name_error(qname, nsecs)
           else
-            Dnsruby::Nsec3Proof.no_data(qname, qtype, nsec3s) ||
-              Dnsruby::Nsec3Proof.wildcard_no_data(qname, qtype, nsec3s) ||
-              Dnsruby::NsecProof.no_data(qname, qtype, nsecs)
+            Nsec3Proof.no_data(qname, qtype, nsec3s) ||
+              Nsec3Proof.wildcard_no_data(qname, qtype, nsec3s) ||
+              NsecProof.no_data(qname, qtype, nsecs)
           end
         unless result
           # RFC 9276 section 3.2: a zone whose NSEC3 iteration count is
@@ -227,7 +225,7 @@ module MailOnRails
           # proves nothing, or that failed to verify.
           if only_unusable_nsec3?(nsec3s, nsecs, unusable)
             return Answer.new(status: :insecure, records: [],
-                              reason: "NSEC3 records for #{zone_name} exceed #{Dnsruby::RR::NSEC3::MAX_PROOF_ITERATIONS} iterations")
+                              reason: "NSEC3 records for #{zone_name} exceed #{Nsec3Proof::MAX_ITERATIONS} iterations")
           end
 
           return bogus("denial of #{qname}/#{qtype} is unproven")
@@ -253,7 +251,7 @@ module MailOnRails
 
           (rrset.type == Dnsruby::Types.NSEC3 ? nsec3s : nsecs).concat(rrset.rrs)
         end
-        usable = Dnsruby::Nsec3Proof.usable(nsec3s)
+        usable = Nsec3Proof.usable(nsec3s)
         [ usable, nsecs, nsec3s.length - usable.length ]
       end
 
@@ -374,8 +372,8 @@ module MailOnRails
         nsec3s, nsecs = verified_denial_records(msg, pkeys[:keys], parent, ctx)
 
         if msg.rcode == Dnsruby::RCode.NXDOMAIN
-          result = Dnsruby::Nsec3Proof.name_error(zone, nsec3s) ||
-                   Dnsruby::NsecProof.name_error(zone, nsecs)
+          result = Nsec3Proof.name_error(zone, nsec3s) ||
+                   NsecProof.name_error(zone, nsecs)
           return { status: :bogus, reason: "DS NXDOMAIN for #{zone} is unproven" } unless result
 
           return { status: result.status == :secure ? :nxdomain : :insecure }
@@ -389,23 +387,23 @@ module MailOnRails
       # no zone cut here (:continue); an Opt-Out span could hide either
       # (:insecure, conservatively).
       def ds_nodata_status(zone, nsec3s, nsecs)
-        if (m = nsec3s.find { |rr| rr.matches?(zone) })
+        if (m = nsec3s.find { |rr| Nsec3Proof.matches?(rr, zone) })
           return { status: :bogus, reason: "NSEC3 for #{zone} claims DS exists" } if m.types.include?("DS")
 
           return { status: m.types.include?("NS") ? :insecure : :continue }
         end
-        if (ce = Dnsruby::Nsec3Proof.closest_encloser_proof(zone, nsec3s))
+        if (ce = Nsec3Proof.closest_encloser_proof(zone, nsec3s))
           return { status: :insecure } if ce[:covering].opt_out?
         end
 
-        if (m = nsecs.find { |rr| Dnsruby::NsecProof.matches?(rr, zone) })
+        if (m = nsecs.find { |rr| NsecProof.matches?(rr, zone) })
           return { status: :bogus, reason: "NSEC for #{zone} claims DS exists" } if m.types.include?("DS")
 
           return { status: m.types.include?("NS") ? :insecure : :continue }
         end
         # A wildcard-synthesized DS NODATA can't be a delegation.
-        if Dnsruby::Nsec3Proof.wildcard_no_data(zone, Dnsruby::Types.DS, nsec3s) ||
-           Dnsruby::NsecProof.no_data(zone, Dnsruby::Types.DS, nsecs)
+        if Nsec3Proof.wildcard_no_data(zone, Dnsruby::Types.DS, nsec3s) ||
+           NsecProof.no_data(zone, Dnsruby::Types.DS, nsecs)
           return { status: :continue }
         end
 
@@ -453,39 +451,10 @@ module MailOnRails
           candidates = keys.select { |k| k.key_tag == sig.key_tag && k.algorithm == sig.algorithm }
           candidates.first(MAX_KEYS_PER_SIG).each do |key|
             ctx.budget.crypto!
-            begin
-              return sig if ctx.verifier.verify_rrset(verifiable_rrset(rrset, sig), [ key ])
-            rescue Dnsruby::VerifyError
-              next
-            end
+            return sig if Signature.verify(rrset, sig, key, now: ctx.now)
           end
         end
         nil
-      end
-
-      # The RRset as the signer signed it. For a wildcard-expanded
-      # answer (RFC 4035 section 5.3.2, Labels < owner labels) the
-      # signature was made over the original "*.<parent>" owner - a
-      # reconstruction dnsruby's own sig_data skips (its literal
-      # "@TODO@ worry about wildcards") - so owner names are rewritten
-      # before verification.
-      def verifiable_rrset(rrset, sig)
-        owner =
-          if sig.labels < rrset.name.labels.length
-            Dnsruby::Name.create("*." + Dnsruby::Name.new(rrset.name.labels.last(sig.labels), true).to_s(true))
-          else
-            rrset.name
-          end
-        single = Dnsruby::RRSet.new
-        rrset.rrs.each do |rr|
-          copy = rr.clone
-          copy.name = owner
-          single.add(copy, false)
-        end
-        sig_copy = sig.clone
-        sig_copy.name = owner
-        single.add(sig_copy, false)
-        single
       end
 
       def usable_ds(ds_records)
