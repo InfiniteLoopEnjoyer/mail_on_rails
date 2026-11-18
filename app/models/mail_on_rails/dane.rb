@@ -22,16 +22,39 @@ module MailOnRails
 
     module_function
 
+    # Octets of association data per matching type (RFC 6698 section
+    # 2.1.3); Full(0) is whatever the certificate or key encodes to.
+    DIGEST_BYTES = { 1 => 32, 2 => 64 }.freeze
+
     # The records this verifier can act on. When a secure TLSA RRset exists
     # but every record is unusable, RFC 7671 section 4.1 says to treat the
     # host as unreachable rather than fall back to unauthenticated TLS -
     # callers get that by checking `usable_records(...).empty?`.
+    #
+    # Malformed association data is one more way to be unusable: a
+    # mistyped digest next to a good record must not cost the host its
+    # DANE, and on its own must not read as "no TLSA published".
     def usable_records(records)
       records.select do |r|
         (r.usage == DANE_TA || r.usage == DANE_EE) &&
           (r.selector == 0 || r.selector == 1) &&
-          (0..2).cover?(r.matching_type)
+          (0..2).cover?(r.matching_type) &&
+          well_formed?(r)
       end
+    end
+
+    # A digest of the right length, or full data that parses as what
+    # the selector says it is.
+    def well_formed?(record)
+      data = record.data.to_s.b
+      if (bytes = DIGEST_BYTES[record.matching_type])
+        return data.bytesize == bytes
+      end
+
+      record.selector == 1 ? OpenSSL::PKey.read(data) : OpenSSL::X509::Certificate.new(data)
+      true
+    rescue OpenSSL::OpenSSLError
+      false
     end
 
     # +leaf+ is the peer certificate, +chain+ the full presented chain

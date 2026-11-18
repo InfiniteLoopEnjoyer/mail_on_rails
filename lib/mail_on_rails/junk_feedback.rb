@@ -20,7 +20,10 @@ module MailOnRails
   # sub-folder is somewhere the user files things, not a verdict (so
   # Junk -> Junk/2025 is silent, and so is Junk/2025 -> INBOX). The
   # mailroom's own filing into Junk never comes through here - rspamd
-  # must not learn from itself.
+  # must not learn from itself. Nor does anything filed in a canary
+  # (honeypot) account: whoever is in there guessed a decoy's password,
+  # and their filing must not write sender rules or train the classifier
+  # every real account's mail is scored by.
   #
   # Never raises: callers are the IMAP MOVE/COPY/APPEND handlers and a
   # failure here must not turn a successful move into a NO.
@@ -33,6 +36,7 @@ module MailOnRails
     def filed(message, from:, to:, source:)
       klass = classify(from, to)
       return unless klass
+      return if to.email_account.honeypot?
 
       record_rule(to.email_account, message.from_address, klass == "spam" ? "deny" : "allow", source)
       enqueue_learn(message, klass)

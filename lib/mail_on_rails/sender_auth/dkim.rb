@@ -2,6 +2,7 @@
 
 require "openssl"
 require_relative "dns"
+require_relative "../header_field"
 
 module MailOnRails
   module SenderAuth
@@ -184,14 +185,22 @@ module MailOnRails
         when "relaxed"
           name, value = line.split(":", 2)
           value = value.to_s.gsub(/\r\n(?=[ \t])/, "").gsub(/[ \t]+/, " ").strip
-          "#{name.strip.downcase}:#{value}\r\n"
+          # RFC 6376 3.4.2 deletes WSP before the colon and nothing else:
+          # Ruby's strip also drops VT/FF/NUL on both sides, under which
+          # "From\v:" and "\vFrom:" canonicalized to the signed "from:" -
+          # a genuine signature then covered a From line no reader shows.
+          name = name.gsub(/\r\n(?=[ \t])/, "").sub(/[ \t]+\z/, "")
+          "#{name.downcase}:#{value}\r\n"
         else
           raise Unusable, "unknown header canonicalization #{mode}"
         end
       end
 
+      # The name as HeaderField reads it for every scanner. Selection is
+      # lenient; canonicalize_header is not, so a header found under a
+      # loose spelling only verifies if it was signed in that spelling.
       def header_name(line)
-        line.split(":", 2).first.to_s.strip
+        HeaderField.name(line).to_s
       end
 
       # -- key retrieval ---------------------------------------------------------

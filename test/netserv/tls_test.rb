@@ -84,3 +84,63 @@ class TlsContextOptionsTest < Minitest::Test
     assert_equal "mail_on_rails", ctx.session_id_context
   end
 end
+
+# The development self-signed key (Netserv::Tls#material without explicit
+# paths): created owner-only from its first byte, never write-then-chmod.
+class TlsSelfSignedKeyTest < Minitest::Test
+  Tls = MailOnRails::Netserv::Tls
+
+  def setup
+    @dir = Dir.mktmpdir("mail_on_rails_tls")
+    @umask = File.umask(0o022)
+  end
+
+  def teardown
+    File.umask(@umask)
+    FileUtils.remove_entry(@dir)
+  end
+
+  def generate = Tls.for(:smtp).send(:load_or_generate_self_signed, @dir, nil)
+
+  def key_file = File.join(@dir, "selfsigned.key")
+
+  test "the generated key is owner-only and loads back" do
+    pems = generate
+
+    assert_equal 0o600, File.stat(key_file).mode & 0o777
+    assert_equal pems[:key], File.read(key_file)
+    assert_equal pems, generate, "the second boot reads the cached pair"
+    assert_equal %w[selfsigned.crt selfsigned.key], Dir.children(@dir).sort, "no temporary file is left behind"
+  end
+
+  # The window the old write-then-chmod left open: a process that dies
+  # (or a chmod that fails) after the write leaves the key at the umask's
+  # mode. Nothing may depend on a chmod coming afterwards.
+  test "the key is never on disk with a wider mode, even if no chmod ever runs" do
+    singleton = File.singleton_class
+    original = File.method(:chmod)
+    singleton.define_method(:chmod) { |*| raise Errno::EPERM, "chmod" }
+    begin
+      generate
+    rescue Errno::EPERM
+      nil
+    ensure
+      singleton.define_method(:chmod, original)
+    end
+
+    Dir.children(@dir).grep(/key/).each do |name|
+      assert_equal 0o600, File.stat(File.join(@dir, name)).mode & 0o777, name
+    end
+    assert File.exist?(key_file)
+  end
+
+  test "a key file left behind with loose permissions is replaced, not written through" do
+    File.write(key_file, "stale")
+    File.chmod(0o644, key_file)
+
+    pems = generate
+
+    assert_equal 0o600, File.stat(key_file).mode & 0o777
+    assert_equal pems[:key], File.read(key_file)
+  end
+end

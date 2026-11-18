@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "../header_field"
+
 module MailOnRails
   module SenderAuth
     # Extracts the visible From: header domain - DMARC's subject - from raw
@@ -17,13 +19,18 @@ module MailOnRails
     module FromHeader
       module_function
 
+      # The field is found the way the Mail gem finds it (see HeaderField):
+      # a narrower match here would let "From\v: ceo@bank" through the
+      # single-From gate unseen and onto the reader's screen.
+      FROM = HeaderField.matcher("from")
+
       # => lowercased domain String, or nil.
       def domain(data)
         fields = unfolded_headers(data)
-        from = fields.select { |f| f.match?(/\Afrom[ \t]*:/i) }
+        from = fields.select { |f| f.match?(FROM) }
         return nil unless from.size == 1
 
-        mailboxes = split_mailboxes(from.first.sub(/\Afrom[ \t]*:/i, ""))
+        mailboxes = split_mailboxes(from.first.sub(FROM, ""))
         return nil unless mailboxes&.size == 1
 
         mailbox_domain(mailboxes.first)
@@ -35,7 +42,7 @@ module MailOnRails
       # mailbox yields a nil entry (never silently dropped - the caller
       # must treat "cannot parse" as "cannot authorize").
       def addresses(data, field: "from")
-        pattern = /\A#{Regexp.escape(field)}[ \t]*:/i
+        pattern = HeaderField.matcher(field)
         fields = unfolded_headers(data).select { |f| f.match?(pattern) }
         return nil if fields.empty?
 

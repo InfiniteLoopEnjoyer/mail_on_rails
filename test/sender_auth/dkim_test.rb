@@ -152,4 +152,28 @@ class DkimTest < Minitest::Test
     result = MailOnRails::SenderAuth::Dkim.new(res).verify(message).first
     assert_equal :pass, result[:result], result.inspect
   end
+
+  # A signed header must be found by the name every other reader gives
+  # it. Ruby's strip (the old header_name, and the relaxed canonical
+  # name) drops VT/FF/NUL on both sides, so a genuine signed message
+  # could be re-sent with its own From pushed aside - "\vFrom:" or
+  # "From\v:" still verified as the signed From - and a second, forged
+  # From added for the reader: dkim=pass for d=example.com over a From
+  # the domain never signed.
+  test "a signed From pushed aside by a control byte no longer verifies" do
+    signed = sign
+    assert_equal :pass, verify(signed).first[:result]
+
+    [ "\vFrom:", "\fFrom:", "\x00From:", "From\v:", "From\f:", "From\x00:" ].each do |spelling|
+      replayed = "From: ceo@example.com\r\n" + signed.sub(/^From:/, spelling)
+      assert_includes replayed, "#{spelling} alice@example.com"
+      assert_equal :fail, verify(replayed).first[:result], "#{spelling.inspect} still verified as the signed From"
+    end
+  end
+
+  test "WSP before the colon is still the same header (relaxed canonicalization)" do
+    [ "From :", "From\t:", "From \t :" ].each do |spelling|
+      assert_equal :pass, verify(sign.sub(/^From:/, spelling)).first[:result], spelling.inspect
+    end
+  end
 end

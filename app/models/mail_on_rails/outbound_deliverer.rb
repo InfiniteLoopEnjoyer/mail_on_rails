@@ -20,9 +20,10 @@ require "mail_on_rails/netserv/ip"
 #     publishes secure usable TLSA records: TLS is required and the
 #     presented chain must match a TLSA record (Dane.verify!). No
 #     fallback to unauthenticated TLS or cleartext - failures defer.
-#     Needs a resolver whose DNSSEC validation we trust: the AD bit only
-#     counts from a loopback resolver or one listed in
-#     MAIL_ON_RAILS_DANE_TRUSTED_RESOLVERS (see SenderAuth::Dns);
+#     DNSSEC is validated in process (Dnssec::Resolver, behind
+#     SenderAuth::Dns#mx_answer/#tlsa), from the root trust anchor
+#     down, so no resolver's AD bit is trusted and none needs to be;
+#     an answer that fails validation defers the delivery.
 #     MAIL_ON_RAILS_DANE=0 turns it off.
 #   - MTA-STS (RFC 8461) otherwise, when the recipient domain publishes a
 #     policy (MtaStsPolicy caches it): in enforce mode, only
@@ -469,7 +470,7 @@ module MailOnRails
     def verp_return_path(message, data)
       return nil unless MailOnRails::Settings[:smtp_verp]
       list_mail = data.partition("\r\n\r\n").first.split(/\r\n(?![ \t])/)
-                      .any? { |h| h.match?(/\AList-ID[ \t]*:/i) }
+                      .any? { |h| h.match?(HeaderField.matcher("List-ID")) }
       return nil unless list_mail || message.aggregate_report?
 
       sender_domain = message.mail_from.to_s.split("@").last.to_s.strip.downcase
@@ -665,9 +666,9 @@ module MailOnRails
     # log line (DKIM alignment falls back to the envelope domain).
     def ensure_required_headers(data, message)
       headers = data.partition("\r\n\r\n").first.split(/\r\n(?![ \t])/)
-      missing_mid = headers.none? { |h| h.match?(/\AMessage-ID[ \t]*:/i) }
-      missing_date = headers.none? { |h| h.match?(/\ADate[ \t]*:/i) }
-      if headers.none? { |h| h.match?(/\AFrom[ \t]*:/i) }
+      missing_mid = headers.none? { |h| h.match?(HeaderField.matcher("Message-ID")) }
+      missing_date = headers.none? { |h| h.match?(HeaderField.matcher("Date")) }
+      if headers.none? { |h| h.match?(HeaderField.matcher("From")) }
         Rails.logger.warn "[mail_on_rails] outbound #{message.id} to <#{message.recipient}> has no From: header"
       end
       return data unless missing_mid || missing_date
@@ -725,7 +726,7 @@ module MailOnRails
       return data unless account&.mailing_list?
 
       headers = data.partition("\r\n\r\n").first.split(/\r\n(?![ \t])/)
-      return data if headers.any? { |h| h.match?(/\AList-ID[ \t]*:/i) }
+      return data if headers.any? { |h| h.match?(HeaderField.matcher("List-ID")) }
 
       local, _, domain = sender.partition("@")
       "List-ID: <#{local.gsub(/[^a-z0-9._-]/, "-")}.#{domain}>\r\n" + data
@@ -749,8 +750,8 @@ module MailOnRails
       return data unless MailOnRails::Settings[:smtp_list_unsubscribe]
 
       headers = data.partition("\r\n\r\n").first.split(/\r\n(?![ \t])/)
-      return data unless headers.any? { |h| h.match?(/\AList-ID[ \t]*:/i) }
-      return data if headers.any? { |h| h.match?(/\AList-Unsubscribe[ \t]*:/i) }
+      return data unless headers.any? { |h| h.match?(HeaderField.matcher("List-ID")) }
+      return data if headers.any? { |h| h.match?(HeaderField.matcher("List-Unsubscribe")) }
 
       sender_domain = message.mail_from.to_s.split("@").last.to_s.strip.downcase
       return data if sender_domain.blank? || !Domain.exists?(name: sender_domain)

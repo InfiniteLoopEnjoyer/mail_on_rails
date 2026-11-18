@@ -48,21 +48,22 @@ module MailOnRails
         @port = port
       end
 
-      # One question out, one decoded reply back (id-checked; truncated
-      # replies retried over TCP). Fallback nameservers are consulted
-      # only once every primary has failed; TempError raises when all of
-      # them have. A server that answers SERVFAIL/REFUSED/etc. counts as
-      # failed, not answered - docker's embedded DNS SERVFAILs some
-      # DNSSEC queries (large NSEC3 denials) that the public fallbacks
-      # resolve fine, and accepting its rcode as the final word turned
-      # deliverable mail into 22-hour retry deaths.
+      # One question out, one decoded reply back (matched on id, QR bit
+      # and question; truncated replies retried over TCP). Fallback
+      # nameservers are consulted only once every primary has failed;
+      # TempError raises when all of them have. A server that answers
+      # SERVFAIL/REFUSED/etc. counts as failed, not answered - docker's
+      # embedded DNS SERVFAILs some DNSSEC queries (large NSEC3 denials)
+      # that the public fallbacks resolve fine, and accepting its rcode
+      # as the final word turned deliverable mail into 22-hour retry
+      # deaths. So does a server whose reply cannot be decoded.
       def query(name, type)
         request = build_query(name, type)
         payload = request.encode
         errors = []
         (@nameservers + @fallbacks).each do |server|
-          reply = udp_exchange(server, payload, request.header.id)
-          reply = tcp_exchange(server, payload, request.header.id) if reply&.header&.tc
+          reply = udp_exchange(server, payload, request)
+          reply = tcp_exchange(server, payload, request) if reply.equal?(:truncated)
           next if reply.nil?
           rcode = reply.rcode
           return reply if rcode == Dnsruby::RCode.NOERROR || rcode == Dnsruby::RCode.NXDOMAIN
@@ -86,40 +87,68 @@ module MailOnRails
         msg
       end
 
-      def udp_exchange(server, payload, id)
+      # The reply, :truncated when it must be re-asked over TCP, or nil
+      # when nothing that answers the query arrived.
+      def udp_exchange(server, payload, request)
         socket = UDPSocket.new(Addrinfo.ip(server).afamily)
         socket.timeout = @timeout
         socket.connect(server, @port)
         socket.send(payload, 0)
-        # A few tries: a mismatched id is a stray/spoofed datagram, not
-        # the reply. Bounded so a flood can't spin this thread forever.
+        # A few tries: a datagram that is not a response to this query
+        # (id and QR bit, read off the header before anything else is
+        # parsed; then the question) is a stray/spoofed one, not the
+        # reply. Bounded so a flood can't spin this thread forever.
         4.times do
-          reply = decode(socket.recv(UDP_SIZE * 4))
-          return reply if reply&.header&.id == id
+          data = socket.recv(UDP_SIZE * 4)
+          next unless Wire.response_to?(data, request.header.id)
+          # A truncated reply is not worth decoding: all it triggers is
+          # the TCP retry, whose reply is matched in full.
+          return :truncated if Wire.truncated?(data)
+
+          reply = decode(data)
+          # Ours by its header, and unreadable: this server has no
+          # usable answer, and waiting out the timeout will not improve
+          # it.
+          raise Dnsruby::DecodeError, "undecodable reply" if reply.nil?
+          return reply if answers?(reply, request)
         end
         nil
       ensure
         socket&.close
       end
 
-      def tcp_exchange(server, payload, id)
+      def tcp_exchange(server, payload, request)
         Socket.tcp(server, @port, connect_timeout: @timeout) do |socket|
           socket.timeout = @timeout
           socket.write([ payload.bytesize ].pack("n") + payload)
           length = socket.read(2)&.unpack1("n")
           raise TempError, "DNS TCP reply truncated from #{server}" if length.nil?
 
-          reply = decode(socket.read(length).to_s)
-          raise TempError, "DNS TCP reply id mismatch from #{server}" unless reply&.header&.id == id
+          data = socket.read(length).to_s
+          raise TempError, "DNS TCP reply id mismatch from #{server}" unless Wire.response_to?(data, request.header.id)
+
+          reply = decode(data)
+          raise Dnsruby::DecodeError, "undecodable reply" if reply.nil?
+          raise TempError, "DNS TCP reply does not answer our query (#{server})" unless answers?(reply, request)
 
           reply
         end
       end
 
+      # A 16-bit id is guessable at line rate (RFC 5452 section 9): the
+      # reply must also echo the question that was asked.
+      def answers?(reply, request)
+        asked = request.question[0]
+        echoed = reply.question[0]
+        !echoed.nil? && reply.question.length == 1 &&
+          echoed.qtype == asked.qtype && echoed.qclass == asked.qclass &&
+          echoed.qname.canonical == asked.qname.canonical
+      end
+
+      # nil for anything dnsruby cannot make a message of - it raises
+      # far more than DecodeError on hostile RDATA (see Wire).
       def decode(data)
-        Dnsruby::Message.decode(data)
-      rescue Dnsruby::DecodeError
-        nil
+        Wire.decode(data)
       end
     end
   end

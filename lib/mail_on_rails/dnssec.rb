@@ -17,6 +17,8 @@
 #   Nsec3Proof   the RFC 5155 section 8 denial proofs, Opt-Out aware.
 #   NsecProof    the RFC 4035 NSEC proofs, same shape.
 #   Transport    our own UDP/TCP client: CD + DO on every query.
+#   Wire         what Transport reads off a reply before dnsruby does,
+#                and the decode that survives a malformed TLSA record.
 #   TrustAnchors the IANA root DS set.
 #   Resolver     the validating stub forwarder that ties them together:
 #                queries any upstream recursive with CD set, and computes
@@ -35,6 +37,7 @@ require "dnsruby"
 require_relative "dnssec/signature"
 require_relative "dnssec/nsec3_proof"
 require_relative "dnssec/nsec_proof"
+require_relative "dnssec/wire"
 require_relative "dnssec/transport"
 require_relative "dnssec/trust_anchors"
 require_relative "dnssec/resolver"

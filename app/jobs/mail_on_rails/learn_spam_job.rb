@@ -12,7 +12,10 @@ module MailOnRails
   # The message is looked up by row id first; a move mints a new row, so
   # when the user has already moved it again the content-derived
   # email_object_id (RFC 8474 EMAILID) finds the current copy within the
-  # account. Gone entirely (expunged) = nothing to learn from.
+  # account. Gone entirely (expunged) = nothing to learn from. A message
+  # in a canary (honeypot) account is never learned from, whoever enqueued
+  # the job: the classifier is shared by every account, and a decoy's
+  # contents are an intruder's to arrange.
   class LearnSpamJob < BaseJob
     class Unavailable < StandardError; end
 
@@ -26,6 +29,7 @@ module MailOnRails
                 EmailMessage.joins(:mailbox).find_by(email_object_id: email_object_id,
                                                      mailbox: { email_account_id: account_id })
       return unless message
+      return if message.mailbox.email_account.honeypot?
 
       case RspamdAnalyzer.learn(message.raw, klass)
       when :ok, :already_learned

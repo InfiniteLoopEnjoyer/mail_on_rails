@@ -122,6 +122,10 @@ module MailOnRails
       def validate_env!
         @definitions.each_value(&:env_value)
         true
+      rescue ArgumentError, TypeError => e
+        # A string or address that fails its setting's rule (integers
+        # already raise Config::Error): one error class for the boot.
+        raise Netserv::Config::Error, e.message
       end
 
       # Test helper: back to pure defaults + ENV.
@@ -181,16 +185,25 @@ module MailOnRails
       "::/128", "64:ff9b::/96", "100::/64", "2002::/16", "fd00:ec2::254/128",
       "fe80::/10", "ff00::/8"
     ].map { |cidr| IPAddr.new(cidr) }.freeze
-    SCANNER_HOST = lambda do |host|
+    # Accessory hostnames are container names as often as DNS names
+    # (Kamal calls them <service>-<accessory>, and a service is commonly
+    # snake_case), so labels may carry an underscore here - unlike a HELO
+    # name, which goes on the wire to strangers.
+    SCANNER_HOSTNAME_PATTERN = /\A(?!-)[a-z0-9_-]{1,63}(?<!-)(\.(?!-)[a-z0-9_-]{1,63}(?<!-))*\z/
+    # +resolve+ false skips the hostname lookup (see the *_ENV rules
+    # below): a literal address is still held to the forbidden ranges and
+    # a name to its shape.
+    SCANNER_HOST = lambda do |host, resolve: true|
       raise ArgumentError, "must include a host" if host.empty?
 
       begin
         addresses = [ IPAddr.new(host) ]
       rescue IPAddr::InvalidAddressError
-        unless host.length <= 255 && host.downcase.match?(HELO_HOSTNAME_PATTERN)
+        unless host.length <= 255 && host.downcase.match?(SCANNER_HOSTNAME_PATTERN)
           raise ArgumentError, "must be a hostname or IP address"
         end
-        addresses = Resolv.getaddresses(host).filter_map do |address|
+        addresses = resolve ? Resolv.getaddresses(host) : []
+        addresses = addresses.filter_map do |address|
           IPAddr.new(address)
         rescue IPAddr::InvalidAddressError
           nil
@@ -209,14 +222,14 @@ module MailOnRails
         raise ArgumentError, "port must be 1-65535"
       end
     end
-    VALID_CLAMAV_ADDR = lambda do |value|
+    VALID_CLAMAV_ADDR = lambda do |value, resolve: true|
       next if value.nil? || value.empty?
 
       host, port = value.split(":", 2)
-      SCANNER_HOST.call(host.to_s)
+      SCANNER_HOST.call(host.to_s, resolve: resolve)
       SCANNER_PORT.call(port) if port
     end
-    VALID_RSPAMD_ADDR = lambda do |value|
+    VALID_RSPAMD_ADDR = lambda do |value, resolve: true|
       next if value.nil? || value.empty?
 
       hostport = value
@@ -228,9 +241,19 @@ module MailOnRails
         hostport = rest.split("/", 2).first.to_s
       end
       host, port = hostport.split(":", 2)
-      SCANNER_HOST.call(host.to_s)
+      SCANNER_HOST.call(host.to_s, resolve: resolve)
       SCANNER_PORT.call(port) if port
     end
+    # The same rules for a value that arrives through the environment,
+    # minus the one step that needs the network: an ENV value is judged at
+    # boot and on session paths, where a resolver that is slow or not up
+    # yet must neither stall the listener nor decide whether it starts.
+    # Everything checkable offline still is - shape, scheme, port, and a
+    # literal address against the forbidden ranges. The lookup stays with
+    # the tier it was written for, the settings UI, where a name is typed
+    # into a running system by whoever holds an admin session.
+    VALID_CLAMAV_ADDR_ENV = ->(value) { VALID_CLAMAV_ADDR.call(value, resolve: false) }
+    VALID_RSPAMD_ADDR_ENV = ->(value) { VALID_RSPAMD_ADDR.call(value, resolve: false) }
 
     # -- SMTP limits ----------------------------------------------------
     #
@@ -360,7 +383,7 @@ module MailOnRails
             scope: :dynamic, category: :filtering,
             desc: "DNSBL verdict cache lifetime, seconds"
     setting :smtp_clamav_addr, type: :addr, default: "", env: "SMTP_CLAMAV_ADDR",
-            scope: :dynamic, category: :filtering, validate: VALID_CLAMAV_ADDR,
+            scope: :dynamic, category: :filtering, validate: VALID_CLAMAV_ADDR, validate_env: VALID_CLAMAV_ADDR_ENV,
             desc: "clamd address (host:port) for virus scanning (empty disables)"
     setting :smtp_clamav_timeout, type: :integer, default: 10, min: 1, env: "SMTP_CLAMAV_TIMEOUT",
             scope: :dynamic, category: :filtering,
@@ -370,10 +393,10 @@ module MailOnRails
             desc: "Allow the mail servers to boot in production with no clamd address - an explicit opt-out of " \
                   "virus scanning; without it an empty SMTP_CLAMAV_ADDR fails the production boot (boot-only)"
     setting :smtp_rspamd_addr, type: :addr, default: "", env: "SMTP_RSPAMD_ADDR",
-            scope: :dynamic, category: :filtering, validate: VALID_RSPAMD_ADDR,
+            scope: :dynamic, category: :filtering, validate: VALID_RSPAMD_ADDR, validate_env: VALID_RSPAMD_ADDR_ENV,
             desc: "rspamd worker address (host:port) for spam analysis (empty disables)"
     setting :smtp_rspamd_controller_addr, type: :addr, default: "", env: "SMTP_RSPAMD_CONTROLLER_ADDR",
-            scope: :dynamic, category: :filtering, validate: VALID_RSPAMD_ADDR,
+            scope: :dynamic, category: :filtering, validate: VALID_RSPAMD_ADDR, validate_env: VALID_RSPAMD_ADDR_ENV,
             desc: "rspamd controller address (host:port, usually port 11334) for Bayes learning when a message " \
                   "is filed into or out of Junk; needs smtp_rspamd_password (empty disables learning)"
     setting :smtp_rspamd_timeout, type: :integer, default: 10, min: 1, env: "SMTP_RSPAMD_TIMEOUT",
@@ -578,7 +601,11 @@ module MailOnRails
     setting :trash_retention_days, type: :integer, default: 30, min: 1,
             scope: :dynamic, category: :retention,
             desc: "Days a message sits in Trash before permanent deletion"
-    setting :conn_log_retention_days, type: :integer, default: 90, env: "MAIL_ON_RAILS_CONN_LOG_RETENTION_DAYS",
+    # min: 1 - the connection history is more than a display: it is what
+    # idle_auto_ban counts, what spares a working address from an automatic
+    # ban, and what tells the auth throttle a source is the account's own.
+    # A 0 would have every prune run empty it and take all three with it.
+    setting :conn_log_retention_days, type: :integer, default: 90, min: 1, env: "MAIL_ON_RAILS_CONN_LOG_RETENTION_DAYS",
             scope: :dynamic, category: :retention,
             desc: "Days closed-connection history is kept"
     # The daemons' ops-state projection (Netserv::OpsSync): how often each
@@ -605,7 +632,8 @@ module MailOnRails
             desc: "Days auth-attempt history is kept"
     setting :auth_log_max_rows_per_ip, type: :integer, default: 50, env: "MAIL_ON_RAILS_AUTH_LOG_MAX_ROWS_PER_IP",
             scope: :dynamic, category: :retention,
-            desc: "Auth-attempt rows kept per IP before rollup"
+            desc: "Auth-attempt rows kept per IP (IPv6: per /64) per rollup window before further attempts are " \
+                  "only counted; checked guesses at addresses that exist get four times this allowance"
     setting :auth_log_rollup_window, type: :integer, default: 3600, min: 1, env: "MAIL_ON_RAILS_AUTH_LOG_ROLLUP_WINDOW",
             scope: :dynamic, category: :retention,
             desc: "Rollup window for auth-log pruning, seconds"
@@ -617,11 +645,14 @@ module MailOnRails
     setting :honeypot_block_seconds, type: :integer, default: 3600, min: 1, env: "MAIL_ON_RAILS_HONEYPOT_BLOCK_SECONDS",
             scope: :dynamic, category: :honeypot,
             desc: "Temporary block duration for a triggered honeypot canary, seconds"
-    setting :honeypot_collateral_days, type: :integer, default: 7, env: "MAIL_ON_RAILS_HONEYPOT_COLLATERAL_DAYS",
+    # min: 1 - a 0 reads as "nothing is recent", which silently removes the
+    # working-address exemption from every automatic ban.
+    setting :honeypot_collateral_days, type: :integer, default: 7, min: 1, env: "MAIL_ON_RAILS_HONEYPOT_COLLATERAL_DAYS",
             scope: :dynamic, category: :honeypot,
             desc: "Lookback for legitimate traffic before auto-banning a shared IP, days (also how far back " \
-                  "idle_auto_ban looks for a login or a delivery; connection history older than " \
-                  "conn_log_retention_days is gone either way)"
+                  "idle_auto_ban looks for a login or a delivery, and how long after a successful login an " \
+                  "address is still let past a temporary block on that account caused by other addresses' " \
+                  "failed logins; connection history older than conn_log_retention_days is gone either way)"
     setting :honeypot_allowlist, type: :list, default: [], env: "MAIL_ON_RAILS_HONEYPOT_ALLOWLIST",
             scope: :dynamic, category: :honeypot,
             desc: "CIDRs never auto-banned by the honeypot"

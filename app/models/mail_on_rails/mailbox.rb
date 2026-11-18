@@ -24,7 +24,34 @@ module MailOnRails
     # permanent.
     TRASH = "Trash"
 
-    validates :name, presence: true, uniqueness: { scope: :email_account_id }
+    # Where the composer autosaves (the app's EmailDraft).
+    DRAFTS = "Drafts"
+
+    # The folders the system itself files mail into or reads from. IMAP
+    # clients may still rename or delete most of them (delivery recreates
+    # Junk/Trash/Quarantine on demand); system? exists for surfaces that
+    # choose not to offer that, such as the web folder forms.
+    SYSTEM_NAMES = [ INBOX, SENT, DRAFTS, TRASH, JUNK, QUARANTINE ].freeze
+
+    # The same bounds the IMAP server enforces on a client-supplied name
+    # (ImapServer::MAX_MAILBOX_NAME_BYTES / MAX_MAILBOX_DEPTH, and its
+    # mailbox_name_error). They are repeated here because the IMAP edge is
+    # not the only writer: a name saved by any other caller (the web folder
+    # forms, a console) must still be one every IMAP command can address
+    # and echo back safely.
+    MAX_NAME_BYTES = 1024
+    MAX_DEPTH = 20
+
+    # (The presence and uniqueness checks would themselves raise on a name
+    # that is not valid UTF-8, and the uniqueness lookup on a NUL byte under
+    # PostgreSQL, so each steps aside for a name the format check below
+    # already refuses.)
+    validates :name, presence: true, unless: :name_unreadable?
+    # Only when the name is new or changing: rows that predate these rules
+    # must keep loading and saving (claim_uid!, flag updates, renames of
+    # *other* folders) whatever they are called.
+    validate :name_must_be_addressable, if: -> { name_unreadable? || (name.present? && will_save_change_to_name?) }
+    validates :name, uniqueness: { scope: :email_account_id }, if: -> { !name_unreadable? && name_problem.nil? }
     validate :inbox_cannot_be_renamed, on: :update
 
     before_validation on: :create do
@@ -51,6 +78,10 @@ module MailOnRails
 
     def trash?
       name == TRASH
+    end
+
+    def system?
+      SYSTEM_NAMES.include?(name)
     end
 
     # Reserves and returns the next UID for a new message.
@@ -86,6 +117,34 @@ module MailOnRails
     end
 
     private
+
+    # nil for a usable name, else why not. Control characters cover NUL,
+    # CR/LF and the rest of C0/C1 - none belongs in a folder name, and
+    # CR/LF in particular would have to be quoted on every IMAP response
+    # that echoes it. Edge whitespace makes two folders that look the same;
+    # "inbox" in any other case is INBOX to every IMAP client (RFC 3501
+    # 5.1), so a second row spelled differently could never be selected.
+    def name_problem
+      return nil if name.nil?
+      return "is not valid UTF-8" if name_unreadable?
+      return "must not contain control characters" if name.match?(/[[:cntrl:]]/)
+      return "is too long (maximum is #{MAX_NAME_BYTES} bytes)" if name.bytesize > MAX_NAME_BYTES
+      return "must not start or end with whitespace" if name.match?(/\A[[:space:]]|[[:space:]]\z/)
+      return "must not start with / or contain an empty level" if name.start_with?("/") || name.include?("//")
+      return "is nested too deeply (maximum is #{MAX_DEPTH} levels)" if name.count("/") >= MAX_DEPTH
+      return "is reserved - the inbox is always spelled INBOX" if name.casecmp?(INBOX) && name != INBOX
+
+      nil
+    end
+
+    def name_unreadable?
+      name.is_a?(String) && !name.valid_encoding?
+    end
+
+    def name_must_be_addressable
+      problem = name_problem
+      errors.add(:name, problem) if problem
+    end
 
     def inbox_cannot_be_renamed
       errors.add(:name, "INBOX cannot be renamed") if name_changed? && name_was == INBOX

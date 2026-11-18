@@ -91,6 +91,23 @@ class LearnSpamJobTest < DbSuite::TestCase
     end
   end
 
+  # M6 (audit 2026-11-17): defense in depth behind JunkFeedback - a learn
+  # job naming a canary account's message (enqueued before the account
+  # was made a canary, or by a caller that skipped JunkFeedback) must not
+  # reach the server-wide classifier.
+  test "a message in a honeypot account is never learned from" do
+    canary = MailOnRails::EmailAccount.create!(email: "canary@example.test", password: "a-long-test-password",
+                                               honeypot: true)
+    message = MailOnRails::EmailMessage.deliver_raw(canary.junk_mailbox, RAW)
+    FakeRspamd.serving("no action") do |addr, fake|
+      with_controller(addr) do
+        MailOnRails::LearnSpamJob.perform_now(message.id, message.email_object_id, canary.id, "spam")
+      end
+      assert_empty fake.requests
+    end
+    assert_empty enqueued
+  end
+
   test "a message that is gone is nothing to learn from" do
     FakeRspamd.serving("no action") do |addr, fake|
       with_controller(addr) { perform(message_id: 0, content_id: "Enothing") }

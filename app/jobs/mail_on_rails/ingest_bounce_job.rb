@@ -42,12 +42,13 @@ module MailOnRails
     private
 
     # The stamped envelope recipients are authoritative (X-Original-To,
-    # from the edge); the first valid VERP sub-address wins.
+    # from the edge); the first valid VERP sub-address wins. Read from the
+    # edge's own block at the top of the stored message, not through the
+    # Mail gem: a copy of the header lower down is the sender's.
     def verp_message(raw)
-      mail = Mail.read_from_string(raw)
-      mail.header.fields.select { |f| f.name.casecmp?("X-Original-To") }
-          .filter_map { |f| VerpAddress.decode(f.value.to_s.strip) }
-          .first
+      MailOnRails::EdgeHeaders.read(raw)["x-original-to"]
+                              .filter_map { |value| VerpAddress.decode(value.strip) }
+                              .first
     rescue StandardError
       nil
     end

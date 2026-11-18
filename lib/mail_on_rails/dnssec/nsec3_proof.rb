@@ -21,8 +21,39 @@ module MailOnRails
     # it, speak for a delegation) are module functions over
     # Dnsruby::RR::NSEC3, like NsecProof's - dnsruby is the codec and
     # the section 5 hash, nothing here reopens its classes.
+    #
+    # Hashing is the one cost here a response can scale (iterations x
+    # salt length x names x records), so every prover takes a Hasher:
+    # it remembers each hash for the life of one validation and reports
+    # each one it actually computes, which is how the resolver charges
+    # them to its budget.
     module Nsec3Proof
       Result = Struct.new(:proof, :status, :closest_encloser, keyword_init: true)
+
+      # The RFC 5155 section 5 hash, computed once per (name, salt,
+      # iterations). A closest-encloser walk asks about every ancestor of
+      # qname for every record offered, and without the memo a response
+      # with 24 records and a long qname buys thousands of iterated
+      # SHA-1 runs. The block, when given, runs before each hash that is
+      # really computed and may raise to stop the work.
+      class Hasher
+        def initialize(&on_compute)
+          @hashes = {}
+          # Name#canonical encodes the name afresh on every call, and
+          # the same Name object is asked about once per record.
+          @canonical = {}.compare_by_identity
+          @on_compute = on_compute
+        end
+
+        # +salt+ is the binary salt.
+        def hashed(name, iterations, salt)
+          canonical = (@canonical[name] ||= name.canonical)
+          @hashes[[ canonical, salt, iterations ]] ||= begin
+            @on_compute&.call
+            Dnsruby::RR::NSEC3.calculate_hash(name, iterations, salt, Dnsruby::Nsec3HashAlgorithms.SHA_1)
+          end
+        end
+      end
 
       # RFC 9276 section 3.2: a validator SHOULD treat responses whose
       # NSEC3 iteration count exceeds 100 as insecure rather than spend
@@ -46,15 +77,23 @@ module MailOnRails
       # nil when the records prove no such thing - including when qname
       # itself matches (it exists) or the would-be encloser is an ancestor
       # delegation (the child zone is authoritative below it).
-      def closest_encloser_proof(qname, nsec3s)
+      #
+      # The walk stops at the records' zone apex: nothing above it can
+      # match, and the apex is the shortest encloser there is.
+      def closest_encloser_proof(qname, nsec3s, hasher: Hasher.new)
+        apex_labels = nsec3s.map { |rr| rr.name.labels.length - 1 }.min
+        return nil unless apex_labels
+
         labels = qname.labels
         labels.each_index do |i|
+          break if labels.length - i < apex_labels
+
           candidate = Dnsruby::Name.new(labels[i..], true)
-          matching = nsec3s.find { |rr| matches?(rr, candidate) }
+          matching = nsec3s.find { |rr| matches?(rr, candidate, hasher: hasher) }
           next unless matching
           return nil if i.zero? || ancestor_delegation?(matching)
 
-          covering = nsec3s.find { |rr| covers?(rr, Dnsruby::Name.new(labels[(i - 1)..], true)) }
+          covering = nsec3s.find { |rr| covers?(rr, Dnsruby::Name.new(labels[(i - 1)..], true), hasher: hasher) }
           return nil unless covering
 
           return { closest_encloser: candidate, matching: matching, covering: covering }
@@ -64,10 +103,10 @@ module MailOnRails
 
       # RFC 5155 section 8.4 (name error): qname does not exist and no
       # wildcard could have synthesized it.
-      def name_error(qname, nsec3s)
-        ce = closest_encloser_proof(qname, nsec3s)
+      def name_error(qname, nsec3s, hasher: Hasher.new)
+        ce = closest_encloser_proof(qname, nsec3s, hasher: hasher)
         return nil unless ce
-        return nil unless nsec3s.any? { |rr| covers?(rr, wildcard_of(ce[:closest_encloser])) }
+        return nil unless nsec3s.any? { |rr| covers?(rr, wildcard_of(ce[:closest_encloser]), hasher: hasher) }
 
         Result.new(proof: :name_error, status: opt_out_status(ce), closest_encloser: ce[:closest_encloser])
       end
@@ -75,8 +114,8 @@ module MailOnRails
       # RFC 5155 sections 8.5-8.6 (no data): qname exists but has neither
       # qtype nor a CNAME. For DS, an Opt-Out span across the name proves
       # only that no *signed* delegation exists - hence :insecure.
-      def no_data(qname, qtype, nsec3s)
-        matching = nsec3s.find { |rr| matches?(rr, qname) }
+      def no_data(qname, qtype, nsec3s, hasher: Hasher.new)
+        matching = nsec3s.find { |rr| matches?(rr, qname, hasher: hasher) }
         if matching
           return nil if matching.types.include?(qtype) || matching.types.include?("CNAME")
           # The parent side of a delegation owns nothing at that name but DS.
@@ -86,7 +125,7 @@ module MailOnRails
         end
 
         if qtype == Dnsruby::Types.DS
-          ce = closest_encloser_proof(qname, nsec3s)
+          ce = closest_encloser_proof(qname, nsec3s, hasher: hasher)
           if ce && ce[:covering].opt_out?
             return Result.new(proof: :no_data, status: :insecure, closest_encloser: ce[:closest_encloser])
           end
@@ -96,11 +135,11 @@ module MailOnRails
 
       # RFC 5155 section 8.7 (wildcard no data): qname would match a
       # wildcard, but the wildcard lacks qtype.
-      def wildcard_no_data(qname, qtype, nsec3s)
-        ce = closest_encloser_proof(qname, nsec3s)
+      def wildcard_no_data(qname, qtype, nsec3s, hasher: Hasher.new)
+        ce = closest_encloser_proof(qname, nsec3s, hasher: hasher)
         return nil unless ce
 
-        matching = nsec3s.find { |rr| matches?(rr, wildcard_of(ce[:closest_encloser])) }
+        matching = nsec3s.find { |rr| matches?(rr, wildcard_of(ce[:closest_encloser]), hasher: hasher) }
         return nil unless matching
         return nil if matching.types.include?(qtype) || matching.types.include?("CNAME")
 
@@ -111,11 +150,11 @@ module MailOnRails
       # from a wildcard - the RRSIG's Labels field says how many labels the
       # source owner had - so the proof is that nothing closer than the
       # wildcard's parent exists for qname.
-      def wildcard_answer(qname, rrsig_labels, nsec3s)
+      def wildcard_answer(qname, rrsig_labels, nsec3s, hasher: Hasher.new)
         return nil if rrsig_labels >= qname.labels.length
 
         next_closer = Dnsruby::Name.new(qname.labels.last(rrsig_labels + 1), true)
-        covering = nsec3s.find { |rr| covers?(rr, next_closer) }
+        covering = nsec3s.find { |rr| covers?(rr, next_closer, hasher: hasher) }
         return nil unless covering
 
         Result.new(proof: :wildcard_answer, status: covering.opt_out? ? :insecure : :secure)
@@ -125,8 +164,8 @@ module MailOnRails
       # legitimate when an NSEC3 matches the delegation with NS set but DS
       # and SOA clear, or when the delegation falls inside an Opt-Out span.
       # Either way the child is provably outside DNSSEC: always :insecure.
-      def referral(delegation, nsec3s)
-        matching = nsec3s.find { |rr| matches?(rr, delegation) }
+      def referral(delegation, nsec3s, hasher: Hasher.new)
+        matching = nsec3s.find { |rr| matches?(rr, delegation, hasher: hasher) }
         if matching
           unless matching.types.include?("NS") &&
                  !matching.types.include?("DS") && !matching.types.include?("SOA")
@@ -135,7 +174,7 @@ module MailOnRails
           return Result.new(proof: :referral, status: :insecure)
         end
 
-        ce = closest_encloser_proof(delegation, nsec3s)
+        ce = closest_encloser_proof(delegation, nsec3s, hasher: hasher)
         return nil unless ce && ce[:covering].opt_out?
 
         Result.new(proof: :referral, status: :insecure, closest_encloser: ce[:closest_encloser])
@@ -147,7 +186,7 @@ module MailOnRails
       # when no denial proof was required). A response whose NSEC3 records
       # are all unusable (unknown algorithm, oversized iteration count) is
       # :insecure, never bogus (RFC 9276 section 3.2).
-      def verify(msg)
+      def verify(msg, hasher: Hasher.new)
         question = msg.question[0]
         return nil unless question
 
@@ -160,7 +199,7 @@ module MailOnRails
         return Result.new(proof: :none, status: :insecure) if nsec3s.empty?
 
         if msg.rcode == Dnsruby::RCode.NXDOMAIN
-          return name_error(qname, nsec3s) ||
+          return name_error(qname, nsec3s, hasher: hasher) ||
                  raise(Dnsruby::VerifyError.new("NSEC3 RRs do not prove the nonexistence of #{qname}"))
         end
         return nil unless msg.rcode == Dnsruby::RCode.NOERROR
@@ -170,7 +209,7 @@ module MailOnRails
           sig = answer_rrset.sigs[0]
           return nil if sig.nil? || sig.labels >= qname.labels.length # not wildcard-expanded
 
-          return wildcard_answer(qname, sig.labels, nsec3s) ||
+          return wildcard_answer(qname, sig.labels, nsec3s, hasher: hasher) ||
                  raise(Dnsruby::VerifyError.new("NSEC3 RRs do not prove the wildcard expansion for #{qname}"))
         end
         return nil if msg.answer.length > 0 # CNAME toward the answer; denial applies to its target, not qname
@@ -178,11 +217,11 @@ module MailOnRails
         ns_rrset = msg.authority.rrsets("NS")[0]
         soa_rrset = msg.authority.rrsets("SOA")[0]
         if ns_rrset && ns_rrset.length > 0 && (soa_rrset.nil? || soa_rrset.length == 0) && qtype != Dnsruby::Types.DS
-          return referral(Dnsruby::Name.new(ns_rrset.name.labels, true), nsec3s) ||
+          return referral(Dnsruby::Name.new(ns_rrset.name.labels, true), nsec3s, hasher: hasher) ||
                  raise(Dnsruby::VerifyError.new("NSEC3 RRs do not prove the referral to #{ns_rrset.name}"))
         end
 
-        no_data(qname, qtype, nsec3s) || wildcard_no_data(qname, qtype, nsec3s) ||
+        no_data(qname, qtype, nsec3s, hasher: hasher) || wildcard_no_data(qname, qtype, nsec3s, hasher: hasher) ||
           raise(Dnsruby::VerifyError.new("NSEC3 RRs do not prove the absence of #{qtype} at #{qname}"))
       end
 
@@ -215,21 +254,20 @@ module MailOnRails
 
       # Base32hex hash of +name+ under the record's parameters, or nil
       # when the record is unusable or the name lies outside its zone.
-      def hash_of(rr, name)
+      def hash_of(rr, name, hasher: Hasher.new)
         return nil unless usable?(rr)
 
         name = to_name(name)
         return nil unless in_zone?(rr, name)
 
         # salt reads back in presentation form ("-" when empty).
-        salt = Dnsruby::RR::NSEC3.decode_salt(rr.salt)
-        Dnsruby::RR::NSEC3.calculate_hash(name, rr.iterations, salt, rr.hash_alg)
+        hasher.hashed(name, rr.iterations, Dnsruby::RR::NSEC3.decode_salt(rr.salt))
       end
 
       # The record's owner hash is the hash of +name+: the name exists,
       # and the type bitmap enumerates its types.
-      def matches?(rr, name)
-        hash_of(rr, name) == hashed_owner(rr)
+      def matches?(rr, name, hasher: Hasher.new)
+        hash_of(rr, name, hasher: hasher) == hashed_owner(rr)
       end
 
       # The hash of +name+ falls strictly between the owner hash and
@@ -238,8 +276,8 @@ module MailOnRails
       # to the first, and owner == next is a single-record chain
       # covering everything but itself. base32hex preserves the sort
       # order of the raw digests, so string comparison suffices.
-      def covers?(rr, name)
-        hash = hash_of(rr, name)
+      def covers?(rr, name, hasher: Hasher.new)
+        hash = hash_of(rr, name, hasher: hasher)
         return false unless hash
 
         owner = hashed_owner(rr)

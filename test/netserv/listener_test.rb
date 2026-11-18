@@ -327,3 +327,62 @@ class IdleReportTest < Minitest::Test
     assert_equal "tls_handshake_failed", closed_info[:idle]
   end
 end
+
+# Server#kick: the caller's matcher (the ban-list lookup OpsSync runs for
+# every live session, every tick) must not run while the lifecycle lock is
+# held - every accept and every teardown waits on that lock.
+class KickLockTest < Minitest::Test
+  class Server < MailOnRails::Netserv::Server
+    def protocol_name = "TEST"
+  end
+
+  def setup
+    @server = Server.new(ListenerTest::FakeStore.new, [], nil)
+    @pairs = []
+  end
+
+  def teardown
+    @pairs.flatten.each { |socket| socket.close rescue nil }
+  end
+
+  # Registers a live connection the way spawn_session does.
+  def connection_from(ip)
+    ours, theirs = UNIXSocket.pair
+    @pairs << [ ours, theirs ]
+    conn = Server::Conn.new(nil, nil, ip, { port: 25 }, Time.now, 0.0, nil, @pairs.size)
+    @server.instance_variable_get(:@lifecycle).synchronize { @server.instance_variable_get(:@sessions)[ours] = conn }
+    [ ours, conn ]
+  end
+
+  test "the matcher runs outside the lifecycle lock" do
+    socket, conn = connection_from("203.0.113.9")
+    lock = @server.instance_variable_get(:@lifecycle)
+    held = []
+
+    kicked = @server.kick do |_ip|
+      held << lock.owned?
+      @server.connections # takes the lifecycle lock: a deadlock if kick still held it
+      true
+    end
+
+    assert_equal [ false ], held
+    assert_equal 1, kicked
+    assert socket.closed?
+    assert_equal :kick, conn.ended_by
+  end
+
+  test "the matcher is asked once per address, and only matching peers are closed" do
+    a1, = connection_from("203.0.113.9")
+    a2, = connection_from("203.0.113.9")
+    b, conn_b = connection_from("198.51.100.4")
+    asked = []
+
+    kicked = @server.kick { |ip| asked << ip; ip == "203.0.113.9" }
+
+    assert_equal %w[198.51.100.4 203.0.113.9], asked.sort
+    assert_equal 2, kicked
+    assert a1.closed? && a2.closed?
+    assert_not b.closed?
+    assert_nil conn_b.ended_by
+  end
+end

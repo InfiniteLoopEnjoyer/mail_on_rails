@@ -18,6 +18,11 @@ module MailOnRails
         nil
       end
 
+      # Longest login name looked up as an account. SASL hands over
+      # client-chosen bytes of any length; past this they name no mailbox
+      # (RFC 5321 paths stop at 256) and are only ever counted.
+      MAX_LOGIN_LENGTH = 320
+
       # +ip+ is the mail client's address as the edge saw it, used for
       # brute-force throttling (AuthThrottle). It is optional so an edge
       # that cannot supply one still gets per-account throttling.
@@ -37,19 +42,46 @@ module MailOnRails
       # blocked account is no shield for an attacker working through
       # others, since each fresh address is adjudicated normally and feeds
       # the ip counter. Pinned in test/models/auth_throttle_test.rb.
+      #
+      # An account block does not refuse a source that logged in to that
+      # account lately (AuthThrottle.known_source?): strangers guessing at
+      # an address must not be able to lock its owner out.
+      #
+      # An attempt that is let through is counted as a failure BEFORE the
+      # password is looked at (AuthThrottle.reserve) and given back when it
+      # proves right. Parallel guesses therefore each see the others, and
+      # nothing that goes wrong after the verdict can leave a wrong guess
+      # uncounted.
       # +source+ names the auth surface ("imap"/"smtp") for the attempt log;
       # it only affects what gets recorded, never the verdict.
       def authenticate(email, password, ip: nil, source: nil)
         db do
-          if (blocked = AuthThrottle.check(ip: ip, email: email))
-            next throttled_result(blocked, email, ip, source)
+          name, addressable = login_name(email)
+          # The cheap refusal first: a blocked caller costs one indexed
+          # read, not the reservation's row locks.
+          if (blocked = AuthThrottle.check(ip: ip, email: name, exempt_known_source: true))
+            next throttled_result(blocked, name, ip, source)
           end
 
-          account = EmailAccount.authenticate_by(email: email.to_s, password: password.to_s)
+          blocked, holds = AuthThrottle.reserve(ip: ip, email: name, exempt_known_source: true)
+          next throttled_result(blocked, name, ip, source) if blocked
+
+          # A name that had to be cleaned up, or a password bcrypt cannot
+          # take (it raises on a NUL), matches no account: a wrong guess,
+          # not a store error - an error would be answered as a temporary
+          # failure and counted nowhere. (A real store error from here on
+          # leaves the reservation standing: unadjudicated, but counted.)
+          password = password.to_s
+          account = if addressable && !password.include?("\0")
+            EmailAccount.authenticate_by(email: name, password: password)
+          end
           if account
-            AuthThrottle.clear_account(account.email)
+            bookkeeping("auth success") do
+              AuthThrottle.refund(holds)
+              AuthThrottle.clear_account(account.email)
+            end
           else
-            count_failure(email, ip, source, password: password)
+            count_failure(name, ip, source, password: password, counted: true)
           end
           { account_id: account&.id, email: account&.email, honeypot: account&.honeypot? || false }
         end
@@ -58,9 +90,24 @@ module MailOnRails
       # Counts a failure the store itself did not adjudicate: SCRAM proofs
       # are verified by the daemon against verifier material, so the app
       # only learns of those failures when the daemon reports them.
-      def record_auth_failure(email, ip: nil, source: nil)
+      # +reservation+ is what a scram_credentials(reserve: true) call handed
+      # out: that exchange is already counted, so it is only logged here.
+      def record_auth_failure(email, ip: nil, source: nil, reservation: nil)
         db do
-          count_failure(email, ip, source)
+          name, = login_name(email)
+          count_failure(name, ip, source, counted: !reservation.nil?)
+          {}
+        end
+      end
+
+      # The other end of a reserved SCRAM exchange: the proof verified, so
+      # the failure counted up front is given back and the account's
+      # counter cleared, as authenticate does for a right password.
+      # Optional store method (only a session that reserves calls it).
+      def record_auth_success(email, reservation: nil)
+        db do
+          AuthThrottle.refund(reservation)
+          AuthThrottle.clear_account(email)
           {}
         end
       end
@@ -71,10 +118,17 @@ module MailOnRails
       # count the throttle just reached). +password+ is the rejected
       # plaintext when this store saw one (nil for SCRAM, where it never
       # sees more than a proof); AuthAttempt decides whether to keep it.
-      def count_failure(email, ip, source, password: nil)
-        AuthThrottle.record_failure(ip: ip, email: email)
-        log_attempt(email, ip, source, "bad_credentials", password: password)
-        BannedIp.auto_ban_after_failure(ip: ip, email: email, source: source)
+      # +counted+ says the throttle already holds this failure (a
+      # reservation), so it must not be counted a second time.
+      #
+      # Each step stands alone: the verdict is already decided when this
+      # runs, and a failing counter or log write must not turn "wrong
+      # password" into a store error - the session answers that as a
+      # temporary failure and counts it nowhere.
+      def count_failure(email, ip, source, password: nil, counted: false)
+        bookkeeping("auth failure count") { AuthThrottle.record_failure(ip: ip, email: email) } unless counted
+        bookkeeping("auth attempt log") { log_attempt(email, ip, source, "bad_credentials", password: password) }
+        bookkeeping("auth auto-ban") { BannedIp.auto_ban_after_failure(ip: ip, email: email, source: source) }
       end
 
       # SCRAM-SHA-256 verifier material for a daemon-side AUTHENTICATE/AUTH
@@ -90,24 +144,43 @@ module MailOnRails
       # the auth surface for the attempt log, as in authenticate; only a
       # throttled refusal is logged here (the verdict itself is the
       # daemon's, reported through record_auth_failure).
-      def scram_credentials(email, ip: nil, source: nil)
+      #
+      # The account-scope exemption for a known source applies here as in
+      # authenticate. +reserve+ is the session's opt-in to counting the
+      # exchange up front, as authenticate does (the daemon adjudicates,
+      # so the store cannot refund on its own): the result then carries
+      # reservation:, which the session hands to record_auth_success when
+      # the proof verifies and to record_auth_failure when it does not. An
+      # exchange the client abandons stays counted.
+      def scram_credentials(email, ip: nil, source: nil, reserve: false)
         db do
-          if (blocked = AuthThrottle.check(ip: ip, email: email))
-            next throttled_result(blocked, email, ip, source)
+          name, addressable = login_name(email)
+          if (blocked = AuthThrottle.check(ip: ip, email: name, exempt_known_source: true))
+            next throttled_result(blocked, name, ip, source)
           end
 
-          account = EmailAccount.find_by(email: email.to_s.strip.downcase)
-          next Scram.decoy_credentials(email.to_s.strip.downcase, decoy_secret) unless account&.scram_salt
+          holds = nil
+          if reserve
+            blocked, holds = AuthThrottle.reserve(ip: ip, email: name, exempt_known_source: true)
+            next throttled_result(blocked, name, ip, source) if blocked
+          end
 
-          {
-            account_id: account.id,
-            email: account.email,
-            salt_base64: account.scram_salt,
-            iterations: account.scram_iterations,
-            stored_key_base64: account.scram_stored_key,
-            server_key_base64: account.scram_server_key,
-            honeypot: account.honeypot?
-          }
+          key = AuthThrottle.normalize(name)
+          account = EmailAccount.find_by(email: key) if addressable
+          material = if account&.scram_salt
+            {
+              account_id: account.id,
+              email: account.email,
+              salt_base64: account.scram_salt,
+              iterations: account.scram_iterations,
+              stored_key_base64: account.scram_stored_key,
+              server_key_base64: account.scram_server_key,
+              honeypot: account.honeypot?
+            }
+          else
+            Scram.decoy_credentials(key, decoy_secret)
+          end
+          holds ? material.merge(reservation: holds) : material
         end
       end
 
@@ -117,6 +190,15 @@ module MailOnRails
       # the last good list".
       def banned_cidrs
         db { BannedIp.pluck(:cidr) }
+      end
+
+      # A cheap fingerprint of that list - row count, newest id, newest
+      # write - so the denylist's poll can skip re-reading (and re-parsing)
+      # a list that has not changed: with an automatic ban setting on,
+      # strangers decide how long it is. Optional store method; anything
+      # but an array (db's error hash) reads as "no fingerprint".
+      def banned_cidrs_stamp
+        db { BannedIp.pick(Arel.sql("COUNT(*)"), Arel.sql("MAX(id)"), Arel.sql("MAX(updated_at)")) }
       end
 
       # Persists one closed connection for the history section of the live
@@ -215,9 +297,41 @@ module MailOnRails
 
       def throttled_result(blocked, email, ip, source = nil)
         MailOnRails.logger.warn("[mail_on_rails] auth throttled by #{blocked[:scope]} " \
-                          "(#{ip || "no ip"}, #{email}): #{blocked[:retry_after]}s remaining")
-        log_attempt(email, ip, source, "throttled")
+                          "(#{ip || "no ip"}, #{loggable_login(email)}): #{blocked[:retry_after]}s remaining")
+        bookkeeping("auth attempt log") { log_attempt(email, ip, source, "throttled") }
         { account_id: nil, email: nil, throttled: true, retry_after: blocked[:retry_after] }
+      end
+
+      # A client's login name as the store will key, look up and record
+      # it, and whether it can name an account at all. SASL bytes arrive
+      # raw: invalid UTF-8 or a NUL fails the database round trip outright
+      # (PostgreSQL), and an unbounded name does not fit the throttle's
+      # index - either would surface as a store error, which is counted
+      # nowhere. So the name is made storable and bounded here, once, and
+      # one that needed changing is never adjudicated: no account is
+      # called that, and the cleaned-up spelling must not match one.
+      def login_name(raw)
+        raw = raw.to_s
+        name = raw.dup.force_encoding(Encoding::UTF_8).scrub("?").gsub(/[[:cntrl:]]/, "?")[0, MAX_LOGIN_LENGTH]
+        [ name, name.b == raw.b ]
+      end
+
+      # A login name as a log line may carry it: client-chosen, so a CR/LF
+      # or control byte in one would forge a line of its own. Printable
+      # characters only, bounded, "(empty)" for none - the sessions'
+      # loggable_user.
+      def loggable_login(name)
+        text = name.to_s.dup.force_encoding(Encoding::UTF_8).scrub("?").gsub(/[^[:graph:]]/, "?")[0, 80]
+        text.empty? ? "(empty)" : text
+      end
+
+      # Runs one piece of after-the-verdict accounting on its own: a
+      # failure is logged and swallowed, never raised into the verdict.
+      def bookkeeping(what)
+        yield
+      rescue StandardError => e
+        MailOnRails.logger.error("[mail_on_rails] #{what} failed: #{e.class}: #{e.message}")
+        nil
       end
 
       # The attempt log is an audit trail, not part of the verdict, so it is

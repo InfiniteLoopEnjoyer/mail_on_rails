@@ -131,6 +131,20 @@ class VerpTest < DbSuite::TestCase
     MailOnRails::IngestBounceJob.new.perform(message)
   end
 
+  # The VERP address is an envelope fact: only the edge's block at the top
+  # of the stored message names it. A copy the sender wrote further down -
+  # whatever spelling got it past the edge's strip - is not read.
+  test "an X-Original-To below the edge block is not taken for the envelope recipient" do
+    message = queue_message
+    verp = MailOnRails::VerpAddress.encode(message)
+    raw = "Return-Path: <>\nX-Original-To: bounce@local.test\nFrom: mailer-daemon@remote.test\n" \
+          "X-Original-To\v: #{verp}\nX-Original-To: #{verp}\nSubject: delivery status\n" \
+          "#{bounce_raw(verp).split("Subject: delivery status\n", 2).last}"
+
+    assert_nil MailOnRails::IngestBounceJob.new.send(:verp_message, raw)
+    assert_equal message, MailOnRails::IngestBounceJob.new.send(:verp_message, bounce_raw(verp))
+  end
+
   test "a hard 5.x.x DSN suppresses the recipient for that sender only" do
     message = queue_message
     ingest(bounce_raw(MailOnRails::VerpAddress.encode(message)))

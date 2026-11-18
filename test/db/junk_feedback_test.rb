@@ -132,6 +132,23 @@ class JunkFeedbackTest < DbSuite::TestCase
     MailOnRails::SenderRule.singleton_class.remove_method(:record_without_failure!)
   end
 
+  # M6 (audit 2026-11-17): a canary account exists to be broken into.
+  # Whoever is in it must not be able to write sender rules or train the
+  # classifier that scores every real account's mail - by any route (IMAP
+  # APPEND/COPY/MOVE, the web UI's "Mark as spam").
+  test "filing in a honeypot account teaches nothing" do
+    canary = MailOnRails::EmailAccount.create!(email: "canary@example.test", password: "a-long-test-password",
+                                               honeypot: true)
+    moved = MailOnRails::EmailMessage.deliver_raw(canary.inbox, RAW).move_to!(canary.junk_mailbox, source: "imap")
+    rescued = moved.move_to!(canary.inbox, source: "imap")
+    appended = MailOnRails::EmailMessage.deliver_raw(canary.junk_mailbox, RAW)
+
+    assert_equal canary.inbox, rescued.mailbox, "the moves themselves still happen"
+    assert_nil MailOnRails::JunkFeedback.filed(appended, from: nil, to: canary.junk_mailbox, source: "imap")
+    assert_empty canary.sender_rules
+    assert_empty learn_jobs
+  end
+
   test "the classifier on its own" do
     old = account.mailboxes.create!(name: "Junk/Old")
 

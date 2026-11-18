@@ -158,4 +158,144 @@ class DenylistTest < Minitest::Test
     list.pull
     assert_not list.banned?("203.0.113.7")
   end
+
+  # -- scaling (an automatic ban setting lets strangers add rows) ----------
+
+  # A store that also offers the list's fingerprint, and counts both reads.
+  class StampedStore < FakeStore
+    attr_accessor :stamp
+    attr_reader :stamp_reads
+
+    def initialize(cidrs = [])
+      super
+      @stamp = [ cidrs.size, 1, "t0" ]
+      @stamp_reads = 0
+    end
+
+    def banned_cidrs_stamp
+      @stamp_reads += 1
+      raise @stamp if @stamp.is_a?(Class)
+
+      @stamp
+    end
+  end
+
+  test "every prefix length matches, host bits and all" do
+    list = denylist(%w[203.0.113.7 198.51.100.0/24 10.0.0.0/8 192.0.2.128/25 192.0.2.64/27
+                       2001:db8:1:2::/64 2001:db8:5::/48 2a01:4f8::/32 2001:db8:9:9::1 2001:db8:7::/49 2400::/12])
+
+    %w[203.0.113.7 198.51.100.255 10.255.0.1 192.0.2.129 192.0.2.95
+       2001:db8:1:2:ffff:ffff:ffff:ffff 2001:db8:5:ffff::1 2a01:4f8:ffff::1 2001:db8:9:9::1
+       2001:db8:7:7fff::1 240f:ffff::1].each { |ip| assert list.banned?(ip), ip }
+    %w[203.0.113.8 198.51.101.0 11.0.0.1 192.0.2.127 192.0.2.96
+       2001:db8:1:3::1 2001:db8:6::1 2a01:4f9::1 2001:db8:9:9::2 2001:db8:7:8000::1 2410::1].each do |ip|
+      assert_not list.banned?(ip), ip
+    end
+  end
+
+  # The accept thread's cost must not grow with the list: one probe per
+  # prefix length that occurs, not one comparison per row.
+  test "a lookup is keyed by prefix, not a scan of the list" do
+    cidrs = Array.new(20_000) { |i| "2001:db8:#{(i / 65_536).to_s(16)}:#{(i % 65_536).to_s(16)}::/64" } +
+            Array.new(20_000) { |i| "198.#{18 + i / 65_536}.#{(i / 256) % 256}.#{i % 256}" }
+    list = denylist(cidrs)
+    index = list.instance_variable_get(:@index)
+
+    assert_equal [ 64 ], index.v6.keys, "one table for the /64s"
+    assert_equal [ 0 ], index.v4.keys, "one table for the host entries"
+    assert list.banned?("2001:db8:0:4e1f::1"), "the last /64"
+    assert_not list.banned?("2001:db8:0:4e20::1")
+    assert list.banned?("198.18.78.31"), "the last host"
+    assert_not list.banned?("198.18.78.32")
+
+    probes = 0
+    counted = index.v6.transform_values do |networks|
+      networks.dup.tap { |copy| copy.define_singleton_method(:include?) { |key| probes += 1; super(key) } }
+    end
+    list.instance_variable_set(:@index, index.class.new(index.v4, counted))
+    list.banned?("2001:db9::1")
+    assert_equal 1, probes, "a miss costs one hash probe per prefix length, whatever the row count"
+  end
+
+  test "an unchanged fingerprint skips the list read altogether" do
+    @store = StampedStore.new(%w[203.0.113.7])
+    list = MailOnRails::Netserv::Denylist.new(@store, ttl: 0).tap(&:refresh!)
+    assert_equal 1, @store.reads
+
+    3.times { list.pull }
+    assert_equal 1, @store.reads, "the list is not re-read while the fingerprint holds"
+    assert_operator @store.stamp_reads, :>=, 3
+    assert list.banned?("203.0.113.7")
+
+    @store.cidrs = %w[203.0.113.7 192.0.2.1]
+    @store.stamp = [ 2, 2, "t1" ]
+    list.pull
+    assert_equal 2, @store.reads
+    assert list.banned?("192.0.2.1")
+  end
+
+  test "refresh! reads the list even when the fingerprint has not moved" do
+    @store = StampedStore.new(%w[203.0.113.7])
+    list = MailOnRails::Netserv::Denylist.new(@store, ttl: 0).tap(&:refresh!)
+
+    @store.cidrs = %w[192.0.2.1] # same count, and the stamp left stale on purpose
+    list.refresh!
+    assert list.banned?("192.0.2.1")
+    assert_not list.banned?("203.0.113.7")
+  end
+
+  test "a fingerprint the store cannot give falls back to reading the list" do
+    @store = StampedStore.new(%w[203.0.113.7])
+    list = MailOnRails::Netserv::Denylist.new(@store, ttl: 0).tap(&:refresh!)
+
+    [ RuntimeError, { error: "boom", code: :internal }, nil ].each do |broken|
+      @store.stamp = broken
+      reads = @store.reads
+      list.pull
+      assert_equal reads + 1, @store.reads, broken.inspect
+    end
+    assert list.banned?("203.0.113.7")
+  end
+
+  test "a failed list read does not adopt the new fingerprint" do
+    @store = StampedStore.new(%w[203.0.113.7])
+    list = MailOnRails::Netserv::Denylist.new(@store, ttl: 0).tap(&:refresh!)
+
+    @store.stamp = [ 2, 2, "t1" ]
+    @store.cidrs = RuntimeError
+    list.pull
+    assert list.banned?("203.0.113.7"), "the last good list keeps serving"
+
+    @store.cidrs = %w[203.0.113.7 192.0.2.1]
+    list.pull
+    assert list.banned?("192.0.2.1"), "and the change is still picked up once the store answers"
+  end
+
+  # A reload after one new ban must not re-parse the other 65,535.
+  test "a changed list only parses the entries it has not seen" do
+    list = denylist(%w[203.0.113.7 198.51.100.0/24])
+    parsed = []
+    list.define_singleton_method(:parse) { |entry| parsed << entry; super(entry) }
+
+    @store.cidrs = %w[203.0.113.7 198.51.100.0/24 192.0.2.1]
+    list.pull
+    assert_equal %w[192.0.2.1], parsed
+    assert list.banned?("192.0.2.1")
+    assert list.banned?("198.51.100.9")
+
+    @store.cidrs = %w[192.0.2.1]
+    list.pull
+    assert_equal %w[192.0.2.1], parsed, "dropping entries parses nothing"
+    assert_not list.banned?("203.0.113.7")
+    assert_not list.banned?("198.51.100.9")
+  end
+
+  test "an identical list is not rebuilt" do
+    list = denylist(%w[203.0.113.7])
+    index = list.instance_variable_get(:@index)
+
+    @store.cidrs = %w[203.0.113.7]
+    list.pull
+    assert_same index, list.instance_variable_get(:@index)
+  end
 end

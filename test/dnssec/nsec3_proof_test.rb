@@ -226,4 +226,62 @@ class Nsec3ProofTest < Minitest::Test
     msg = Rfc5155Zone.response("ns1.example.", Dnsruby::Types.MX, authority: [ SOA ])
     assert_nil verify(msg)
   end
+
+  # ----- hashing cost (audit L15) ---------------------------------------
+
+  def counting_hasher
+    count = [ 0 ]
+    [ Proof::Hasher.new { count[0] += 1 }, count ]
+  end
+
+  test "a hash is computed once per name and parameter set, however many records ask" do
+    hasher, count = counting_hasher
+    chain = Rfc5155Zone.chain(flags: 0)
+    name = Dnsruby::Name.create("a.c.x.w.example.")
+
+    result = Proof.name_error(name, chain, hasher: hasher)
+    assert_equal :name_error, result.proof
+    # a.c.x.w, c.x.w, x.w (the closest encloser) and *.x.w - against
+    # twelve records, several passes each.
+    assert_equal 4, count[0]
+
+    Proof.name_error(name, chain, hasher: hasher)
+    assert_equal 4, count[0], "a second proof over the same names costs nothing"
+
+    resalted = Dnsruby::RR.create("#{Rfc5155Zone.hash_of("example.")}.example. 3600 IN NSEC3 1 0 12 beef " \
+                                  "#{Rfc5155Zone.hash_of("a.example.")} A")
+    Proof.matches?(resalted, name, hasher: hasher)
+    assert_equal 5, count[0], "another salt is another hash"
+  end
+
+  test "the closest-encloser walk stops at the zone apex" do
+    hasher, count = counting_hasher
+    # Nothing here matches, so the walk runs its full course: qname and
+    # each ancestor down to example. - and neither "." nor anything else
+    # above the records' zone.
+    lone = Rfc5155Zone.chain("35mthgpgcu1qg68fab165klnsnk3dpvl", flags: 0)
+    assert_nil Proof.closest_encloser_proof(Dnsruby::Name.create("f.e.d.c.b.example."), lone, hasher: hasher)
+    assert_equal 6, count[0]
+
+    assert_nil Proof.closest_encloser_proof(Dnsruby::Name.create("www.elsewhere.test."), lone, hasher: hasher)
+    assert_equal 6, count[0], "names outside the zone are never hashed"
+  end
+
+  test "the hasher's block can stop the work" do
+    budget = 2
+    hasher = Proof::Hasher.new { raise "enough" if (budget -= 1).negative? }
+    error = assert_raises(RuntimeError) do
+      Proof.name_error(Dnsruby::Name.create("a.c.x.w.example."), Rfc5155Zone.chain(flags: 0), hasher: hasher)
+    end
+    assert_equal "enough", error.message
+  end
+
+  test "the memoized hash is the RFC 5155 Appendix A hash" do
+    hasher = Proof::Hasher.new
+    salt = [ Rfc5155Zone::SALT ].pack("H*")
+    2.times do
+      assert_equal Rfc5155Zone.hash_of("x.y.w.example."),
+                   hasher.hashed(Dnsruby::Name.create("X.Y.W.Example."), Rfc5155Zone::ITERATIONS, salt)
+    end
+  end
 end

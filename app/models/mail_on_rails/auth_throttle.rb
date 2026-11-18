@@ -32,12 +32,29 @@
 # for IPv6 - an IPv6 guesser gets a fresh /128 per attempt for free, so a
 # per-address budget would bound nothing. Callers still pass the full
 # address; the key is derived here so every writer and reader agree.
+#
+# The account scope has one exemption, for the mail edges: a source that
+# logged in to that same account lately (known_source?) is not refused by
+# the account block. Ten wrong guesses from strangers would otherwise lock
+# the owner out of their own mailbox for as long as the guessing goes on.
+# The exemption skips that one refusal and nothing else - the password is
+# still checked, the ip scope still applies to the source, and its
+# failures are still counted.
+#
+# The mail stores check and count in one step (reserve) so that parallel
+# guesses cannot all be adjudicated against the same remaining budget;
+# check + record_failure remain for callers that adjudicate elsewhere.
 require "mail_on_rails/netserv/ip"
 
 module MailOnRails
   class AuthThrottle < Record
     IP = "ip"
     ACCOUNT = "account"
+
+    # Longest key kept. A login name is client-chosen bytes; past this it
+    # is no address (RFC 5321 paths stop at 256), and an unbounded one
+    # would not fit the unique index it is looked up through.
+    MAX_KEY_LENGTH = 320
 
     class << self
       # Failures older than this stop counting.
@@ -51,18 +68,111 @@ module MailOnRails
 
       def account_block_seconds = MailOnRails::Settings[:auth_account_block]
 
+      # How far back a login still marks its source as the account's own
+      # (known_source?): the same lookback the automatic bans use for "this
+      # address does real mail work here".
+      def known_source_days = MailOnRails::Settings[:honeypot_collateral_days]
+
       # nil when the attempt may proceed, otherwise
       # { retry_after: <seconds>, scope: "ip" | "account" }. When both scopes
       # are blocked the longer block is reported, so a client that honors
       # retry_after doesn't come back into a still-live block.
-      def check(ip:, email:, now: Time.current)
-        blocked = entries_for(ip: ip, email: email)
-                    .where(blocked_until: now..)
-                    .order(blocked_until: :desc)
-                    .first
-        return nil unless blocked
+      #
+      # +exempt_known_source+ is the mail edges' opt-in to the account-scope
+      # exemption (see the class comment); it is only looked up when the
+      # account block is the one thing in the way. The web login leaves it
+      # off: a mail login is no evidence for the web credential. A caller
+      # with evidence of its own (a surface with its own sessions) passes
+      # a callable instead of true; it is asked just as lazily, and its
+      # raising reads as "unknown" like any failed lookup.
+      def check(ip:, email:, now: Time.current, exempt_known_source: false)
+        blocks = entries_for(ip: ip, email: email).where(blocked_until: now..).to_a
+        blocked = standing_block(blocks, ip, email, now, exempt_known_source)
+        blocked && verdict(blocked, now)
+      end
 
-        { retry_after: (blocked.blocked_until - now).ceil, scope: blocked.scope }
+      # check and record_failure as one step, for a caller about to
+      # adjudicate a credential: under the row locks, either the attempt is
+      # refused ([ verdict, nil ] - nothing counted, as with check) or one
+      # failure is counted in every scope up front ([ nil, holds ]). Counting
+      # before the verdict is what makes the budget hold against parallel
+      # guesses - each one sees the others' reservations. The caller hands
+      # +holds+ back to refund when the credential turns out right, and
+      # does nothing more when it turns out wrong: the failure is already
+      # counted, once.
+      def reserve(ip:, email:, now: Time.current, exempt_known_source: false)
+        list = targets(ip: ip, email: email)
+        return [ nil, [] ] if list.empty?
+
+        rows = list.map do |scope, key, _limit, _block_seconds|
+          find_or_create_by!(scope: scope, key: key) { |r| r.window_started_at = now }
+        end
+        transaction do
+          # Always ip before account, so two reservations cannot deadlock.
+          rows.each(&:lock!)
+          blocks = rows.select { |row| row.blocked_until && row.blocked_until >= now }
+          if (blocked = standing_block(blocks, ip, email, now, exempt_known_source))
+            next [ verdict(blocked, now), nil ]
+          end
+
+          holds = rows.zip(list).filter_map do |row, (_scope, _key, limit, block_seconds)|
+            # Only a known source gets here with a blocked row: its account
+            # block stands as it is (apply_failure leaves it alone too).
+            next if blocks.include?(row)
+
+            apply_failure(row, limit, block_seconds, now)
+            row.save!
+            [ row.scope, row.key, row.window_started_at, row.blocked_until ]
+          end
+          [ nil, holds ]
+        end
+      rescue ActiveRecord::RecordNotUnique, ActiveRecord::RecordNotFound
+        # A lost create race, or prune! between our find and our lock.
+        retry
+      end
+
+      # Gives back what reserve counted, for an attempt whose credential
+      # was right. Only its own count: a row whose window has since been
+      # reset holds someone else's failures and is left alone, and a block
+      # is lifted only when this very reservation tripped it (one applied
+      # since - block_ip!, another failure - stands).
+      def refund(holds)
+        Array(holds).each do |scope, key, window_started_at, tripped_until|
+          row = find_by(scope: scope, key: key)
+          next unless row
+
+          transaction do
+            row.lock!
+            next unless same_instant?(row.window_started_at, window_started_at) && row.failure_count.positive?
+
+            row.failure_count -= 1
+            row.blocked_until = nil if tripped_until && same_instant?(row.blocked_until, tripped_until)
+            row.save!
+          end
+        rescue ActiveRecord::RecordNotFound
+          next # pruned or cleared meanwhile: nothing left to give back
+        end
+        nil
+      end
+
+      # "Has this source logged in to this account lately?" - the evidence
+      # behind the account-scope exemption, read from what the listeners
+      # already keep: the connection history (written when a session ends)
+      # and the live connection table (a phone holds one IMAP session open
+      # for hours). Both carry the authenticated account, so neither a
+      # failed login nor a login to some other account earns anything, and
+      # both are asked about the source's throttle key - the unit every
+      # other per-source control uses. Any error reads as "unknown": the
+      # exemption must never be what lets an attempt through by accident.
+      def known_source?(ip, email, now: Time.current)
+        account = normalize(email)
+        return false if ip.blank? || account.blank?
+
+        ClosedConnection.logged_in_from?(ip, account, since: now - known_source_days.days) ||
+          OpenConnection.logged_in_from?(ip, account)
+      rescue StandardError => e
+        MailOnRails.logger.error("[mail_on_rails] known-source lookup failed: #{e.class}: #{e.message}")
+        false
       end
 
       # The blocks currently in force across both scopes, longest remaining
@@ -138,7 +248,13 @@ module MailOnRails
           .delete_all
       end
 
-      def normalize(email) = email.to_s.strip.downcase
+      # The account-scope key for a login name. Client-chosen bytes: made
+      # storable (valid UTF-8, no control characters - PostgreSQL refuses a
+      # NUL outright) and bounded before they reach the unique index.
+      def normalize(email)
+        email.to_s.dup.force_encoding(Encoding::UTF_8).scrub("?")
+             .strip.downcase.gsub(/[[:cntrl:]]/, "?")[0, MAX_KEY_LENGTH]
+      end
 
       # The ip-scope row key for a peer address (see the class comment).
       def ip_key(ip) = Netserv.throttle_key(ip.to_s)
@@ -150,6 +266,38 @@ module MailOnRails
         list << [ IP, ip_key(ip), max_failures_per_ip, ip_block_seconds ] if ip.present?
         list << [ ACCOUNT, normalize(email), max_failures_per_account, account_block_seconds ] if email.present?
         list
+      end
+
+      # The block that refuses this attempt, or nil: the longest in force,
+      # unless the account block is the only one and the source is known.
+      def standing_block(blocks, ip, email, now, exempt_known_source)
+        return nil if blocks.empty?
+        if exempt_known_source && blocks.all? { |row| row.scope == ACCOUNT } &&
+           exempt?(exempt_known_source, ip, email, now)
+          return nil
+        end
+
+        blocks.max_by(&:blocked_until)
+      end
+
+      def exempt?(evidence, ip, email, now)
+        return known_source?(ip, email, now: now) unless evidence.respond_to?(:call)
+
+        evidence.call ? true : false
+      rescue StandardError => e
+        MailOnRails.logger.error("[mail_on_rails] known-source lookup failed: #{e.class}: #{e.message}")
+        false
+      end
+
+      def verdict(blocked, now)
+        { retry_after: (blocked.blocked_until - now).ceil, scope: blocked.scope }
+      end
+
+      # Timestamps compared across a database round trip, which may round
+      # them; two different stamps on one row are a block or a window
+      # apart, never under a second.
+      def same_instant?(a, b)
+        !a.nil? && !b.nil? && (a - b).abs < 1.0
       end
 
       def entries_for(ip:, email:)

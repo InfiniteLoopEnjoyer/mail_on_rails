@@ -10,7 +10,9 @@
 # AuthAttempt and ClosedConnection the table is capped per source: past
 # honeypot_max_events_per_ip hits from one address (IPv6: one /64) inside
 # honeypot_cap_window, further hits are answered by the session as before
-# but not stored, and the last stored row says so in its response.
+# but not stored, and the last stored row says so in its response. The cap
+# is about storage only: what a hit earns its source (below) is decided
+# for every hit, stored or not.
 #
 # Written from the protocol sessions' honeypot path through
 # Store::Base#record_honeypot_event (best-effort, respond_to?-guarded like
@@ -64,7 +66,9 @@ module MailOnRails
     validates :protocol, inclusion: { in: PROTOCOLS }
     validates :trigger, inclusion: { in: TRIGGERS }
 
-    after_create_commit :apply_response
+    # A row written through record arrives with its response already
+    # decided (and acted on); one created directly gets it here.
+    after_create_commit :apply_response, unless: :response?
     after_create_commit :enqueue_enrichment
 
     class << self
@@ -125,17 +129,28 @@ module MailOnRails
       # event id, so its teardown transcript flush is skipped too). Never
       # raises: this runs on a live connection thread, and losing an intel
       # row is always better than disturbing the session.
+      #
+      # The response is decided - and the ban or throttle applied - BEFORE
+      # the cap is consulted. The cap counts an IPv6 source's whole
+      # neighbourhood when its prefix has a zero group (cap_scope), and it
+      # counts hits that earned nothing; if a capped hit skipped the
+      # response, a source could sit behind its neighbours' noise (or its
+      # own earlier, exempted hits) and never be banned.
       def record(info)
         info = info.symbolize_keys
         ip = Netserv.canonical_ip(info[:ip].presence)
         now = info[:occurred_at] || Time.current
+        event = new(protocol: info[:protocol].to_s, trigger: info[:trigger].to_s,
+                    signature: info[:signature].presence, ip: ip,
+                    port: info[:port], username: info[:username].presence,
+                    helo: info[:helo].presence, transcript: info[:transcript].to_s,
+                    occurred_at: now)
+        event.validate!
+        event.response = event.respond
         return note_cap_reached(ip, now) unless under_cap?(ip, now)
 
-        create!(protocol: info[:protocol].to_s, trigger: info[:trigger].to_s,
-                signature: info[:signature].presence, ip: ip,
-                port: info[:port], username: info[:username].presence,
-                helo: info[:helo].presence, transcript: info[:transcript].to_s,
-                occurred_at: now)
+        event.save!
+        event
       rescue StandardError => e
         Rails.logger.error("[mail_on_rails] honeypot event failed: #{e.class}: #{e.message}")
         nil
@@ -156,7 +171,8 @@ module MailOnRails
       # (compression only ever swallows zero groups), so a LIKE on that
       # prefix finds them all. A network whose prefix contains a zero
       # group gets a coarser prefix and so counts its neighbourhood in
-      # with itself; that only makes the cap bite sooner, never later.
+      # with itself; that only makes the cap bite sooner, never later -
+      # and the cap only decides what is stored (see record).
       def cap_scope(ip)
         addr = IPAddr.new(ip.to_s)
         addr = addr.native if addr.ipv4_mapped?
@@ -192,14 +208,24 @@ module MailOnRails
       end
     end
 
+    # The graduated response (see the class comment), carried out for this
+    # hit whether or not the row is ever saved: returns what was done, for
+    # the `response` column, or nil when it could not be decided.
+    # Best-effort, so a response failure never breaks the event write.
+    # Never kicks the live session (a ban reaches it on the next ops
+    # tick); a permanent ban only under protocol_auto_ban.
+    def respond
+      decide_response
+    rescue StandardError => e
+      Rails.logger.error("[mail_on_rails] honeypot response failed: #{e.class}: #{e.message}")
+      nil
+    end
+
     private
 
-    # The graduated response (see the class comment). Records what it did in
-    # `response`; best-effort, so a response failure never breaks the event
-    # write. Never kicks the live session (a ban reaches it on the next ops
-    # tick); a permanent ban only under protocol_auto_ban.
     def apply_response
-      update_column(:response, decide_response)
+      decided = respond
+      update_column(:response, decided) if decided
     rescue StandardError => e
       Rails.logger.error("[mail_on_rails] honeypot response failed: #{e.class}: #{e.message}")
     end

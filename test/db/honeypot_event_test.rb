@@ -314,6 +314,72 @@ class HoneypotEventTest < DbSuite::TestCase
     assert other, "the cap is per source"
   end
 
+  # L10: the cap bounds what is stored. What a hit earns its source must
+  # not depend on whether there was still room to store it.
+  def test_a_hit_past_the_storage_cap_still_earns_its_ban
+    ENV["MAIL_ON_RAILS_HONEYPOT_MAX_EVENTS_PER_IP"] = "2"
+    2.times { record(ip: "203.0.113.7", trigger: "garbage", signature: "control_bytes") }
+    assert_empty bans, "observed only so far: the setting was off"
+
+    enable_protocol_auto_ban
+    assert_nil record(ip: "203.0.113.7", trigger: "foreign_protocol", signature: "http_request"), "not stored"
+
+    assert_equal [ [ "203.0.113.7", "protocol_abuse", "auto: http request on smtp" ] ], bans
+    assert_equal 2, MailOnRails::HoneypotEvent.count
+  end
+
+  # The cap's SQL prefix is coarse for a /64 with a zero group and counts
+  # the whole neighbourhood in: twenty other customers' hits used to mean
+  # a new source there was neither stored nor banned.
+  def test_a_source_behind_its_neighbours_full_cap_is_still_banned
+    enable_protocol_auto_ban
+    ENV["MAIL_ON_RAILS_HONEYPOT_MAX_EVENTS_PER_IP"] = "3"
+    3.times { |i| assert record(ip: "2a01:4f8:#{(i + 1).to_s(16)}:1::1", trigger: "garbage", signature: "control_bytes") }
+
+    assert_nil record(ip: "2a01:4f8:0:77::1", trigger: "garbage", signature: "control_bytes"),
+               "storage is capped by the coarse prefix"
+
+    assert MailOnRails::BannedIp.covering("2a01:4f8:0:77::1"), "the ban is not"
+    assert_equal 4, MailOnRails::BannedIp.count
+  end
+
+  def test_a_canary_login_past_the_storage_cap_is_still_throttled
+    ENV["MAIL_ON_RAILS_HONEYPOT_MAX_EVENTS_PER_IP"] = "1"
+    record(ip: "203.0.113.7", trigger: "exploit_probe", signature: "exim_run")
+    assert_not blocked?("203.0.113.7")
+
+    assert_nil record(ip: "203.0.113.7", trigger: "canary_auth")
+
+    assert blocked?("203.0.113.7")
+  end
+
+  def test_a_capped_hit_from_an_exempt_source_earns_nothing
+    enable_protocol_auto_ban
+    ENV["MAIL_ON_RAILS_HONEYPOT_MAX_EVENTS_PER_IP"] = "1"
+    ENV["MAIL_ON_RAILS_HONEYPOT_ALLOWLIST"] = "203.0.113.0/24"
+    MailOnRails::ClosedConnection.create!(protocol: "smtp", ip: "198.51.100.9", messages: 2, closed_at: 1.hour.ago)
+    2.times { record(ip: "203.0.113.7", trigger: "garbage", signature: "control_bytes") }
+    2.times { record(ip: "198.51.100.9", trigger: "exploit_probe", signature: "exim_run") }
+
+    assert_empty bans, "the allowlist and the working-address exemption hold past the cap too"
+  end
+
+  def test_the_response_is_decided_once_for_a_stored_hit
+    enable_protocol_auto_ban
+    decided = 0
+    original = MailOnRails::BannedIp.method(:auto_ban_for_probe)
+    MailOnRails::BannedIp.define_singleton_method(:auto_ban_for_probe) do |**args|
+      decided += 1
+      original.call(**args)
+    end
+    event = record(ip: "203.0.113.7", trigger: "garbage", signature: "control_bytes")
+
+    assert_equal 1, decided
+    assert_equal "banned 203.0.113.7", event.reload.response
+  ensure
+    MailOnRails::BannedIp.define_singleton_method(:auto_ban_for_probe, original)
+  end
+
   def test_the_cap_window_slides
     ENV["MAIL_ON_RAILS_HONEYPOT_MAX_EVENTS_PER_IP"] = "2"
     ENV["MAIL_ON_RAILS_HONEYPOT_CAP_WINDOW"] = "3600"

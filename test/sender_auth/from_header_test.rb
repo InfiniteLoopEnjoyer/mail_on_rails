@@ -94,6 +94,42 @@ class FromHeaderTest < Minitest::Test
     end
   end
 
+  # The Mail gem ends a field name with Ruby's rstrip, which drops NUL, TAB,
+  # LF, VT, FF, CR and SP - so "From\v:" is a From to the parser the
+  # mailroom and the reader's UI use, and has to be one here. With only
+  # [ \t]* tolerated the gate saw a single From (the attacker's own,
+  # DMARC-passing domain) while the stored and displayed sender was the
+  # second one.
+  GAPS = [ "\v", "\f", " ", "\t", " \t", "\x00", "\x01", "\x1f", "\x7f", "\xC2\xA0".b, "\v \f" ].freeze
+
+  test "a second From hidden behind a control byte before the colon is still a second From" do
+    GAPS.each do |gap|
+      data = "From: attacker@evil.test\r\nFrom#{gap}: ceo@bank.test\r\nSubject: x\r\n\r\nbody\r\n".b
+      assert_nil FromHeader.domain(data), "gap #{gap.inspect} hid the second From from the single-From gate"
+      assert_equal %w[attacker@evil.test ceo@bank.test], FromHeader.addresses(data), "gap #{gap.inspect}"
+    end
+  end
+
+  test "a lone From with a gap before its colon is read, as the Mail gem reads it" do
+    require "mail"
+    [ "\v", "\f", " ", "\t" ].each do |gap|
+      data = "Subject: x\r\nFrom#{gap}: ceo@bank.test\r\n\r\nbody\r\n".b
+      assert_equal [ "ceo@bank.test" ], Mail.read_from_string(data).from, "reference changed for #{gap.inspect}"
+      assert_equal "bank.test", FromHeader.domain(data), "gap #{gap.inspect}"
+      assert_equal [ "ceo@bank.test" ], FromHeader.addresses(data), "gap #{gap.inspect}"
+    end
+  end
+
+  test "Sender is matched through the same gap" do
+    data = "From: me@mine.test\r\nSender\f: other@else.test\r\n\r\nbody\r\n".b
+    assert_equal [ "other@else.test" ], FromHeader.addresses(data, field: "sender")
+  end
+
+  test "a longer field name is not mistaken for From" do
+    data = "From-Extra: x@y.test\r\nFrom: a@example.com\r\n\r\nbody\r\n".b
+    assert_equal "example.com", FromHeader.domain(data)
+  end
+
   test "from_domain delegates and never raises" do
     assert_equal "example.com", MailOnRails::SenderAuth.from_domain("From: a@Example.Com\r\n\r\nx")
     assert_nil MailOnRails::SenderAuth.from_domain(nil)

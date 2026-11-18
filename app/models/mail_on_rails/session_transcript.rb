@@ -3,7 +3,10 @@
 # buffer every session already keeps for the honeypot (Netserv::Transcript):
 # AUTH arguments and challenge responses are redacted at the tap and DATA
 # payloads never enter it, so a row holds the command/reply exchange only -
-# no message content, no credentials.
+# no message content, no credentials. That includes the server's side: an
+# IMAP FETCH response is recorded as its shape (item names, flags, literal
+# sizes), never the envelope, structure, preview or body it carried, and
+# no single line can exceed the buffer's byte cap.
 #
 # Unlike HoneypotEvent this records *real* peers' sessions, so it is scoped
 # hard: capture is opt-in, only sessions with something to diagnose qualify

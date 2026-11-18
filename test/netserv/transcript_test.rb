@@ -26,6 +26,43 @@ class TranscriptTest < Minitest::Test
     assert_operator t.to_s.bytesize, :<=, 400 # cap plus one straddling line
   end
 
+  # M9 (audit 2026-11-17): the byte cap spared the newest line whatever
+  # its size, so a single multi-megabyte line (an IMAP FETCH response
+  # carrying a message) made the buffer - and the stored transcript row -
+  # that large.
+  def test_a_single_line_over_the_byte_cap_is_cut_to_fit_it
+    t = MailOnRails::Netserv::Transcript.new(max_bytes: 1024)
+    t.inbound("a1 FETCH 1 (BODY[])")
+    t.outbound("* 1 FETCH (BODY[] {5000000}" + "SECRET " * 700_000)
+
+    assert_operator t.to_s.bytesize, :<=, 1024
+    assert_includes t.to_s, "=> * 1 FETCH (BODY[] {5000000}", "the start of the line is kept"
+    assert_match(/\.\.\. \(\d+ bytes\)\z/, t.to_s, "and its real size noted")
+
+    t.outbound("a1 OK FETCH completed")
+    assert_operator t.to_s.bytesize, :<=, 1024
+    assert t.to_s.end_with?("=> a1 OK FETCH completed"), "later lines still land"
+  end
+
+  def test_the_byte_cap_holds_after_every_push_whatever_the_line_sizes
+    cap = 600
+    t = MailOnRails::Netserv::Transcript.new(max_bytes: cap)
+    [ 10, 599, 600, 601, 5_000, 1, 300, 299, 100_000, 50 ].each do |size|
+      t.inbound("x" * size)
+      assert_operator t.to_s.bytesize, :<=, cap, "after a #{size}-byte line"
+      refute t.empty?
+    end
+  end
+
+  # The cut is by bytes and may split a character; the flush scrubs it.
+  def test_a_cut_through_a_multibyte_character_still_flushes_as_valid_utf8
+    t = MailOnRails::Netserv::Transcript.new(max_bytes: 100)
+    t.inbound("é" * 500)
+
+    assert t.to_s.valid_encoding?
+    assert_operator t.to_s.bytesize, :<=, 100
+  end
+
   # A client line is one transcript entry however many line breaks it
   # smuggles: a raw CR/LF would let "NOOP\n=> 235 Authentication successful"
   # read as a server reply on the honeypot page.

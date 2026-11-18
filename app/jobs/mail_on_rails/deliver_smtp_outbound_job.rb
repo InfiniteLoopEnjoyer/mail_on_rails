@@ -24,6 +24,12 @@ module MailOnRails
     # transient failure parks the domain's remaining messages until the
     # next run instead of hammering a server that just said "slow down".
     # Skipped rows are never claimed, so they cost nothing and stay due.
+    #
+    # One message's trouble is that message's alone: whatever its
+    # delivery raises is recorded against it (deliver) and the run goes
+    # on. The destination's DNS, its server's replies and the message
+    # itself are all somebody else's input, and an exception that ended
+    # the run would let any of them hold up every message queued behind.
     def perform
       SmtpOutboundMessage.stuck.update_all(status: :pending)
 
@@ -40,6 +46,11 @@ module MailOnRails
 
         attempted[domain] += 1
         deferred_domains << domain if deliver(message) == :deferred
+      rescue StandardError => e
+        # deliver accounts for every failure it can; what arrives here
+        # is the accounting itself failing. The row stays :delivering
+        # until the stuck sweep returns it to the queue.
+        report_unexpected(message, e)
       end
     end
 
@@ -93,19 +104,37 @@ module MailOnRails
       end
       :failed
     rescue OutboundDeliverer::TransientError => e
-      if message.record_failure!(e.message, permanent: false) == :failed
-        Rails.logger.warn "[mail_on_rails] outbound #{message.id} to <#{message.recipient}> giving up after #{message.attempts} attempts: #{e.message}"
-        suppress_report_recipient(message, e.message)
-        bounce(message, e.message)
+      transient_failure(message, e.message)
+    rescue StandardError => e
+      # Not a delivery outcome but a fault on the way to one. It is
+      # charged to the message as a transient failure - retried, and
+      # bounced when the attempts run out, as any other would be -
+      # instead of being re-raised past the rest of the batch.
+      report_unexpected(message, e)
+      transient_failure(message, "#{e.class}: #{e.message}")
+    end
+
+    # A failure worth retrying: deferred with backoff, or - once the
+    # attempts are spent - failed for good and bounced.
+    def transient_failure(message, error)
+      if message.record_failure!(error, permanent: false) == :failed
+        Rails.logger.warn "[mail_on_rails] outbound #{message.id} to <#{message.recipient}> giving up after #{message.attempts} attempts: #{error}"
+        suppress_report_recipient(message, error)
+        bounce(message, error)
         :failed
       else
-        Rails.logger.info "[mail_on_rails] outbound #{message.id} to <#{message.recipient}> deferred, will retry: #{e.message}"
-        delay_warning(message, e.message)
+        Rails.logger.info "[mail_on_rails] outbound #{message.id} to <#{message.recipient}> deferred, will retry: #{error}"
+        delay_warning(message, error)
         :deferred
       end
-    rescue StandardError => e
-      message.record_failure!("#{e.class}: #{e.message}", permanent: false)
-      raise
+    end
+
+    # The job no longer fails on these, so the log line and the error
+    # reporter are where an operator finds them.
+    def report_unexpected(message, error)
+      Rails.logger.error "[mail_on_rails] outbound #{message.id} to <#{message.recipient}> raised " \
+                         "#{error.class}: #{error.message} (#{error.backtrace&.first})"
+      Rails.error.report(error, handled: true, context: { outbound_message_id: message.id }) if Rails.respond_to?(:error)
     end
 
     # A DMARC/TLS-RPT report the remote side refused (a synchronous 5xx,

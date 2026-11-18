@@ -171,7 +171,9 @@ module MailOnRails
       # Live sessions whose peer is now on the admin ban list: the
       # denylist only silences future accepts, so the ban's "drop what is
       # open" half happens here, against the snapshot refresh_denylist
-      # just pulled - so an idle listener still notices a new ban.
+      # just pulled - so an idle listener still notices a new ban. The
+      # lookups run on a copy of the session registry (Server#kick), not
+      # under the lock every accept and teardown takes.
       def kick_banned
         denylist = @server.denylist
         return unless denylist

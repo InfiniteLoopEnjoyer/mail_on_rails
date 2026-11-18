@@ -62,15 +62,33 @@ module MailOnRails
       # owner - the child zone speaks there - and proves the rest of its
       # gap like any other. In a zone made of delegations (the root, a
       # TLD) nearly every denial rests on one.
+      #
+      # A gap whose far end lies beneath +name+ denies nothing either:
+      # that is an empty non-terminal, a name that exists.
       def proves_absent?(nsec, name)
-        covers?(nsec, name) && !(ancestor_delegation?(nsec) && in_zone?(name, nsec.name))
+        name = to_name(name)
+        covers?(nsec, name) && !in_zone?(nsec.next_domain, name) &&
+          !(ancestor_delegation?(nsec) && in_zone?(name, nsec.name))
+      end
+
+      # RFC 4592 section 2.2.2 (and RFC 4035 section 3.1.3.1 read with
+      # it): +name+ sorts inside this NSEC's gap and the next name is one
+      # of its descendants, so +name+ exists as an empty non-terminal -
+      # it owns no RRset of any type, and no wildcard can stand in for
+      # it.
+      def empty_non_terminal?(nsec, name)
+        name = to_name(name)
+        covers?(nsec, name) && in_zone?(nsec.next_domain, name) &&
+          !(ancestor_delegation?(nsec) && in_zone?(name, nsec.name))
       end
 
       # RFC 4035 section 3.1.3.2 (name error): an NSEC covers qname, and
       # another covers the wildcard at the closest encloser. The encloser
       # is inferred from the covering NSEC: both its owner and its next
       # name exist, so the longest of their common ancestors with qname is
-      # the closest encloser (RFC 4592 semantics).
+      # the closest encloser (RFC 4592 semantics). Neither cover may be
+      # an empty non-terminal: a qname that is one exists (the answer
+      # would be NOERROR), and a wildcard that is one exists too.
       def name_error(qname, nsecs)
         qname = to_name(qname)
         cover = nsecs.find { |rr| proves_absent?(rr, qname) }
@@ -78,14 +96,15 @@ module MailOnRails
 
         ce = closest_encloser_from(cover, qname)
         wildcard = wildcard_of(ce)
-        return nil unless nsecs.any? { |rr| covers?(rr, wildcard) }
+        return nil unless nsecs.any? { |rr| proves_absent?(rr, wildcard) }
 
         Result.new(proof: :name_error, status: :secure, closest_encloser: ce)
       end
 
       # RFC 4035 sections 3.1.3.1/3.1.3.4 (no data): an NSEC matches qname
       # (directly, or at the wildcard that would have synthesized it) and
-      # its bitmap has neither qtype nor CNAME.
+      # its bitmap has neither qtype nor CNAME - or an NSEC shows qname
+      # to be an empty non-terminal, which has no types at all.
       def no_data(qname, qtype, nsecs)
         qname = to_name(qname)
         matching = nsecs.find { |rr| matches?(rr, qname) }
@@ -94,6 +113,10 @@ module MailOnRails
           # The parent side of a delegation owns nothing at that name but DS.
           return nil if ancestor_delegation?(matching) && qtype != Dnsruby::Types.DS
 
+          return Result.new(proof: :no_data, status: :secure)
+        end
+
+        if nsecs.any? { |rr| empty_non_terminal?(rr, qname) }
           return Result.new(proof: :no_data, status: :secure)
         end
 
@@ -118,7 +141,7 @@ module MailOnRails
         return nil if rrsig_labels >= qname.labels.length
 
         next_closer = Dnsruby::Name.new(qname.labels.last(rrsig_labels + 1), true)
-        return nil unless nsecs.any? { |rr| covers?(rr, next_closer) }
+        return nil unless nsecs.any? { |rr| proves_absent?(rr, next_closer) }
 
         Result.new(proof: :wildcard_answer, status: :secure)
       end

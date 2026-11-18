@@ -106,14 +106,16 @@ module MailOnRails
           # forgeable Date: header. Callers wanting a historical date (archive
           # import, IMAP APPEND/COPY) pass internal_date explicitly.
           internal_date: internal_date || Time.current,
-          message_id: header_field(mail, :message_id).to_s.presence,
-          subject: header_field(mail, :subject).to_s.presence,
+          message_id: header_text(header_field(mail, :message_id)),
+          subject: header_text(header_field(mail, :subject)),
           from_address: address_list(header_field(mail, :from)).first,
           to_addresses: address_list(header_field(mail, :to)).join(", "),
           body_text: searchable_text(raw, mail: mail),
           **thread_columns(mailbox.email_account, mail, email_object_id),
           authenticated_as: authenticated_as,
-          auth_results: auth_results,
+          # Built from what the scorer read out of the message (signing
+          # domains and the like): the same cleaning as a header value.
+          auth_results: header_text(auth_results),
           scan_status: scan_status,
           virus_name: virus_name,
           spam_score: spam_score,
@@ -161,18 +163,39 @@ module MailOnRails
       nil
     end
 
+    # A decoded header value as a text column can hold it, nil when
+    # nothing is left. The SMTP edge deletes raw NULs, but an RFC 2047
+    # encoded-word carries any byte past it - "=?utf-8?q?hello=00world?="
+    # is seven-bit clean on the wire and decodes to a NUL here.
+    # PostgreSQL refuses NUL in text, so the INSERT raised and a message
+    # the edge had already answered 250 for was lost. Line breaks and tabs
+    # (an encoded CRLF would otherwise put a second "header" on screen)
+    # become a space; every other control character is dropped; invalid
+    # UTF-8 is scrubbed. The raw column keeps the bytes as sent.
+    def self.header_text(value)
+      text = value.to_s
+      text = text.dup.force_encoding(Encoding::UTF_8) unless text.encoding == Encoding::UTF_8
+      text.scrub.gsub(/[\t\r\n]+/, " ").gsub(/[[:cntrl:]]/, "").presence
+    end
+
     # The addresses in a parsed address header, as Strings. The Mail gem
     # returns an Array of addr-specs for a good header and the raw String
     # for one it couldn't parse (`To: <<<` comes back as "<<<"); an
     # unparseable value is dropped rather than stored as an address -
     # from_address keys SenderRule and the Junk feedback, and "<" is not a
-    # sender anyone meant to allow or deny.
-    ADDRESS_SHAPE = /\A[^\s<>@,;:"()\[\]]+@[^\s<>@,;:"()\[\]]+\z/
+    # sender anyone meant to allow or deny. Nor is an address with a
+    # control character in it (the gem decodes "=?utf-8?q?a=00b?=@x" to
+    # one): dropped, not cleaned - "ad\0min@x" must not become "admin@x".
+    ADDRESS_SHAPE = /\A[^\s<>@,;:"()\[\][:cntrl:]]+@[^\s<>@,;:"()\[\][:cntrl:]]+\z/
 
     def self.address_list(value)
       return [] unless value.is_a?(Array)
 
-      value.map(&:to_s).select { |address| address.match?(ADDRESS_SHAPE) }
+      value.filter_map do |address|
+        address = address.to_s
+        address = address.dup.force_encoding(Encoding::UTF_8) unless address.encoding == Encoding::UTF_8
+        address if address.valid_encoding? && address.match?(ADDRESS_SHAPE)
+      end
     end
 
     # True when the sender authenticated, i.e. the From is verified, not spoofed.
@@ -293,13 +316,15 @@ module MailOnRails
     # The threading columns for a message about to be stored: its ancestry
     # headers plus the thread_id they resolve to.
     def self.thread_columns(account, mail, fallback_anchor)
-      in_reply_to = Array(header_field(mail, :in_reply_to)).first.to_s.presence
-      references = Array(header_field(mail, :references)).map(&:to_s).reject(&:empty?)
+      # header_text: these are stored, and matched against message_id in
+      # resolve_thread_id - a NUL fails that query on PostgreSQL too.
+      in_reply_to = header_text(Array(header_field(mail, :in_reply_to)).first)
+      references = Array(header_field(mail, :references)).filter_map { |id| header_text(id) }
       {
         in_reply_to: in_reply_to,
         references_ids: references.join(" ").presence,
         thread_id: resolve_thread_id(account, references, in_reply_to,
-                                     header_field(mail, :message_id).to_s.presence, fallback_anchor)
+                                     header_text(header_field(mail, :message_id)), fallback_anchor)
       }
     end
 

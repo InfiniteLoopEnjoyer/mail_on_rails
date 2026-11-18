@@ -308,9 +308,18 @@ module MailOnRails
       # connections). Closing the raw socket raises in the session's
       # blocked read and unwinds it through handle's ensure, releasing its
       # limiter slot. Returns how many connections were closed.
+      #
+      # The matcher runs on a copy of the registry, outside the lifecycle
+      # lock: every accept and every connection teardown takes that lock,
+      # and the matcher is the caller's code (a ban-list lookup per
+      # session, every ops tick). A session that ended in between is
+      # closed twice, which is harmless.
       def kick(&matcher)
-        victims = @lifecycle.synchronize do
-          @sessions.select { |_socket, conn| conn.peer_ip && matcher.call(conn.peer_ip) }.to_a
+        live = @lifecycle.synchronize { @sessions.to_a }
+        verdicts = {}
+        victims = live.select do |_socket, conn|
+          ip = conn.peer_ip
+          ip && verdicts.fetch(ip) { verdicts[ip] = matcher.call(ip) }
         end
         victims.each do |socket, conn|
           conn.ended_by = :kick

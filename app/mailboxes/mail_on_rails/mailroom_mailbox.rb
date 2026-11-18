@@ -66,6 +66,7 @@ module MailOnRails
                                              scan_status: verdict&.dig(:status), **spam_attributes)
           sweep_stale_unscanned(account)
           Rails.logger.info "[mail_on_rails] delivered inbound message to #{account.email} #{dest.name}"
+          bimi_refresh(message)
           # Vacation auto-reply, only for mail that earned the INBOX: junk
           # and quarantine never get one (answering spam confirms a live
           # address). VacationResponder carries the loop protections.
@@ -144,6 +145,22 @@ module MailOnRails
       Rails.logger.error "[mail_on_rails] vacation responder failed for #{account.email}: #{e.class}: #{e.message}"
     end
 
+    # The sender domain's BIMI indicator is evaluated because mail from it
+    # arrived - here, once per message - and never because someone opened
+    # a message: the evaluation queries DNS and fetches a logo the sender
+    # hosts, so doing it at view time (as the webmail used to) told the
+    # sender when their mail was read. BimiIndicator applies the gates
+    # (BIMI on, this message passed DMARC) and the once-a-day freshness.
+    # Decoration only: a failure here must never cost the delivery.
+    def bimi_refresh(message)
+      return if @bimi_refresh_queued
+
+      @bimi_refresh_queued = true
+      BimiIndicator.refresh_later_for(message)
+    rescue StandardError => e
+      Rails.logger.error "[mail_on_rails] BIMI refresh not queued: #{e.class}: #{e.message}"
+    end
+
     # A recipient address is, in this order: an account's own address, one
     # of its exact aliases (the two sets are kept disjoint by model
     # validations), a signed VERP bounce+ sub-address (delivering into the
@@ -167,8 +184,9 @@ module MailOnRails
     end
 
     # Read from the authoritative header stamped by the SMTP edge (any
-    # forged copy in the submitted DATA was stripped there). "no" / absent
-    # means the sender did not authenticate.
+    # forged copy in the submitted DATA was stripped there, and
+    # edge_headers reads the edge's own lines only). "no" / absent means
+    # the sender did not authenticate.
     def authenticated_as
       value = header_values("X-MailOnRails-Authenticated").first.to_s.strip
       value.presence unless value.casecmp?("no")
@@ -322,7 +340,7 @@ module MailOnRails
     end
 
     def quarantine(account, verdict)
-      mid = mail.message_id.to_s.presence
+      mid = stored_message_id
       mailbox = account.quarantine_mailbox
       if mid && mailbox.email_messages.exists?(message_id: mid)
         Rails.logger.info "[mail_on_rails] skipped duplicate quarantine copy for #{account.email} (#{mid})"
@@ -336,11 +354,18 @@ module MailOnRails
                         "#{" (#{verdict[:virus]})" if verdict[:virus]}"
     end
 
+    # The Message-ID as deliver_raw stores it (EmailMessage.header_text),
+    # so the dedupe and sweep lookups compare like with like - and never
+    # hand the database a control byte the column could not hold.
+    def stored_message_id
+      EmailMessage.header_text(EmailMessage.header_field(mail, :message_id))
+    end
+
     # A clean delivery supersedes review copies of the same message left
     # behind by 451 tempfails (clamd was down, the sender retried, the
     # retry scanned clean). Never touches "infected" rows.
     def sweep_stale_unscanned(account)
-      mid = mail.message_id.to_s.presence
+      mid = stored_message_id
       return unless mid
 
       mailbox = account.find_mailbox(Mailbox::QUARANTINE)
@@ -354,8 +379,17 @@ module MailOnRails
       Rails.logger.info "[mail_on_rails] swept #{swept} stale quarantine copies for #{account.email}" if swept.positive?
     end
 
+    # The trusted headers come from MailOnRails::EdgeHeaders - the block
+    # the edge wrote at the top of the source - never from the Mail gem's
+    # reading of these names (see there for why). A class method so
+    # callers holding a stored message read them the same way.
+    def self.edge_headers(source)
+      MailOnRails::EdgeHeaders.read(source)
+    end
+
     def header_values(name)
-      mail.header.fields.select { |field| field.name.casecmp?(name) }.map(&:value)
+      @edge_headers ||= self.class.edge_headers(inbound_email.source)
+      @edge_headers[name.downcase]
     end
   end
 end

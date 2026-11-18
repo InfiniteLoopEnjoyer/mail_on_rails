@@ -193,6 +193,12 @@ module MailOnRails
           dnssec_resolver.resolve(name, qtype)
         rescue MailOnRails::Dnssec::Transport::TempError => e
           raise TempError, e.message
+        rescue StandardError => e
+          # The name and every record are the remote domain's to choose,
+          # and callers rescue TempError alone: whatever else a lookup
+          # trips over is a failed lookup (a deferral), never an
+          # exception loose in the delivery run.
+          raise TempError, "DNSSEC lookup failed for #{name} #{qtype}: #{e.class}: #{e.message}"
         end
         if answer.status == :bogus
           raise TempError, "DNSSEC validation failed for #{name} #{qtype}: #{answer.reason}"

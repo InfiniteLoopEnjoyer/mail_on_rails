@@ -142,6 +142,22 @@ module MailOnRails
         worked.where(ip: ip).or(worked.where(throttle_key: Netserv.throttle_key(ip))).exists?
       end
 
+      # "Did a session from this source authenticate as +account+ since
+      # +since+?" - the history half of AuthThrottle.known_source?. Stricter
+      # than worked_from? on purpose: that one asks whether the address
+      # does any mail work, this one whether it holds this very account's
+      # password. username is only ever set by a successful login, to the
+      # account's own address, so a failed attempt, a delivery or a login
+      # elsewhere never matches. Runs on the auth path: one range read of
+      # the (protocol, throttle_key, closed_at) index, stopping at the
+      # first match.
+      def logged_in_from?(ip, account, since:)
+        return false if ip.blank? || account.blank?
+
+        where(protocol: PROTOCOLS, throttle_key: Netserv.throttle_key(ip), closed_at: since..,
+              rollup: false, username: account).exists?
+      end
+
       # The history list on a live connections page: one protocol, newest
       # first, rollup counter rows included (rendered collapsed).
       def recent_list(protocol, since:, limit: 25)

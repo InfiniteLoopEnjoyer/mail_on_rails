@@ -1,7 +1,8 @@
-# Evaluates one sender domain's BIMI indicator (see BimiIndicator) off
-# the request path - the webmail enqueues this lazily the first time it
-# wants a domain's logo and daily thereafter. The freshness re-check
-# absorbs the duplicate enqueues racing readers produce.
+# Evaluates one sender domain's BIMI indicator (see BimiIndicator). The
+# mailroom enqueues this when it files a DMARC-passing message from a
+# domain whose indicator is missing or a day old - at delivery, never
+# when a message is viewed. The freshness re-check absorbs the duplicate
+# enqueues racing deliveries produce.
 module MailOnRails
   class RefreshBimiIndicatorJob < BaseJob
     queue_as :default

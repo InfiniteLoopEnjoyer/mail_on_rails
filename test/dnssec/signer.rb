@@ -112,8 +112,9 @@ end
 
 # Canned upstream for Resolver tests: serves prepared Dnsruby::Messages
 # keyed by "qname|QTYPE" and records every query for cache assertions.
-# Responses round-trip through the wire codec so tests also cover
-# encode/decode of everything they build.
+# Responses round-trip through the wire codec - the transport's own
+# decode, Wire.decode - so tests also cover encode/decode of everything
+# they build.
 class FakeTransport
   attr_reader :queries
 
@@ -134,7 +135,8 @@ class FakeTransport
     msg = @responses[key]
     raise MailOnRails::Dnssec::Transport::TempError, "no fixture for #{key}" unless msg
 
-    Dnsruby::Message.decode(msg.encode)
+    MailOnRails::Dnssec::Wire.decode(msg.encode) ||
+      raise(MailOnRails::Dnssec::Transport::TempError, "undecodable fixture for #{key}")
   end
 end
 

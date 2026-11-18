@@ -3,6 +3,7 @@
 require "openssl"
 require "socket"
 require "fileutils"
+require "securerandom"
 require_relative "../settings"
 
 module MailOnRails
@@ -207,11 +208,24 @@ module MailOnRails
 
         pems = self.class.generate_self_signed(hostnames)
         FileUtils.mkdir_p(dir)
-        File.write(key_file, pems[:key])
-        File.chmod(0o600, key_file)
+        write_private(key_file, pems[:key])
         File.write(cert_file, pems[:cert])
         logger&.info "[mail_on_rails] generated self-signed TLS cert at #{cert_file}"
         pems
+      end
+
+      # Writes a private key so that it is never on disk readable by
+      # anyone else, not even between two system calls: born 0600 under a
+      # temporary name (O_EXCL - nothing pre-created or symlinked there is
+      # followed), then renamed into place. Write-then-chmod leaves the
+      # key at the umask's mode (usually world-readable) until the chmod
+      # runs, and for good if the process dies in between.
+      def write_private(path, data)
+        tmp = "#{path}.#{Process.pid}.#{SecureRandom.hex(4)}.tmp"
+        File.open(tmp, File::WRONLY | File::CREAT | File::EXCL, 0o600) { |file| file.write(data) }
+        File.rename(tmp, path)
+      ensure
+        File.unlink(tmp) if tmp && File.exist?(tmp)
       end
 
       # SANs for the self-signed cert: the configured hosts plus this machine.

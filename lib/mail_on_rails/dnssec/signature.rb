@@ -66,6 +66,15 @@ module MailOnRails
         !starts.nil? && !ends.nil? && starts <= now && now <= ends
       end
 
+      # Seconds of validity the RRSIG has left at +now+ (negative once
+      # expired) - RFC 4035 section 5.3.3 bounds how long anything it
+      # authenticated may be kept.
+      def expires_in(sig, now)
+        now = now.to_i
+        ends = serial_near(sig.expiration, now)
+        ends ? ends - now : -1
+      end
+
       # RFC 4035 section 5.3.1: the RRSIG must belong to this RRset, the
       # key must be the zone key the RRSIG names, and the RRset must sit
       # inside that key's zone.

@@ -36,6 +36,23 @@ module MailOnRails
     MIN_IPV4_PREFIX = 8
     MIN_IPV6_PREFIX = 32
 
+    # Automatic /64 bans inside one /48 before they are replaced by a ban
+    # on the /48. A /48 is what one site is assigned (RFC 6177) and what a
+    # tunnel broker hands anyone for free: its holder has 65,536 /64s to
+    # be banned from one at a time. Set high because some providers carve
+    # customer /64s out of a shared /48 - this many separately banned
+    # sources in one is an operator, not a coincidence.
+    COLLAPSE_THRESHOLD = 256
+    COLLAPSE_PREFIX = 48
+
+    # Ceiling on automatic rows altogether (an attacker with many /48s, or
+    # a spread of IPv4 addresses, is not stopped by the collapse). Past it
+    # the oldest automatic rows are dropped: every listener holds the list
+    # in memory and the admin pages list it, and an old automatic ban is
+    # the one most likely to sit on a reassigned address by now. A source
+    # that comes back earns its ban again on the first offence.
+    AUTOMATIC_ROWS_MAX = 20_000
+
     scope :manual, -> { where(source: "manual") }
     scope :spamhaus_drop, -> { where(source: "spamhaus_drop") }
     scope :auth_failure, -> { where(source: "auth_failure") }
@@ -44,6 +61,7 @@ module MailOnRails
     # Bans a person can lift on the auth attempts page (DROP rows come back
     # on the next import).
     scope :removable, -> { where.not(source: "spamhaus_drop") }
+    scope :automatic, -> { where(source: AUTOMATIC_SOURCES) }
 
     before_validation :normalize_cidr
 
@@ -55,6 +73,9 @@ module MailOnRails
     after_commit :refresh_denylists
 
     class << self
+      def collapse_threshold = COLLAPSE_THRESHOLD
+      def automatic_rows_max = AUTOMATIC_ROWS_MAX
+
       def auto_ban? = MailOnRails::Settings[:auth_auto_ban]
       def auto_ban_failures = MailOnRails::Settings[:auth_auto_ban_failures]
 
@@ -220,18 +241,34 @@ module MailOnRails
         end
         note
       end
+
       # The ban covering +ip+, or nil (also nil for unparseable input - an
-      # address we can't read is an address we can't match). Loads the whole
-      # table; bans are a small set and this only runs on admin pages and
-      # failed-login paths.
+      # address we can't read is an address we can't match); the broadest
+      # one when several do. This runs on every failed login and before
+      # every web sign-in, against a table strangers can add to, so it
+      # never reads the table: rows are stored in canonical form
+      # (canonicalize, on every write path), which makes "is there a row
+      # for one of the networks containing this address" a lookup of at
+      # most 129 exact strings in the unique cidr index.
       def covering(ip)
         addr = IPAddr.new(ip.to_s)
         # A v4-mapped address (an IPv4 peer seen through a dual-stack
         # socket) is an IPv4 ban's business.
         addr = addr.native if addr.ipv4_mapped?
-        all.detect { |ban| ban.covers_addr?(addr) }
+        where(cidr: containing_cidrs(addr)).select { |ban| ban.covers_addr?(addr) }
+                                           .min_by { |ban| ban.network.prefix }
       rescue IPAddr::Error
         nil
+      end
+
+      # Every network that contains +addr+ (an address or a range), one per
+      # prefix length, spelled the way a row for it would be stored.
+      def containing_cidrs(addr)
+        full = addr.ipv4? ? 32 : 128
+        (0..addr.prefix).map do |prefix|
+          net = addr.mask(prefix)
+          prefix == full ? net.to_s : "#{net}/#{prefix}"
+        end
       end
 
       # Canonical form: bare address for host entries (/32, /128), otherwise
@@ -315,9 +352,80 @@ module MailOnRails
 
         row = create!(cidr: Netserv.throttle_key(ip), source: source, note: note)
         MailOnRails.logger.warn("[mail_on_rails] auto-banned #{row.cidr}: #{row.note}")
-        row
+        bound_automatic_rows(row) || row
       rescue ActiveRecord::RecordNotUnique
         nil # another edge banned it first
+      end
+
+      # Keeps the automatic rows bounded after one more was written (see
+      # the class comment). Returns the /48 row when +row+ was folded into
+      # one, otherwise nil. Best-effort: the ban that led here is already
+      # in force, and tidying must not undo it.
+      def bound_automatic_rows(row)
+        collapsed = collapse_into_prefix(row)
+        drop_oldest_automatic_rows
+        collapsed
+      rescue StandardError => e
+        MailOnRails.logger.error("[mail_on_rails] bounding automatic bans failed: #{e.class}: #{e.message}")
+        nil
+      end
+
+      # Once collapse_threshold automatic /64 bans sit inside +row+'s /48,
+      # one automatic ban on the /48 replaces them. Only automatic /64
+      # rows are counted and only those are removed - a manual ban inside
+      # the /48 stays exactly as its author wrote it - and nothing is
+      # widened over a honeypot-allowlisted network. Lifting the /48 row
+      # lifts what it replaced.
+      def collapse_into_prefix(row)
+        net = row.network
+        return nil unless net&.ipv6? && net.prefix == 64
+
+        wider = net.mask(COLLAPSE_PREFIX)
+        inside = automatic_64s_within(wider)
+        return nil if inside.size < collapse_threshold
+        return nil if HoneypotEvent.allowlist_networks.any? { |allowed| overlap?(allowed, wider) }
+
+        note = "auto: #{inside.size} banned /64s in this /#{COLLAPSE_PREFIX} folded into one ban " \
+               "(last - #{row.note.to_s.delete_prefix('auto: ')})"
+        collapsed = transaction do
+          where(id: inside.map(&:first)).delete_all
+          create!(cidr: "#{wider}/#{COLLAPSE_PREFIX}", source: row.source, note: note.first(255))
+        end
+        MailOnRails.logger.warn("[mail_on_rails] auto-banned #{collapsed.cidr}: #{collapsed.note}")
+        collapsed
+      rescue ActiveRecord::RecordNotUnique, ActiveRecord::RecordInvalid
+        covering(row.cidr) # another edge folded the same /48 first
+      end
+
+      # [ id, cidr ] of the automatic /64 rows inside +wider+. A /64 has no
+      # fixed string prefix once its address is compressed, so SQL only
+      # narrows (the leading groups that are spelled out in every member,
+      # as in HoneypotEvent.cap_scope) and the membership test is exact,
+      # in Ruby, over that narrowed set.
+      def automatic_64s_within(wider)
+        groups = wider.to_string.split(":").first(COLLAPSE_PREFIX / 16)
+        leading = groups.take_while { |group| group != "0000" }.map { |group| group.to_i(16).to_s(16) }
+        prefix = leading.empty? ? "" : "#{leading.join(':')}:"
+        automatic.where(arel_table[:cidr].matches("#{sanitize_sql_like(prefix)}%/64", nil, true))
+                 .pluck(:id, :cidr).select do |_id, cidr|
+          wider.include?(IPAddr.new(cidr))
+        rescue IPAddr::Error
+          false
+        end
+      end
+
+      def overlap?(a, b)
+        a.ipv4? == b.ipv4? && (a.include?(b) || b.include?(a))
+      end
+
+      def drop_oldest_automatic_rows
+        excess = automatic.count - automatic_rows_max
+        return unless excess.positive?
+
+        doomed = automatic.order(:created_at, :id).limit(excess).pluck(:id)
+        where(id: doomed).delete_all
+        MailOnRails.logger.warn("[mail_on_rails] automatic bans over #{automatic_rows_max}: dropped the #{doomed.size} oldest")
+        MailOnRails.refresh_denylists
       end
 
       def auto_ban_failed(ip, error)

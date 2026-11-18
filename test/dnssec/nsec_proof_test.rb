@@ -131,4 +131,53 @@ class NsecProofTest < Minitest::Test
     assert Proof.matches?(middle, "A.Example.")
     assert Proof.covers?(middle, "B.EXAMPLE.")
   end
+
+  # An empty non-terminal owns no NSEC of its own; the record before it
+  # in the chain shows it, by pointing at a name beneath it (RFC 4592
+  # section 2.2.2). zone_nsecs has one: w.example., above x.w.example.
+  test "an empty non-terminal has no data of any type" do
+    ent = Dnsruby::Name.create("w.example.")
+    assert Proof.empty_non_terminal?(zone_nsecs[2], ent)
+
+    [ Dnsruby::Types.TLSA, Dnsruby::Types.MX, Dnsruby::Types.DS ].each do |qtype|
+      result = Proof.no_data(ent, qtype, zone_nsecs)
+      assert_equal :no_data, result.proof, "#{qtype} at an empty non-terminal"
+      assert_equal :secure, result.status
+    end
+
+    assert_nil Proof.no_data(Dnsruby::Name.create("d.example."), Dnsruby::Types.MX, zone_nsecs[2..2]),
+               "d.example sorts in the same gap but nothing lies beneath it: that is nonexistence, not no-data"
+  end
+
+  test "an empty non-terminal exists: no name error for it or through it" do
+    assert_nil Proof.name_error(Dnsruby::Name.create("w.example."), zone_nsecs),
+               "x.w.example exists, so w.example does"
+    assert_not Proof.proves_absent?(zone_nsecs[2], "w.example.")
+
+    # A sibling in the same gap really is absent.
+    result = Proof.name_error(Dnsruby::Name.create("d.example."), zone_nsecs)
+    assert_equal :name_error, result.proof
+
+    # A wildcard that is itself an empty non-terminal exists as well, so
+    # "no wildcard" is not proven by the gap it sits in.
+    nsecs = [
+      nsec("example.", "a.*.example.", "SOA NS RRSIG NSEC"),
+      nsec("a.*.example.", "example.", "A RRSIG NSEC")
+    ]
+    assert_nil Proof.name_error(Dnsruby::Name.create("b.example."), nsecs)
+  end
+
+  test "a wildcard cannot answer for an empty non-terminal or anything beneath it" do
+    nsecs = [ nsec("c.example.", "x.w.example.", "A AAAA RRSIG NSEC") ]
+    # qname q.w.example, "synthesized" from *.example (rrsig labels 1):
+    # the next-closer name w.example sorts inside the gap, but exists.
+    assert_nil Proof.wildcard_answer(Dnsruby::Name.create("q.w.example."), 1, nsecs)
+    assert_nil Proof.wildcard_answer(Dnsruby::Name.create("w.example."), 1, nsecs)
+    assert_equal :wildcard_answer, Proof.wildcard_answer(Dnsruby::Name.create("d.example."), 1, nsecs).proof
+  end
+
+  test "a delegation NSEC cannot show an empty non-terminal beneath itself" do
+    odd = [ nsec("sub.example.", "a.b.sub.example.", "NS RRSIG NSEC") ]
+    assert_nil Proof.no_data(Dnsruby::Name.create("b.sub.example."), Dnsruby::Types.MX, odd)
+  end
 end

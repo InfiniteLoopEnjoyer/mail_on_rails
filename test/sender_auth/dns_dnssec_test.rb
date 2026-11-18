@@ -3,6 +3,8 @@
 require "test_helper"
 require "mail_on_rails/sender_auth/dns"
 require "mail_on_rails/dnssec"
+require_relative "../dnssec/signer"
+require File.expand_path("../../app/models/mail_on_rails/dane", __dir__)
 
 # The DANE-facing pair (tlsa/mx_answer) now rides the in-process
 # validating resolver (Dnssec::Resolver): Answer#secure is the resolver's
@@ -135,9 +137,147 @@ class DnsDnssecTest < Minitest::Test
     assert_equal 2, resolver.calls.size, "the 5s record TTL should bound the 60s cap"
   end
 
+  test "anything else the resolver raises is a TempError too" do
+    # Callers (the outbound deliverer) rescue TempError and nothing
+    # else; a stray exception used to end the whole queue run.
+    dns, = dns_with({
+      "#{TLSA_NAME}|TLSA" => -> { raise ArgumentError, "data with invalid value: deadbeef" },
+      "example.com|MX" => -> { raise Dnsruby::ResolvError, "Name length is 258, greater than max of 255 octets!" }
+    })
+
+    error = assert_raises(Dns::TempError) { dns.tlsa(TLSA_NAME) }
+    assert_match(/ArgumentError: data with invalid value/, error.message)
+    assert_raises(Dns::TempError) { dns.mx_answer("example.com") }
+  end
+
+  test "a failed lookup of either kind is never cached" do
+    calls = 0
+    flaky = lambda do
+      calls += 1
+      raise NoMethodError, "undefined method 'length' for nil" if calls == 1
+
+      Result.new(status: :secure, records: [ tlsa_rr ])
+    end
+    dns, = dns_with({ "#{TLSA_NAME}|TLSA" => flaky })
+
+    assert_raises(Dns::TempError) { dns.tlsa(TLSA_NAME) }
+    assert dns.tlsa(TLSA_NAME).secure
+  end
+
   test "without an injected resolver a real validating resolver is built lazily" do
     dns = Dns.new(nameservers: [ "192.0.2.53" ])
     resolver = dns.send(:dnssec_resolver)
     assert_instance_of MailOnRails::Dnssec::Resolver, resolver
+  end
+
+  # ----- end to end over the real validator ------------------------------
+  #
+  # The scripted resolver above covers the mapping; these run the real
+  # Dnssec::Resolver against a signed test hierarchy, for the two cases
+  # where the consumer-side meaning is the point: a forged denial must
+  # not read as "no TLSA published", and a malformed TLSA record must
+  # read as an unusable record (RFC 7671 section 4.1) rather than as a
+  # failed lookup.
+  class SignedZones
+    SIGNED_AT = Time.utc(2026, 8, 1)
+    EXPIRES_AT = Time.utc(2026, 9, 1)
+    NOW = Time.utc(2026, 8, 15)
+
+    attr_reader :root, :example, :transport
+
+    def initialize
+      @root = TestZone.new(".", algorithm: TestZone::ALG_ECDSAP256)
+      @example = TestZone.new("example.", algorithm: TestZone::ALG_ED25519)
+      @transport = FakeTransport.new
+      @transport.add DnsResponse.build(".", "DNSKEY", answer: [ @root.dnskey_rrset(signed_at: SIGNED_AT, expires_at: EXPIRES_AT) ])
+      @transport.add DnsResponse.build("example.", "DNSKEY", answer: [ @example.dnskey_rrset(signed_at: SIGNED_AT, expires_at: EXPIRES_AT) ])
+      @transport.add DnsResponse.build("example.", "DS", answer: [ sign(TestZone.rrset(@example.ds), @root) ])
+    end
+
+    def sign(rrset, zone = @example)
+      zone.sign(rrset, signed_at: SIGNED_AT, expires_at: EXPIRES_AT)
+    end
+
+    def dns
+      resolver = MailOnRails::Dnssec::Resolver.new(transport: @transport, trust_anchors: { "." => [ @root.ds ] },
+                                                   now: -> { NOW })
+      Dns.new(nameservers: [ "192.0.2.53" ], resolver: resolver, cache_ttl: 0)
+    end
+  end
+
+  SIGNED_TLSA = "_25._tcp.mx.example"
+
+  def good_tlsa
+    Dnsruby::RR.create("#{SIGNED_TLSA}. 300 IN TLSA 3 1 1 #{"ab" * 32}")
+  end
+
+  # "3 1 1 deadbeef": a SHA-256 digest four octets long.
+  def mistyped_tlsa
+    MailOnRails::Dnssec::Wire::PublishedTlsa.from(Dnsruby::RR.create("#{SIGNED_TLSA}. 300 IN TLSA 3 1 255 deadbeef"), 1)
+  end
+
+  test "a mistyped TLSA record beside a good one leaves the good one usable" do
+    zones = SignedZones.new
+    zones.transport.add DnsResponse.build("#{SIGNED_TLSA}.", "TLSA",
+                                          answer: [ zones.sign(TestZone.rrset(good_tlsa, mistyped_tlsa)) ])
+
+    answer = zones.dns.tlsa(SIGNED_TLSA)
+    assert answer.secure
+    assert_equal 2, answer.records.size
+    usable = MailOnRails::Dane.usable_records(answer.records)
+    assert_equal [ "\xab".b * 32 ], usable.map(&:data)
+  end
+
+  test "a TLSA RRset of nothing but mistyped records is secure, present and unusable" do
+    zones = SignedZones.new
+    zones.transport.add DnsResponse.build("#{SIGNED_TLSA}.", "TLSA", answer: [ zones.sign(TestZone.rrset(mistyped_tlsa)) ])
+
+    answer = zones.dns.tlsa(SIGNED_TLSA)
+    assert answer.secure
+    assert_equal 1, answer.records.size, "the host publishes TLSA: not the same as publishing none"
+    assert_empty MailOnRails::Dane.usable_records(answer.records)
+  end
+
+  test "a mistyped TLSA record in an unsigned zone is an insecure answer, not a failed lookup" do
+    zones = SignedZones.new
+    unsigned = "_25._tcp.mx.unsigned.example"
+    record = MailOnRails::Dnssec::Wire::PublishedTlsa.from(Dnsruby::RR.create("#{unsigned}. 300 IN TLSA 3 1 255 deadbeef"), 1)
+    delegation = TestZone.rrset(Dnsruby::RR.create("unsigned.example. 300 IN NSEC example. NS RRSIG NSEC"))
+    soa = TestZone.rrset(Dnsruby::RR.create("example. 300 IN SOA ns.example. h.example. 1 300 300 300 300"))
+    zones.transport.add DnsResponse.build("unsigned.example.", "DS", authority: [ zones.sign(soa), zones.sign(delegation) ])
+    zones.transport.add DnsResponse.build("#{unsigned}.", "TLSA", answer: [ TestZone.rrset(record) ])
+
+    answer = zones.dns.tlsa(unsigned)
+    refute answer.secure
+    assert_equal 1, answer.records.size
+  end
+
+  test "usable_records sets malformed association data aside" do
+    record = ->(matching_type, data) { Dns::Tlsa.new(usage: 3, selector: 1, matching_type: matching_type, data: data) }
+    key = OpenSSL::PKey::EC.generate("prime256v1").public_to_der
+
+    usable = MailOnRails::Dane.usable_records([
+      record.call(1, "x" * 32), record.call(2, "x" * 64), record.call(0, key),
+      record.call(1, "x" * 4), record.call(1, ""), record.call(2, "x" * 32), record.call(0, "not a key"), record.call(0, "")
+    ])
+    assert_equal [ [ 1, 32 ], [ 2, 64 ], [ 0, key.bytesize ] ], usable.map { |r| [ r.matching_type, r.data.bytesize ] }
+  end
+
+  test "a replayed wildcard NSEC does not read as 'this host publishes no TLSA'" do
+    # Audit H6 from the consumer's side: before the fix this lookup came
+    # back secure and empty, which is exactly what takes a host out of
+    # DANE mode.
+    zones = SignedZones.new
+    genuine = zones.sign(TestZone.rrset(Dnsruby::RR.create("*.example. 300 IN NSEC mx.example. TXT RRSIG NSEC")))
+    forged_sig = Dnsruby::Message.decode(DnsResponse.build("x.", "A", answer: [ genuine.sigs[0] ]).encode).answer[0]
+    forged_sig.name = Dnsruby::Name.create("#{SIGNED_TLSA}.")
+    soa = TestZone.rrset(Dnsruby::RR.create("example. 300 IN SOA ns.example. h.example. 1 300 300 300 300"))
+    zones.transport.add DnsResponse.build(
+      "#{SIGNED_TLSA}.", "TLSA",
+      authority: [ zones.sign(soa), Dnsruby::RR.create("#{SIGNED_TLSA}. 300 IN NSEC mx.example. TXT RRSIG NSEC"), forged_sig ]
+    )
+
+    error = assert_raises(Dns::TempError) { zones.dns.tlsa(SIGNED_TLSA) }
+    assert_match(/DNSSEC validation failed/, error.message)
   end
 end

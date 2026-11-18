@@ -130,7 +130,9 @@ class AutoBanTest < DbSuite::TestCase
     note = MailOnRails::BannedIp.sole.note
     refute_match(/[\r\n]/, note)
     assert_operator note.length, :<=, 120
-    assert_match(/\Aauto: failed imap login as xInjected:y/, note)
+    # The store has already turned the control bytes into "?" by the time
+    # the note is written (Store::Base#login_name).
+    assert_match(/\Aauto: failed imap login as x\?\?Injected:y/, note)
   end
 
   test "the throttle's failure count feeds the threshold" do

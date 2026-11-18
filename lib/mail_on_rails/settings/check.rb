@@ -9,9 +9,10 @@ module MailOnRails
     # instead of stopping at the first, separates fatal errors from
     # suspicious-but-runnable warnings, and never binds a socket.
     #
-    # Errors: any declared ENV variable that fails to parse, and (via the
-    # daemons' check_config, which the CLI runs alongside this) colliding
-    # ports or unusable TLS material. Warnings: boolean spellings that
+    # Errors: any declared ENV variable that fails to parse or to pass its
+    # setting's validation rule, and (via the daemons' check_config, which
+    # the CLI runs alongside this) colliding ports or unusable TLS
+    # material. Warnings: boolean spellings that
     # read as set-but-inert ("true"/"yes"/"off" - each has caused a quiet
     # runtime surprise), sender verification disabled, and - when the
     # database tier is reachable - settings rows the schema cannot type.

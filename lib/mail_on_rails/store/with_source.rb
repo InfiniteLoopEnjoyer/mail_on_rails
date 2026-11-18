@@ -27,8 +27,11 @@ module MailOnRails
         @backend.authenticate(email, password, ip: ip, source: source || @source)
       end
 
-      def record_auth_failure(email, ip: nil, source: nil)
-        @backend.record_auth_failure(email, ip: ip, source: source || @source)
+      # Further keywords (a SCRAM reservation, see Store::Base) ride along
+      # untouched; none are added here, so a backend that predates them is
+      # called exactly as before.
+      def record_auth_failure(email, ip: nil, source: nil, **options)
+        @backend.record_auth_failure(email, ip: ip, source: source || @source, **options)
       end
 
       # The SCRAM verifier lookup is an authentication call too: a
@@ -36,11 +39,11 @@ module MailOnRails
       # attempt log under its surface like a throttled PLAIN login. A
       # backend whose scram_credentials predates the source: keyword (the
       # protocol gems' memory stores) is called the old way.
-      def scram_credentials(email, ip: nil, source: nil)
+      def scram_credentials(email, ip: nil, source: nil, **options)
         if accepts_source?(:scram_credentials)
-          @backend.scram_credentials(email, ip: ip, source: source || @source)
+          @backend.scram_credentials(email, ip: ip, source: source || @source, **options)
         else
-          @backend.scram_credentials(email, ip: ip)
+          @backend.scram_credentials(email, ip: ip, **options)
         end
       end
 

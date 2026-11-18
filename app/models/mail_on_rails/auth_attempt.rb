@@ -22,9 +22,9 @@
 # whether or not the address exists: a guess against a real address shows
 # an old breached password from a fresh one, and a guess against an
 # unknown address can still be one of the operator's own passwords in
-# circulation under a stale or mistyped name. Rollup rows (noise past the
-# per-IP cap) carry none, and SCRAM logins cannot: the daemon only ever
-# sees a proof.
+# circulation under a stale or mistyped name. Rollup rows (attempts past
+# the per-source caps) carry none, and SCRAM logins cannot: the daemon only
+# ever sees a proof.
 #
 # Successes are deliberately not recorded either: a single iOS folder
 # refresh opens ~5 connections and authenticates on each, so legitimate
@@ -41,6 +41,16 @@ module MailOnRails
 
     # Longest password kept; anything past it is a paste, not a typo.
     MAX_PASSWORD_LENGTH = 256
+
+    # Longest login name kept: client-chosen bytes, cut like the throttle
+    # cuts its account key (AuthThrottle::MAX_KEY_LENGTH).
+    MAX_USERNAME_LENGTH = 320
+
+    # A checked guess at an address that exists gets this many times the
+    # ordinary per-source row allowance before it, too, is collapsed. They
+    # are the rows this table is for, so the allowance is generous - but a
+    # stranger still decides how many there are, so it is not unlimited.
+    REAL_ADDRESS_CAP_FACTOR = 4
 
     scope :recent, ->(since) { where(occurred_at: since..) }
     scope :against_real_accounts, -> { where(account_exists: true) }
@@ -78,8 +88,9 @@ module MailOnRails
       def record(ip:, username:, source:, outcome:, now: Time.current, password: nil)
         real = account_exists?(username, source)
         outcome = "unknown_account" if outcome.to_s == "bad_credentials" && !real
-        if real || under_cap?(ip, now)
-          kept = outcome.to_s == "throttled" ? nil : keepable_password(password)
+        throttled = outcome.to_s == "throttled"
+        if under_cap?(ip, now, real: real && !throttled)
+          kept = throttled ? nil : keepable_password(password)
           create!(occurred_at: now, ip: ip.presence, username: normalize(username),
                   source: source.to_s, outcome: outcome.to_s, account_exists: real, password: kept)
         else
@@ -93,9 +104,21 @@ module MailOnRails
 
       # An unauthenticated stranger decides how fast this table grows, so the
       # write rate has to be bounded or the audit log becomes the outage.
-      # Attempts against an address that actually exists are exempt above -
-      # they are the whole point of keeping this, and they are rare. Only the
-      # dictionary noise gets collapsed.
+      # Every kind of row is bounded per source and window; past its
+      # allowance an attempt is counted on the source's rollup row instead:
+      #
+      #   - dictionary noise (an address that does not exist) and throttled
+      #     attempts share the ordinary allowance, counted over everything
+      #     the source has logged. A throttled attempt costs its sender
+      #     nothing - no password is looked at - so one connection can
+      #     produce them as fast as it can write, at a real address as
+      #     easily as at a made-up one;
+      #   - a checked guess at an address that exists has its own, larger
+      #     allowance (REAL_ADDRESS_CAP_FACTOR), counted over such rows
+      #     only, so a source's noise can never push the rows that matter
+      #     into the rollup. The throttle already limits how many of those
+      #     a source can produce; this is the backstop for when it is
+      #     tuned loose.
       #
       # The cap and the rollup row key on Netserv.throttle_key - the /64 for
       # IPv6 - because a guesser with a /64 can otherwise mint a fresh
@@ -103,13 +126,21 @@ module MailOnRails
       # rows keep the full address in ip and the key in throttle_key; the
       # rollup row's ip IS the key ("2001:db8::/64"), which is also how
       # top_ranges spells the range.
-      def under_cap?(ip, now)
+      def under_cap?(ip, now, real: false)
         return true if ip.blank?
 
-        where(throttle_key: Netserv.throttle_key(ip), occurred_at: window_start(now)..)
-          .sum(:attempt_count) < max_rows_per_ip
+        logged = where(throttle_key: Netserv.throttle_key(ip), occurred_at: window_start(now)..)
+        if real
+          logged.where(rollup: false, account_exists: true).where.not(outcome: "throttled").count <
+            max_rows_per_ip * REAL_ADDRESS_CAP_FACTOR
+        else
+          logged.sum(:attempt_count) < max_rows_per_ip
+        end
       end
 
+      # The rollup row counts whatever went past an allowance, whichever
+      # kind it was; its outcome column is a placeholder (the page shows a
+      # rollup row as "N attempts collapsed", never by outcome).
       def roll_up(ip, source, now)
         row = find_or_create_by!(ip: Netserv.throttle_key(ip), source: source.to_s, rollup: true,
                                  occurred_at: window_start(now)) do |r|
@@ -131,7 +162,12 @@ module MailOnRails
         where(occurred_at: ...(now - retention_days.days)).delete_all
       end
 
-      def normalize(username) = username.to_s.strip.downcase.presence
+      # Client-chosen bytes on their way into a column: valid UTF-8, no
+      # control characters (PostgreSQL refuses a NUL outright), bounded.
+      def normalize(username)
+        username.to_s.dup.force_encoding(Encoding::UTF_8).scrub("?")
+                .strip.downcase.gsub(/[[:cntrl:]]/, "?")[0, MAX_USERNAME_LENGTH].presence
+      end
 
       # nil unless the operator opted in. SASL hands the listeners raw
       # bytes, so the value is scrubbed to valid UTF-8 (encryption

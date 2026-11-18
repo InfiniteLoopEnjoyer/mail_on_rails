@@ -116,6 +116,19 @@ material, so the store never sees those failures — without this, SCRAM
 would be an unthrottled path around the `authenticate` throttle. Returns
 `{}`.
 
+A store that hands out reservations (see `scram_credentials`) also takes
+`reservation:` here: the exchange was already counted when the material
+was handed out, so it is logged but not counted a second time.
+
+### `record_auth_success(email, reservation: nil)` — optional
+
+The other end of a reserved SCRAM exchange: the proof verified, so the
+failure counted up front is given back and the account's counter
+cleared, as `authenticate` does for a right password. Optional: the
+servers ask for reservations only when the store responds to this
+method, so a store without it (the memory stores) is called exactly as
+before. Returns `{}`.
+
 ### `record_closed_connection(info)` — optional
 
 Persist one closed connection for the Rails UI's history section (both
@@ -147,6 +160,15 @@ store without it leaves the denylist off. Fail-soft on the reader's
 side: any non-array result (the AR store returns `db`'s error hash on a
 database problem) keeps the denylist's last good list, and unparseable
 entries are skipped.
+
+### `banned_cidrs_stamp()` — optional
+
+A cheap fingerprint of that list (the AR store returns row count, newest
+id and newest write). The denylist asks for it first and skips reading
+and re-parsing the list while the fingerprint is unchanged: with an
+automatic ban setting on, strangers decide how long the list is. Any
+value that compares with `==` will do; a store without the method, or a
+non-array result, makes the denylist read the list every time.
 
 ### Ops state: `sync_ops_state`, `pending_kicks`, `ack_kick`, `prune_stale_listeners`, `remove_listener` — optional
 
@@ -206,6 +228,14 @@ caller is throttled. `source` names the auth surface (`"imap"` /
 and a throttled refusal is logged under it. A store may omit the keyword
 (the vendored memory stores do); the wrapper then calls without it.
 
+`reserve: true` (passed only to a store that has `record_auth_success`)
+counts the exchange as a failed attempt before any material is handed
+out, so parallel exchanges each see the others in the throttle's budget.
+The result then carries `reservation:`, an opaque value the server hands
+back through `record_auth_success` when the proof verifies or
+`record_auth_failure` when it does not. An exchange the client abandons
+stays counted.
+
 ### `list_mailboxes(account_id)`
 
 `{ mailboxes: [<name>, ...] }`, sorted by name.
@@ -222,7 +252,10 @@ backend policy, not a shape every store must implement.)
 ### `create_mailbox(account_id, name)`
 
 `{}` on success. `code: :exists` if a mailbox by that name exists
-(including `inbox` vs `INBOX`).
+(including `inbox` vs `INBOX`). `code: :cannot` with a fixed,
+client-safe reason when the store's own naming rules refuse the name
+(the AR store's `Mailbox` validation: control characters, edge
+whitespace, length, depth); the IMAP server answers `NO [CANNOT]`.
 
 ### `delete_mailbox(account_id, name)`
 
@@ -236,7 +269,9 @@ children in the `/` hierarchy — RFC 3501 DELETE is exact-name).
 `{}` on success. Renames the mailbox **and** every child under
 `from/` in the `/` hierarchy, keeping messages and UIDs intact.
 `code: :notfound` for an unknown source, `code: :exists` when the
-target name is taken. The IMAP server refuses `RENAME INBOX` before
+target name is taken, `code: :cannot` when the new name - or the name a
+child would end up with - breaks the store's naming rules (nothing is
+renamed in that case). The IMAP server refuses `RENAME INBOX` before
 calling this.
 
 ### `select_mailbox(account_id, name)`

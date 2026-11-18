@@ -78,6 +78,17 @@ module MailOnRails
           messages.to_i.positive? || (user.present? && canaries.exclude?(user))
         end
       end
+
+      # The live half of AuthThrottle.known_source?: is a session from this
+      # address's throttle key logged in as +account+ right now? Same shape
+      # as working_from? - the key is compared in Ruby over rows the
+      # connection caps bound - but for one named account only.
+      def logged_in_from?(ip, account)
+        return false if ip.blank? || account.blank?
+
+        key = Netserv.throttle_key(ip)
+        where(username: account).pluck(:peer_ip).any? { |peer| Netserv.throttle_key(peer) == key }
+      end
     end
 
     def user = username

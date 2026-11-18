@@ -15,7 +15,9 @@ module MailOnRails
     # captured separately by the session (an attacker's relay attempt is intel,
     # but a megabyte of it should not sit in this buffer), so the cap bounds
     # memory even on a canary IMAP session an attacker holds open for minutes.
-    # The cap holds before AND after a trigger fires.
+    # The cap holds before AND after a trigger fires - and whatever a
+    # single line holds: one longer than the whole budget is cut to fit
+    # it rather than kept whole as "the last line".
     class Transcript
       DEFAULT_MAX_LINES = 1_000
       DEFAULT_MAX_BYTES = 128 * 1024
@@ -55,11 +57,23 @@ module MailOnRails
       # so a client line carrying "\n=> 235 Authentication successful" can
       # never read as a server reply in the stored transcript.
       def push(direction, text)
-        line = "#{direction}#{flatten(text)}"
+        line = fit("#{direction}#{flatten(text)}")
         @lines << line
         @bytes += line.bytesize + 1
         drop_oldest while over_cap?
         nil
+      end
+
+      # A line that alone exceeds the byte cap, cut down to it (with a
+      # note of what it was). The cap used to spare the newest line
+      # whatever its size, so one multi-megabyte line - a server reply
+      # carrying a message body - made the buffer, and the stored row,
+      # that large. Sliced as bytes; to_s scrubs a split character.
+      def fit(line)
+        return line if line.bytesize < @max_bytes
+
+        note = "... (#{line.bytesize} bytes)"
+        "#{line.byteslice(0, [ @max_bytes - 1 - note.bytesize, 0 ].max)}#{note}".byteslice(0, [ @max_bytes - 1, 0 ].max)
       end
 
       # Byte-wise: the line may hold invalid UTF-8 (to_s scrubs at flush
@@ -71,6 +85,7 @@ module MailOnRails
         bytes.gsub(/\r|\n/n) { |byte| byte == "\r" ? "\\r" : "\\n" }
       end
 
+      # The newest line always stays; fit has made sure it fits.
       def over_cap?
         @lines.size > @max_lines || (@bytes > @max_bytes && @lines.size > 1)
       end

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "mail_on_rails/header_field"
+
 module MailOnRails
   # Bounds on the MIME structure the mail-processing pipeline is willing
   # to walk. The Mail gem parses a message's body lazily and then walks
@@ -31,7 +33,13 @@ module MailOnRails
     # boundary parameter. Folding means the parameter can sit on its own
     # line, so a leading WSP line counts too; a body line that happens to
     # say "boundary=" can only over-count, never under-count.
-    BOUNDARY_PARAM = /\A(?:Content-Type:|[ \t]).*?boundary=(?:"([^"]*)"|([^;\s"]+))/i
+    #
+    # Under-counting is the failure that matters, so the match is as wide
+    # as the Mail gem's own reading: the gap it allows around the header's
+    # name (HeaderField - "Content-Type :" is the same field to it), WSP
+    # around the "=", and the RFC 2231 "boundary*" spellings (capture 1).
+    BOUNDARY_PARAM = /\A(?:#{HeaderField::GAP}Content-Type#{HeaderField::GAP}:|[ \t]).*?
+                      boundary(\*[\d*]*)?[ \t]*=[ \t]*(?:"((?:[^"\\]|\\.)*)"|([^;\s"]+))/ix
 
     module_function
 
@@ -66,7 +74,13 @@ module MailOnRails
             break if parts > MAX_PARTS
           end
         elsif (match = BOUNDARY_PARAM.match(line))
-          name = match[1] || match[2]
+          # An RFC 2231 boundary (continued, or charset-encoded) is put
+          # together by the gem from pieces a line-at-a-time pass cannot
+          # follow, so its delimiters could not be matched below. Nothing
+          # legitimate spells a boundary that way: past the cap, unparsed.
+          return Measurement.new(depth: MAX_DEPTH + 1, parts: parts) if match[1]
+
+          name = match[2] ? match[2].gsub(/\\(.)/m, '\1') : match[3]
           next if name.empty?
 
           stack << name
