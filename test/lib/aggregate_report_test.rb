@@ -39,6 +39,23 @@ class AggregateReportTest < Minitest::Test
     assert_not Report.references?("")
   end
 
+  test "for_report_mailboxes? is true only when every recipient is a report mailbox" do
+    assert Report.for_report_mailboxes?([ "dmarc@example.test" ])
+    assert Report.for_report_mailboxes?([ "tls-rpt@example.test" ])
+    assert Report.for_report_mailboxes?([ "DMARC@Example.Test", " tls-rpt@other.test " ]), "case and padding must not matter"
+    assert Report.for_report_mailboxes?("dmarc@example.test"), "a lone address is a list of one"
+
+    assert_not Report.for_report_mailboxes?([ "dmarc@example.test", "user@example.test" ]),
+               "mail a person also receives is ordinary mail"
+    assert_not Report.for_report_mailboxes?([ "user@example.test" ])
+    assert_not Report.for_report_mailboxes?([ "dmarc-reports@example.test" ]), "a longer local part is someone else's mailbox"
+    assert_not Report.for_report_mailboxes?([ "dmarc+tag@example.test" ])
+    assert_not Report.for_report_mailboxes?([ "dmarc" ]), "a bare local part is not an address"
+    assert_not Report.for_report_mailboxes?([ "dmarc@" ])
+    assert_not Report.for_report_mailboxes?([])
+    assert_not Report.for_report_mailboxes?(nil)
+  end
+
   test "references? only scans the front of a large message" do
     id = Report.message_id("tlsrpt", "1.remote.test.abc", "example.test")
     padding = "x" * (Report::SCAN_LIMIT + 10)

@@ -136,6 +136,8 @@ module MailOnRails
       relaxed = !message.requiretls? && tls_required_no?(message)
       return deliver_via_smarthost(message) if smarthost
 
+      @carrying_report = message.aggregate_report?
+
       # DNS wants A-labels; an SMTPUTF8 envelope may carry a U-label.
       domain = MailOnRails::Idn.to_ascii(message.domain.to_s.downcase)
       sts = relaxed ? MtaStsPolicy::NONE : sts_lookup(domain)
@@ -605,7 +607,15 @@ module MailOnRails
       end
     end
 
+    # Nothing is recorded for a session that carried one of our own
+    # DMARC / TLS-RPT reports: the event would put the destination in
+    # tomorrow's TLS-RPT run, whose delivery is another session with the
+    # same destination, and so on nightly with no real mail involved
+    # (see AggregateReport). What the destination's owner wants to know
+    # is how mail to them fares, and a report is not that.
     def record_event(domain, type, mx: nil, result: nil, detail: nil)
+      return if @carrying_report
+
       TlsRptEvent.record!(policy_domain: domain, policy_type: type, mx: mx,
                           result_type: result, detail: detail)
     end

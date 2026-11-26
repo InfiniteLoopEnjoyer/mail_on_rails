@@ -16,6 +16,18 @@
 # events for null-sender mail that references one of our report
 # Message-IDs (this module), and a rua address that hard-bounced is
 # skipped for a cooldown (AggregateReportJob).
+#
+# The second loop needs no failure at all. Our report to a large
+# receiver is itself mail from our report domain, so that receiver's
+# next report to us covers it; that report is mail from the receiver's
+# domain arriving at our dmarc@ mailbox, so we record an event for it and
+# report on it the following night - one report each way, daily, with no
+# real mail anywhere in the exchange. TLS-RPT closes the same circle on
+# its own: delivering a report is a TLS session with the destination,
+# which would earn the destination tomorrow's report. Two more cuts: the
+# edge records no DMARC event for mail addressed only to our report
+# mailboxes (for_report_mailboxes?), and the deliverer records no TLS-RPT
+# event for a session that carried one of our reports (OutboundDeliverer).
 module MailOnRails
   module AggregateReport
     KINDS = %w[dmarc tlsrpt].freeze
@@ -25,6 +37,12 @@ module MailOnRails
     # In-Reply-To of an Exchange NDR, the embedded original of a Postfix
     # bounce: <dmarc-report.<report id>@<submitter>>.
     MESSAGE_ID_PATTERN = /<(?:#{KINDS.join("|")})-report\.[^\s<>@]{1,200}@[^\s<>@]{1,253}>/i
+
+    # Local parts of the accounts every hosted domain receives reports at
+    # and sends its own from: Domain::DMARC_LOCAL_PART and
+    # Domain::TLS_RPT_LOCAL_PART, repeated because this module loads
+    # without Rails (a test holds the two in step).
+    MAILBOX_LOCAL_PARTS = %w[dmarc tls-rpt].freeze
 
     # A DSN quotes the original's headers near its end; reports themselves
     # are a few KB, so the reference is always well inside this.
@@ -42,6 +60,22 @@ module MailOnRails
     # it only spares the forger's own domain a report about itself.
     def self.references?(data)
       data.to_s.b[0, SCAN_LIMIT].to_s.match?(MESSAGE_ID_PATTERN)
+    end
+
+    # Is every recipient a dmarc@ / tls-rpt@ report mailbox? The caller is
+    # the MX edge, whose accepted recipients are all at hosted domains, so
+    # the local part settles it. Mail like that is another receiver's
+    # report (or someone imitating one), not traffic its From domain needs
+    # a report about; a message that also names a person's mailbox is
+    # ordinary mail and is reported as usual. Imitating a report only
+    # keeps the imitated domain from hearing about one message nobody
+    # read.
+    def self.for_report_mailboxes?(recipients)
+      recipients = Array(recipients)
+      recipients.any? && recipients.all? do |recipient|
+        local, at, domain = recipient.to_s.strip.downcase.rpartition("@")
+        !at.empty? && !domain.empty? && MAILBOX_LOCAL_PARTS.include?(local)
+      end
     end
   end
 end

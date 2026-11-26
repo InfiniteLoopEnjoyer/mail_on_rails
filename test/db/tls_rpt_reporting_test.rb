@@ -79,6 +79,57 @@ class TlsRptReportingTest < DbSuite::TestCase
     assert_equal [ "tls@thirdparty.test" ], MailOnRails::SmtpOutboundMessage.pluck(:recipient)
   end
 
+  # The deliverer end of the loop breaker (AggregateReport): handing a
+  # report to its destination is a TLS session with that destination, and
+  # counting it would put the destination in tomorrow's run, forever.
+  class MxResolver < FakeResolver
+    def initialize = super(a: { "mx.remote.test" => [ "93.184.216.34" ] })
+    def mx_answer(_name) = MailOnRails::SenderAuth::Dns::Answer.new(records: [ [ 10, "mx.remote.test" ] ], secure: false)
+  end
+
+  def deliverer(&send_via)
+    MailOnRails::Settings.overrides = { mta_sts: false }
+    deliverer = MailOnRails::OutboundDeliverer.new(dns: MxResolver.new)
+    deliverer.define_singleton_method(:send_via) { |*, **| send_via.call }
+    deliverer
+  end
+
+  def queue(mail_from)
+    MailOnRails::SmtpOutboundMessage.create!(mail_from: mail_from, recipient: "rua@remote.test",
+                                             data: "From: #{mail_from}\r\n\r\nhi", next_attempt_at: Time.current)
+  end
+
+  test "delivering one of our own reports records no TLS-RPT event, success or failure" do
+    delivered = deliverer { :delivered }
+    assert_equal :delivered, delivered.deliver(queue("tls-rpt@example.test"))
+    assert_equal :delivered, delivered.deliver(queue("dmarc@example.test"))
+
+    failing = deliverer { raise OpenSSL::SSL::SSLError, "certificate verify failed" }
+    assert_raises(MailOnRails::OutboundDeliverer::TransientError) { failing.deliver(queue("tls-rpt@example.test")) }
+
+    assert_equal 0, MailOnRails::TlsRptEvent.count
+  ensure
+    MailOnRails::Settings.reset!
+  end
+
+  test "ordinary mail still records its session, also right after a report on the same deliverer" do
+    deliverer = deliverer { :delivered }
+    deliverer.deliver(queue("dmarc@example.test"))
+    deliverer.deliver(queue("user@example.test"))
+    # Only a hosted domain's report account counts: this one is a stranger's.
+    deliverer.deliver(queue("dmarc@elsewhere.test"))
+
+    assert_equal [ "remote.test", "remote.test" ], MailOnRails::TlsRptEvent.pluck(:policy_domain)
+    assert_equal [ "no-policy-found" ], MailOnRails::TlsRptEvent.distinct.pluck(:policy_type)
+  ensure
+    MailOnRails::Settings.reset!
+  end
+
+  test "the report mailboxes the edge exempts are the ones every domain is given" do
+    assert_equal [ MailOnRails::Domain::DMARC_LOCAL_PART, MailOnRails::Domain::TLS_RPT_LOCAL_PART ],
+                 MailOnRails::AggregateReport::MAILBOX_LOCAL_PARTS
+  end
+
   test "no TLSRPT record queues nothing" do
     record_event
 
